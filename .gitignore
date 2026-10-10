@@ -1,10 +1,18 @@
 # Dependencies
 node_modules/
 
-# Env / secrets
+# Environment / secrets (never commit)
 .env
 .env.*
 !.env.example
+
+# Google service-account credentials (any casing, any suffix)
+serviceaccount.json
+serviceAccount.json
+serviceaccount*.json
+serviceAccount*.json
+*.serviceaccount.json
+*-service-account.json
 
 # Deno
 /.deno-*
