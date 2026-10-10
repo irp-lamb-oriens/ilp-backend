@@ -7,7 +7,8 @@
     "express-rate-limit": "npm:express-rate-limit@7.5.0",
     "djwt": "https://deno.land/x/djwt@v2.8/mod.ts",
     "croner": "npm:croner@^9.0.0",
-    "cron": "npm:cron@^3.1.6"
+    "cron": "npm:cron@^3.1.6",
+    "nodemailer": "npm:nodemailer@^6.9.15"
   },
   "tasks": {
     "dev": "deno run --allow-net --allow-env --allow-read --allow-write --watch main.ts",

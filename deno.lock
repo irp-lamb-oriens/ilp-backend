@@ -5,7 +5,8 @@
     "npm:cron@^3.1.6": "3.5.0",
     "npm:croner@9": "9.1.0",
     "npm:express-rate-limit@7.5.0": "7.5.0_express@4.22.1",
-    "npm:express@^4.21.2": "4.22.1"
+    "npm:express@^4.21.2": "4.22.1",
+    "npm:nodemailer@^6.9.15": "6.10.1"
   },
   "npm": {
     "@types/luxon@3.4.2": {
@@ -287,6 +288,9 @@
     "negotiator@0.6.3": {
       "integrity": "sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg=="
     },
+    "nodemailer@6.10.1": {
+      "integrity": "sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA=="
+    },
     "object-assign@4.1.1": {
       "integrity": "sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg=="
     },
@@ -437,7 +441,8 @@
       "npm:cron@^3.1.6",
       "npm:croner@9",
       "npm:express-rate-limit@7.5.0",
-      "npm:express@^4.21.2"
+      "npm:express@^4.21.2",
+      "npm:nodemailer@^6.9.15"
     ]
   }
 }

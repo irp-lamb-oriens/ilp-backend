@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
-import validateUser from "../../helper/auth/validateUser.ts";
+import { requireDashboardAuth } from "../dashboard/dashboardRouter.ts";
 import getAll from "../../db/getAll.ts";
 import log from "../../helper/log.ts";
 
@@ -14,7 +14,7 @@ export default (app: Express) => {
   // Staff: aggregated funnel metrics across the MVP's weekly signals.
   app.get(
     "/api/analytics/funnel",
-    validateUser("staff"),
+    requireDashboardAuth,
     asyncHandler(async (_req: Request, res: Response) => {
       const [profiles, consultations, downloads, alerts] = await Promise.all([
         getAll("profiles"),

@@ -15,6 +15,7 @@ import providersRouter from "./API/providers/providersRouter.ts";
 import tasksRouter from "./API/tasks/tasksRouter.ts";
 import analyticsRouter from "./API/analytics/analyticsRouter.ts";
 import leadsRouter from "./API/leads/leadsRouter.ts";
+import dashboardRouter from "./API/dashboard/dashboardRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -75,6 +76,7 @@ function createServer() {
     tasksRouter(app);
     analyticsRouter(app);
     leadsRouter(app);
+    dashboardRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });

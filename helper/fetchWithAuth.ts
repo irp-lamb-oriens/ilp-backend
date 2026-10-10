@@ -2,7 +2,6 @@ import getAccessToken from "./getAccessToken.ts";
 
 /**
  * fetch() with a cached Google OAuth bearer token attached, for Firestore REST.
- * Same shape as IRP-funnel's fetchWithAuth.
  */
 export default async function fetchWithAuth(
   url: string,

@@ -9,6 +9,8 @@
  * DO NOT scatter fetch/sdk calls for these services across routers.
  */
 
+import nodemailer from "nodemailer";
+
 export interface EmailMessage {
   to: string;
   subject: string;
@@ -32,10 +34,32 @@ async function notImplemented(service: string): Promise<never> {
   throw new Error(`NOT_IMPLEMENTED: ${service} integration is not wired yet.`);
 }
 
-/** Email delivery (SMTP / SendGrid / SES). */
+/** Email delivery via SMTP (nodemailer). */
 export async function sendEmailTransport(message: EmailMessage): Promise<void> {
-  void message;
-  await notImplemented("email");
+  const host = Deno.env.get("SMTP_HOST");
+  const port = Number(Deno.env.get("SMTP_PORT") ?? "587");
+  const user = Deno.env.get("SMTP_USER");
+  const pass = Deno.env.get("SMTP_PASS");
+  const from = Deno.env.get("SMTP_FROM") ?? "no-reply@internationallegalpartner.com";
+
+  if (!host || !user || !pass) {
+    await notImplemented("email");
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
+  });
+
+  await transporter.sendMail({
+    from,
+    to: message.to,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+  });
 }
 
 /** SMS / WhatsApp delivery. */
