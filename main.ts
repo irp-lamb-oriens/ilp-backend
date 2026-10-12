@@ -16,6 +16,12 @@ import tasksRouter from "./API/tasks/tasksRouter.ts";
 import analyticsRouter from "./API/analytics/analyticsRouter.ts";
 import leadsRouter from "./API/leads/leadsRouter.ts";
 import dashboardRouter from "./API/dashboard/dashboardRouter.ts";
+import calendarRouter from "./API/calendar/calendarRouter.ts";
+import invoicesRouter from "./API/finance/invoicesRouter.ts";
+import paymentsRouter from "./API/payments/paymentsRouter.ts";
+import blogPublicRouter from "./API/blog/blogPublicRouter.ts";
+import guidesPublicRouter from "./API/guides/guidesPublicRouter.ts";
+import postsRouter from "./API/posts/postsRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -77,6 +83,12 @@ function createServer() {
     analyticsRouter(app);
     leadsRouter(app);
     dashboardRouter(app);
+    calendarRouter(app);
+    invoicesRouter(app);
+    paymentsRouter(app);
+    blogPublicRouter(app);
+    guidesPublicRouter(app);
+    postsRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });
