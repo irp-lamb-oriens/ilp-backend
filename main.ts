@@ -22,6 +22,7 @@ import paymentsRouter from "./API/payments/paymentsRouter.ts";
 import blogPublicRouter from "./API/blog/blogPublicRouter.ts";
 import guidesPublicRouter from "./API/guides/guidesPublicRouter.ts";
 import postsRouter from "./API/posts/postsRouter.ts";
+import chatbotRouter from "./API/chatbot/chatbotRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -89,6 +90,7 @@ function createServer() {
     blogPublicRouter(app);
     guidesPublicRouter(app);
     postsRouter(app);
+    chatbotRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });

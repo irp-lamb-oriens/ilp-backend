@@ -105,3 +105,23 @@ export async function createCheckoutSession(opts: {
   void opts;
   return await notImplemented("payments");
 }
+
+/** LLM completion (OpenAI, Anthropic, Gemini). */
+export async function llmComplete(opts: {
+  prompt: string;
+  systemInstruction?: string;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<{ content: string }> {
+  void opts;
+  return await notImplemented("llm");
+}
+
+/** WhatsApp message delivery (Twilio, Meta Cloud API). */
+export async function sendWhatsApp(opts: {
+  to: string; // E.164
+  message: string;
+}): Promise<void> {
+  void opts;
+  await notImplemented("whatsapp");
+}
