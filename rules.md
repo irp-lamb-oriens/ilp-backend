@@ -8,8 +8,9 @@ rule and a one-off idea conflict, the rule wins.
 
 - **Runtime:** Deno (import map in `deno.json`).
 - **Framework:** Express 4 (`npm:express@^4.21.2`).
-- **Data:** Firestore via REST (no SDK). All reads/writes go through `db/`
-  wrappers over `helper/firestore/`.
+- **Data:** Firestore via REST (no SDK). All reads/writes go through the
+  centralized `helper/firestore/firestoreService.ts` service, exposed to
+  routers via the thin `db/` wrappers.
 - **Auth:** platform session JWT (HS256, `JWT_SECRET`) verified in
   `helper/auth/verifyToken.ts`; role-gating in `helper/auth/validateUser.ts`.
 - **Jobs:** `croner` via `jobs/cronRunner.ts` + `jobs/registry.ts`.
@@ -24,7 +25,7 @@ API/<domain>/<domain>Router.ts — one router per domain, (app: Express) => void
 db/                         — thin Firestore wrappers (get, getAll, post, put, patch, delete, query)
 helper/                     — shared helpers (asyncHandler, auditLog, log, sanitize, emailQueue, ...)
 helper/auth/                — verifyToken, validateUser, types
-helper/firestore/           — REST fetch + URL getters + value (de)serialization
+helper/firestore/           — firestoreService.ts (single CRUD funnel) + URL getters + value (de)serialization
 config/integrations.ts      — external API placeholders
 jobs/                       — cronRunner, registry, dispatchAlerts, escalation
 ```
@@ -43,11 +44,21 @@ jobs/                       — cronRunner, registry, dispatchAlerts, escalation
 ## 4. Data layer
 
 - **Never call Firestore directly from a router.** Use `db/` wrappers.
+- **All CRUD transport lives in `helper/firestore/firestoreService.ts`.** URL
+  building, auth, value conversion, error normalization, and logging happen in
+  exactly one place. The `db/*.ts` files are thin adapters that delegate to it
+  and keep their stable signatures.
+- **Do not add a new Firestore operation outside the service.** If a new
+  operation is needed (e.g. batch write, transaction), add it to
+  `firestoreService.ts` and expose it through a `db/` wrapper. Never scatter
+  `fetch`/`fetchWithAuth` calls against `firestore.googleapis.com` across
+  routers, helpers, or jobs.
 - `db/get(collection, id)` → document or `null`.
 - `db/post(collection, data)` → new id (auto-generated).
 - `db/put(collection, id, data)` / `db/patch(collection, id, data)` → update.
 - `db/delete(collection, id)` → delete.
 - `db/query(collection, ...)` → filtered reads.
+- `db/getAll(collection)` → paginated list of `{ id, ...fields }`.
 - Document ids are deterministic where possible (e.g. `profile_${uid}`).
 - Timestamps: `new Date().toISOString()`; set `createdAt` on create, `updatedAt`
   on every write.
