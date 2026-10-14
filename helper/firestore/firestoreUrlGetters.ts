@@ -16,6 +16,18 @@ export function getFirestoreDocumentUrl(
   return `${FIRESTORE_BASE}/projects/${getProjectId()}/databases/(default)/documents/${collectionName}/${safeId}`;
 }
 
+/**
+ * The database-level `runQuery` endpoint. Structured queries are POSTed here
+ * with the target collection named in the `from` clause of the body, NOT in
+ * the URL path. Appending `:runQuery` to a collection URL (e.g.
+ * `.../documents/email_queue:runQuery`) makes Firestore parse the request as a
+ * document write, which is the source of the "Unknown name structuredQuery at
+ * 'document'" 400.
+ */
+export function getFirestoreRunQueryUrl(): string {
+  return `${FIRESTORE_BASE}/projects/${getProjectId()}/databases/(default)/documents:runQuery`;
+}
+
 /** Subcollection document URL. */
 export function getFirestoreSubcollectionDocUrl(
   collectionName: string,

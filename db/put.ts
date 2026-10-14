@@ -1,25 +1,13 @@
-import fetchWithAuth from "../helper/fetchWithAuth.ts";
-import { getFirestoreDocumentUrl } from "../helper/firestore/firestoreUrlGetters.ts";
-import { toFirestoreDocument } from "../helper/firestore/toFirestoreValue.ts";
+import { replaceDocument } from "../helper/firestore/firestoreService.ts";
 
 /**
  * Full-document replace (PUT). Clears unspecified fields.
+ * Delegates to the centralized Firestore service.
  */
-export default async function put(
+export default function put(
   collection: string,
   id: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  const url = getFirestoreDocumentUrl(collection, id);
-  const res = await fetchWithAuth(url, {
-    method: "PUT",
-    body: JSON.stringify(toFirestoreDocument(data)),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(
-      `Firestore put failed (${res.status}) for ${collection}/${id}: ${body}`,
-    );
-  }
+  return replaceDocument(collection, id, data);
 }
