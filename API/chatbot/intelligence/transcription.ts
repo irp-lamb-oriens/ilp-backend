@@ -17,9 +17,12 @@ export async function transcribeAudio(
 
   const form = new FormData();
   form.append("model", "whisper-1");
+  // Copy into a fresh ArrayBuffer so the BlobPart type is a plain ArrayBuffer
+  // (the incoming Uint8Array may be backed by a SharedArrayBuffer).
+  const bytes = new Uint8Array(audio);
   form.append(
     "file",
-    new Blob([audio], { type: "audio/webm" }),
+    new Blob([bytes.buffer], { type: "audio/webm" }),
     filename,
   );
 
