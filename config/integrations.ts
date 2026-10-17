@@ -10,12 +10,23 @@
  */
 
 import nodemailer from "nodemailer";
+import {
+  listAvailableSlots as listAvailableSlotsImpl,
+  createCalendarEvent as createCalendarEventImpl,
+} from "../helper/calendar.ts";
+
+export interface EmailAttachment {
+  filename: string;
+  content: Uint8Array | string;
+  contentType?: string;
+}
 
 export interface EmailMessage {
   to: string;
   subject: string;
   html: string;
   text?: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface CalendarSlot {
@@ -59,6 +70,7 @@ export async function sendEmailTransport(message: EmailMessage): Promise<void> {
     subject: message.subject,
     html: message.html,
     text: message.text,
+    attachments: message.attachments,
   });
 }
 
@@ -68,14 +80,13 @@ export async function sendSms(message: SmsMessage): Promise<void> {
   await notImplemented("sms");
 }
 
-/** Calendar availability + event creation (Google Calendar, Cal.com, Cronofy). */
+/** Calendar availability + event creation (Google Calendar). */
 export async function listAvailableSlots(opts: {
   providerId: string;
   from: string;
   to: string;
 }): Promise<CalendarSlot[]> {
-  void opts;
-  return await notImplemented("calendar");
+  return await listAvailableSlotsImpl(opts);
 }
 
 export async function createCalendarEvent(opts: {
@@ -83,8 +94,7 @@ export async function createCalendarEvent(opts: {
   title: string;
   description?: string;
 }): Promise<{ eventId: string; htmlLink?: string }> {
-  void opts;
-  return await notImplemented("calendar");
+  return await createCalendarEventImpl(opts);
 }
 
 /** Call recording / transcription (HappyScribe, AssemblyAI, Deepgram). */

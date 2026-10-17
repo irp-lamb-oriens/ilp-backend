@@ -111,6 +111,13 @@ export interface HallucinationDetectorAgentResponse {
   reasoning: string;
 }
 
+export interface ModeratorAgentResponse {
+  blocked: boolean;
+  reason: "toxicity" | "promptInjection" | "legalAdvice" | "offTopic" | "none";
+  severity: "none" | "low" | "medium" | "high" | "critical";
+  explanation: string;
+}
+
 /** Slim ground-truth store for the hallucination detector (ILP legal intake). */
 export interface ChatbotGroundTruth {
   availability?: AvailabilityAgentResponse;

@@ -8,7 +8,10 @@
     "djwt": "https://deno.land/x/djwt@v2.8/mod.ts",
     "croner": "npm:croner@^9.0.0",
     "cron": "npm:cron@^3.1.6",
-    "nodemailer": "npm:nodemailer@^6.9.15"
+    "nodemailer": "npm:nodemailer@^6.9.15",
+    "selenium-webdriver": "npm:selenium-webdriver@^4.27.0",
+    "pdfmake": "npm:pdfmake@0.3.11/build/pdfmake.js",
+    "pdfmake-fonts": "npm:pdfmake@0.3.11/build/vfs_fonts.js"
   },
   "tasks": {
     "dev": "deno run --allow-net --allow-env --allow-read --allow-write --watch main.ts",

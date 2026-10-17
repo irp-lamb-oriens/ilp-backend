@@ -23,6 +23,18 @@ import blogPublicRouter from "./API/blog/blogPublicRouter.ts";
 import guidesPublicRouter from "./API/guides/guidesPublicRouter.ts";
 import postsRouter from "./API/posts/postsRouter.ts";
 import chatbotRouter from "./API/chatbot/chatbotRouter.ts";
+import serviceTypesRouter from "./API/dashboard/serviceTypesRouter.ts";
+import clientStatusRouter from "./API/clientStatus/clientStatusRouter.ts";
+import quoteTemplatesRouter from "./API/dashboard/quoteTemplatesRouter.ts";
+import quoteTemplateMapRouter from "./API/dashboard/quoteTemplateMapRouter.ts";
+import quoteLineTemplatesRouter from "./API/dashboard/quoteLineTemplatesRouter.ts";
+import quoteLabelsRouter from "./API/dashboard/quoteLabelsRouter.ts";
+import quotesRouter from "./API/dashboard/quotesRouter.ts";
+import emailAutomationRouter from "./API/dashboard/emailAutomationRouter.ts";
+import stageGatesRouter from "./API/dashboard/stageGatesRouter.ts";
+import stageConfigRouter from "./API/dashboard/stageConfigRouter.ts";
+import overviewFieldsRouter from "./API/dashboard/overviewFieldsRouter.ts";
+import crmLilyRouter from "./API/dashboard/crmLilyRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -91,6 +103,18 @@ function createServer() {
     guidesPublicRouter(app);
     postsRouter(app);
     chatbotRouter(app);
+    serviceTypesRouter(app);
+    clientStatusRouter(app);
+    quoteTemplatesRouter(app);
+    quoteTemplateMapRouter(app);
+    quoteLineTemplatesRouter(app);
+    quoteLabelsRouter(app);
+    quotesRouter(app);
+    emailAutomationRouter(app);
+    stageGatesRouter(app);
+    stageConfigRouter(app);
+    overviewFieldsRouter(app);
+    crmLilyRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });

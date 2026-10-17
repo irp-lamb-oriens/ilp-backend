@@ -1,0 +1,836 @@
+/**
+ * API/clientStatus/clientStatusRouter.ts
+ * ──────────────────────────────────────────────────────────────────────────
+ * Client Status portal (Phase 1 — Segment A): OTP auth + project hub payload
+ * + charges + comments + stage ratings + quotes + quote acceptance + details.
+ *
+ * Ported from IRP-funnel's `clientStatusRouter.ts`, retargeted to ILP's legal
+ * taxonomy and data model:
+ *   • Project doc lives in the `clients` collection, doc id === the
+ *     email-normalized project id (email with `@`/`.` replaced by `_`).
+ *   • Quotes, charges, comments, and stage ratings are stored ON the client
+ *     doc (ILP's flat-doc pattern) rather than subcollections.
+ *   • OTP/session primitives come from `helper/auth/` (Phase 0.1).
+ *   • Stage config comes from `automation/stageConfig.ts` (Phase 0.6).
+ *
+ * LILY CHAT:      POST /api/client-status/project/:id/lily
+ *                 GET  /api/client-status/project/:id/lily/history
+ * COMMENTS:       POST / PATCH / DELETE .../comment[/:commentId]
+ * STAGE RATINGS:  POST .../stage-rating
+ * QUOTES:         GET .../quotes, POST .../accept-quote
+ * DETAILS:        PATCH .../details
+ */
+
+import type { Express, Request, Response } from "express";
+import asyncHandler from "../../helper/asyncHandler.ts";
+import log from "../../helper/log.ts";
+import get from "../../db/get.ts";
+import put from "../../db/put.ts";
+import { sendEmailTransport } from "../../config/integrations.ts";
+import { enqueueEmail } from "../../helper/emailQueue.ts";
+import {
+  generateOtp,
+  generateSessionToken,
+  emailToDocId,
+} from "../../helper/auth/otp.ts";
+import { requireClientAuth } from "../../helper/auth/session.ts";
+import {
+  ensureStageConfig,
+  getStageLabel,
+  getClientVisibleStageIds,
+  getClientVisibleStageLabels,
+  resolveClientDisplayStage,
+} from "../dashboard/automation/stageConfig.ts";
+import { ensureFieldConfig, getFieldConfigSync } from "../dashboard/automation/fieldConfig.ts";
+import type { FieldDef } from "../dashboard/automation/fieldDefaults.ts";
+import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
+
+const CLIENTS_COLLECTION = "clients";
+const OTP_COLLECTION = "client_status_otps";
+const SESSION_COLLECTION = "client_status_sessions";
+
+const ALLOWED_DOMAIN = "internationallegalpartner.com";
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface StatusComment {
+  id: string;
+  author: string;
+  authorType: "client" | "staff";
+  body: string;
+  stage?: string;
+  createdAt: string;
+  editedAt?: string;
+  editHistory?: Array<{ body: string; editedAt: string; editedBy: string }>;
+  deleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
+}
+
+interface StageRating {
+  rating: 1 | 2 | 3 | 4 | 5;
+  note?: string;
+  timestamp: string;
+  ratedBy: string;
+}
+
+interface StatusChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Reconstruct the principal email from an email-normalized project id. */
+function resolvePrincipalEmail(doc: Record<string, unknown>, projectId: string): string {
+  const drip = doc.dripEmail;
+  if (typeof drip === "string" && drip.includes("@")) return drip.toLowerCase().trim();
+  const dotted = projectId.replace(/_/g, ".");
+  const parts = dotted.split(".");
+  if (parts.length >= 2) {
+    const tld = parts.pop();
+    const dom = parts.pop();
+    const user = parts.join(".");
+    return `${user}@${dom}.${tld}`.toLowerCase().trim();
+  }
+  return dotted.toLowerCase().trim();
+}
+
+/** May this signed-in address see this project? */
+function clientMayAccessProject(
+  doc: Record<string, unknown>,
+  projectId: string,
+  email: string,
+): boolean {
+  const normalized = String(email ?? "").toLowerCase().trim();
+  if (!normalized) return false;
+  if (normalized.split("@")[1] === ALLOWED_DOMAIN) return true;
+  if (resolvePrincipalEmail(doc, projectId) === normalized) return true;
+  const consultations = Array.isArray(doc.consultations) ? doc.consultations : [];
+  return consultations.some(
+    (c) => {
+      const ce = (c as Record<string, unknown>)?.email;
+      return typeof ce === "string" && ce.toLowerCase().trim() === normalized;
+    },
+  );
+}
+
+/** The set of emails permitted to score stages (the principal only). */
+function getRatingWhitelist(doc: Record<string, unknown>, projectId: string): string[] {
+  return [resolvePrincipalEmail(doc, projectId)];
+}
+
+function newCommentId(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  for (let i = 0; i < 16; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+const COMMENT_MUTATION_WINDOW_MS = 15 * 60 * 1000;
+function withinEditWindow(c: StatusComment): boolean {
+  const t = Date.parse(c.createdAt);
+  return Number.isFinite(t) && Date.now() - t <= COMMENT_MUTATION_WINDOW_MS;
+}
+
+/** Index of the latest consultation entry (where consultation-scoped values live). */
+function latestConsultationIndex(doc: Record<string, unknown>): number {
+  const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
+  return Math.max(0, cons.length - 1);
+}
+
+/** Read a registry field's current value off the client doc, honoring scope. */
+function readFieldValue(doc: Record<string, unknown>, f: FieldDef): unknown {
+  if (f.scope === "root") return doc[f.id];
+  const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
+  const last = (cons[cons.length - 1] ?? {}) as Record<string, unknown>;
+  return last[f.id] !== undefined ? last[f.id] : doc[f.id];
+}
+
+/** Coerce an incoming client-submitted value to the field's declared type. */
+function coerceFieldValue(v: unknown, type: string): unknown {
+  if (type === "number") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (type === "boolean") return v === true || v === "true" || v === "yes" || v === "1";
+  return typeof v === "string" ? v.trim() : v == null ? "" : String(v);
+}
+
+const CLIENT_SCALAR_TYPES: ReadonlySet<string> = new Set([
+  "string", "text", "number", "boolean", "date", "datetime", "enum", "email",
+]);
+
+/** Build the client-visible field list from the Overview Field Registry. */
+function buildClientFields(doc: Record<string, unknown>): Array<{
+  id: string;
+  label: string;
+  valueType: string;
+  options?: string[];
+  placeholder?: string;
+  editable: boolean;
+  value: unknown;
+}> {
+  return getFieldConfigSync()
+    .filter(
+      (f) =>
+        f.active !== false &&
+        f.clientVisible === true &&
+        CLIENT_SCALAR_TYPES.has(f.valueType),
+    )
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((f) => ({
+      id: f.id,
+      label: f.label,
+      valueType: f.valueType,
+      ...(f.options ? { options: f.options } : {}),
+      ...(f.placeholder ? { placeholder: f.placeholder } : {}),
+      editable: f.clientEditable === true && f.readOnly !== true,
+      value: readFieldValue(doc, f) ?? "",
+    }));
+}
+
+/** Build a safe client-facing summary of the project doc. */
+function buildSafeSummary(doc: Record<string, unknown>, projectId: string) {
+  const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
+  const latest = (cons[cons.length - 1] ?? {}) as Record<string, unknown>;
+  const pick = (key: string) => {
+    const v = latest[key] !== undefined ? latest[key] : doc[key];
+    return v ?? null;
+  };
+  return {
+    id: projectId,
+    name: pick("name"),
+    surname: pick("surname"),
+    email: pick("email") ?? resolvePrincipalEmail(doc, projectId),
+    legalArea: pick("legalArea"),
+    legalMatter: pick("legalMatter"),
+    jurisdiction: pick("jurisdiction"),
+    documents: pick("documents"),
+    stage: typeof doc.stage === "string" ? doc.stage : "intake",
+    statusComments: (Array.isArray(doc.statusComments) ? doc.statusComments : [])
+      .filter((c) => !(c as StatusComment).deleted),
+    stageRatings: (doc.stageRatings ?? {}) as Record<string, StageRating>,
+    quoteAcceptance: doc.quoteAcceptance ?? null,
+    lastUpdated: doc.updatedAt ?? null,
+    createdAt: doc.createdAt ?? null,
+  };
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+
+export default (app: Express) => {
+  log("Client Status router initialized.");
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  AUTH ROUTES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post(
+    "/api/client-status/auth/request-otp",
+    asyncHandler(async (req: Request, res: Response) => {
+      const { email, projectId } = req.body ?? {};
+      if (!email || !projectId) {
+        return res.status(400).json({ error: "Email and Project ID are required." });
+      }
+
+      const normalizedEmail = String(email).toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, projectId);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      if (!clientMayAccessProject(doc, projectId, normalizedEmail)) {
+        log(`[client-status] Unauthorized OTP request for ${projectId} by ${normalizedEmail}`);
+        return res.status(403).json({ error: "Email not authorized for this project." });
+      }
+
+      const code = generateOtp();
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+      const otpDocId = `${projectId}__${emailToDocId(normalizedEmail)}`;
+
+      await put(OTP_COLLECTION, otpDocId, {
+        code,
+        email: normalizedEmail,
+        projectId,
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      });
+
+      try {
+        await sendEmailTransport({
+          to: normalizedEmail,
+          subject: "Your ILP Client Portal Login Code",
+          html: `
+            <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px;">
+              <div style="text-align: center; margin-bottom: 32px;">
+                <h1 style="color: #123b5d; font-size: 24px; margin: 0;">ILP Client Portal</h1>
+                <p style="color: #4a5a66; font-size: 14px; margin-top: 8px;">Secure Login Code</p>
+              </div>
+              <div style="background: #eff7fb; border-radius: 12px; padding: 32px; text-align: center;">
+                <p style="color: #202a33; font-size: 16px; margin: 0 0 16px;">Your verification code is:</p>
+                <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #123b5d; font-family: monospace; padding: 16px; background: white; border-radius: 8px; display: inline-block;">${code}</div>
+                <p style="color: #7a8a96; font-size: 13px; margin-top: 16px;">This code expires in 10 minutes.</p>
+              </div>
+            </div>
+          `,
+        });
+        log(`[client-status] OTP sent to ${normalizedEmail}`);
+      } catch (err) {
+        log(`[client-status] Failed to send OTP email: ${err instanceof Error ? err.message : err}`);
+        return res.status(500).json({ error: "Failed to send verification code." });
+      }
+
+      res.json({ success: true, message: "Verification code sent to your email." });
+    }),
+  );
+
+  app.post(
+    "/api/client-status/auth/verify-otp",
+    asyncHandler(async (req: Request, res: Response) => {
+      const { email, projectId, code } = req.body ?? {};
+      if (!email || !projectId || !code) {
+        return res.status(400).json({ error: "Email, Project ID, and code are required." });
+      }
+
+      const normalizedEmail = String(email).toLowerCase().trim();
+      const otpDocId = `${projectId}__${emailToDocId(normalizedEmail)}`;
+
+      const otpDoc = await get(OTP_COLLECTION, otpDocId);
+      if (!otpDoc) return res.status(401).json({ error: "No verification code found. Please request a new one." });
+      if (String(otpDoc.code).trim() !== String(code).trim()) return res.status(401).json({ error: "Invalid verification code." });
+      if (new Date(otpDoc.expiresAt as string) < new Date()) return res.status(401).json({ error: "Verification code expired." });
+
+      const token = generateSessionToken();
+      const sessionExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+      await put(SESSION_COLLECTION, token, {
+        email: normalizedEmail,
+        projectId,
+        createdAt: new Date().toISOString(),
+        expiresAt: sessionExpiry.toISOString(),
+      });
+
+      log(`[client-status] Session created for ${normalizedEmail} on project ${projectId}`);
+      res.json({ success: true, token, email: normalizedEmail, expiresAt: sessionExpiry.toISOString() });
+    }),
+  );
+
+  app.get(
+    "/api/client-status/auth/check",
+    requireClientAuth,
+    (req: Request, res: Response) => {
+      res.json({
+        authenticated: true,
+        email: (req as Request & { clientUser?: string }).clientUser,
+      });
+    },
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PROJECT HUB PAYLOAD
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get(
+    "/api/client-status/project/:id",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const email = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      if (!clientMayAccessProject(doc, id, email)) {
+        return res.status(403).json({ error: "You do not have access to this project." });
+      }
+
+      const safeSummary = buildSafeSummary(doc, id);
+
+      await ensureStageConfig();
+      const stages = getClientVisibleStageIds();
+      const stageLabels = getClientVisibleStageLabels();
+
+      await ensureFieldConfig();
+      const clientFields = buildClientFields(doc);
+
+      safeSummary.stage = resolveClientDisplayStage(safeSummary.stage);
+
+      const isStaffViewer = email.split("@")[1] === ALLOWED_DOMAIN;
+      const viewerIsPrincipal = !isStaffViewer && email === resolvePrincipalEmail(doc, id);
+
+      res.json({
+        project: { ...safeSummary, viewerIsPrincipal },
+        stages,
+        stageLabels,
+        clientFields,
+      });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  CHARGES
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get(
+    "/api/client-status/project/:id/charges",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const email = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      if (!clientMayAccessProject(doc, id, email)) {
+        return res.status(403).json({ error: "You do not have access to this project." });
+      }
+
+      const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+      const money = (v: unknown) => {
+        const n = typeof v === "number" ? v : parseFloat(String(v ?? ""));
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const charges = (Array.isArray(doc.charges) ? doc.charges : []).map((c) => {
+        const ch = c as Record<string, unknown>;
+        const payments = Array.isArray(ch.payments) ? ch.payments : [];
+        const received = round2(
+          payments
+            .filter((p) => (p as Record<string, unknown>)?.received !== false)
+            .reduce((s, p) => s + money((p as Record<string, unknown>).amount), 0),
+        );
+        const total = round2(money(ch.total));
+        const balanceDue = round2(total - received);
+        return {
+          label: ch.label ?? null,
+          date: ch.date ?? null,
+          dueDate: ch.dueDate ?? null,
+          total,
+          received,
+          balanceDue,
+          status: balanceDue <= 0 ? "paid" : received > 0 ? "partially_paid" : "sent",
+        };
+      });
+
+      const accepted = round2(charges.reduce((s, c) => s + c.total, 0));
+      const received = round2(charges.reduce((s, c) => s + c.received, 0));
+
+      res.json({
+        charges,
+        totals: {
+          accepted,
+          charged: accepted,
+          received,
+          balanceDue: round2(charges.reduce((s, c) => s + c.balanceDue, 0)),
+        },
+      });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  LILY CHAT (status scope)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post(
+    "/api/client-status/project/:id/lily",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const { message } = req.body ?? {};
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "");
+      const isStaff = !!(req as Request & { isIrpStaff?: boolean }).isIrpStaff;
+
+      if (!message || typeof message !== "string" || !message.trim()) {
+        return res.status(400).json({ error: "message is required." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      // Phase 6: the full project-scoped Lily engine answers here, grounded in
+      // the client doc. The engine persists to `statusChatThread` itself.
+      const { reply } = await chatWithLily(
+        id,
+        "status",
+        message.trim(),
+        userEmail,
+        isStaff ? "staff" : "client",
+      );
+
+      log(`[client-status] Lily message on project ${id} by ${userEmail}`);
+      res.json({ reply });
+    }),
+  );
+
+  app.get(
+    "/api/client-status/project/:id/lily/history",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      const thread = Array.isArray(doc.statusChatThread)
+        ? (doc.statusChatThread as StatusChatMessage[])
+        : [];
+      res.json({ thread });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  COMMENTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post(
+    "/api/client-status/project/:id/comment",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const { body, stage, author } = req.body ?? {};
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "");
+      const isStaff = !!(req as Request & { isIrpStaff?: boolean }).isIrpStaff;
+
+      if (!body || typeof body !== "string" || !body.trim()) {
+        return res.status(400).json({ error: "body is required." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const existing: StatusComment[] = Array.isArray(doc.statusComments)
+        ? (doc.statusComments as StatusComment[])
+        : [];
+      const comment: StatusComment = {
+        id: newCommentId(),
+        author: author || userEmail,
+        authorType: isStaff ? "staff" : "client",
+        body: body.trim(),
+        ...(stage ? { stage } : {}),
+        createdAt: new Date().toISOString(),
+      };
+
+      await put(CLIENTS_COLLECTION, id, { statusComments: [...existing, comment] });
+      log(`[client-status] Comment added to project ${id} by ${userEmail}`);
+      res.json({ success: true, comment });
+    }),
+  );
+
+  app.patch(
+    "/api/client-status/project/:id/comment/:commentId",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id, commentId } = req.params;
+      const { body } = req.body ?? {};
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "");
+
+      if (!body || typeof body !== "string" || !body.trim()) {
+        return res.status(400).json({ error: "body is required." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const existing: StatusComment[] = Array.isArray(doc.statusComments)
+        ? (doc.statusComments as StatusComment[])
+        : [];
+      const target = existing.find((c) => c.id === commentId);
+      if (!target) return res.status(404).json({ error: "Comment not found." });
+      if (target.deleted) return res.status(410).json({ error: "This comment was deleted." });
+      if (target.author !== userEmail) return res.status(403).json({ error: "Not authorized to edit this comment." });
+      if (!withinEditWindow(target)) return res.status(403).json({ error: "The 15-minute edit window has expired." });
+
+      const now = new Date().toISOString();
+      const updated = existing.map((c) => {
+        if (c.id !== commentId) return c;
+        const history = Array.isArray(c.editHistory) ? c.editHistory : [];
+        return {
+          ...c,
+          body: body.trim(),
+          editedAt: now,
+          editHistory: [...history, { body: c.body, editedAt: now, editedBy: userEmail }],
+        };
+      });
+
+      await put(CLIENTS_COLLECTION, id, { statusComments: updated });
+      res.json({ success: true, comment: updated.find((c) => c.id === commentId) });
+    }),
+  );
+
+  app.delete(
+    "/api/client-status/project/:id/comment/:commentId",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id, commentId } = req.params;
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "");
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const existing: StatusComment[] = Array.isArray(doc.statusComments)
+        ? (doc.statusComments as StatusComment[])
+        : [];
+      const target = existing.find((c) => c.id === commentId);
+      if (!target) return res.status(404).json({ error: "Comment not found." });
+      if (target.deleted) return res.json({ success: true, comment: target });
+      if (target.author !== userEmail) return res.status(403).json({ error: "Not authorized to delete this comment." });
+      if (!withinEditWindow(target)) return res.status(403).json({ error: "The 15-minute delete window has expired." });
+
+      const now = new Date().toISOString();
+      const updated = existing.map((c) =>
+        c.id === commentId ? { ...c, deleted: true, deletedAt: now, deletedBy: userEmail } : c,
+      );
+      await put(CLIENTS_COLLECTION, id, { statusComments: updated });
+      res.json({ success: true, comment: updated.find((c) => c.id === commentId) });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STAGE RATINGS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post(
+    "/api/client-status/project/:id/stage-rating",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const { stageKey, rating, note } = req.body ?? {};
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "");
+
+      if (!stageKey || typeof stageKey !== "string") {
+        return res.status(400).json({ error: "stageKey is required." });
+      }
+      const ratingNum = Number(rating);
+      if (!ratingNum || ratingNum < 1 || ratingNum > 5) {
+        return res.status(400).json({ error: "rating must be 1–5." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const ratingWhitelist = getRatingWhitelist(doc, id);
+      if (!ratingWhitelist.includes(userEmail.toLowerCase().trim())) {
+        return res.status(403).json({ error: "Only the principal contact on this project can rate stages." });
+      }
+
+      const existing: Record<string, StageRating> = (doc.stageRatings ?? {}) as Record<string, StageRating>;
+      const stageRating: StageRating = {
+        rating: ratingNum as 1 | 2 | 3 | 4 | 5,
+        ...(note ? { note: String(note).trim() } : {}),
+        timestamp: new Date().toISOString(),
+        ratedBy: userEmail,
+      };
+
+      await put(CLIENTS_COLLECTION, id, {
+        stageRatings: { ...existing, [stageKey]: stageRating },
+      });
+
+      log(`[client-status] Stage rating ${ratingNum}★ on '${stageKey}' by ${userEmail} for project ${id}`);
+      res.json({ success: true, stageRating });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  QUOTES (read-only view)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get(
+    "/api/client-status/project/:id/quotes",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const allQuotes = Array.isArray(doc.quotes) ? doc.quotes : [];
+      const clientQuotes = allQuotes
+        .filter((q) => ["received", "accepted", "rejected"].includes((q as Record<string, unknown>).status as string))
+        .sort((a, b) => {
+          const rank: Record<string, number> = { accepted: 0, received: 1, rejected: 2 };
+          const ra = rank[(a as Record<string, unknown>).status as string] ?? 9;
+          const rb = rank[(b as Record<string, unknown>).status as string] ?? 9;
+          if (ra !== rb) return ra - rb;
+          return String((b as Record<string, unknown>).createdAt ?? "").localeCompare(String((a as Record<string, unknown>).createdAt ?? ""));
+        });
+
+      res.json({ quotes: clientQuotes });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  ACCEPT QUOTE — CLIENT ONLY
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.post(
+    "/api/client-status/project/:id/accept-quote",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+      const isStaff = !!(req as Request & { isIrpStaff?: boolean }).isIrpStaff;
+
+      if (isStaff) {
+        return res.status(403).json({ error: "Quote acceptance must be performed by the client directly." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      const currentStage = typeof doc.stage === "string" ? doc.stage : "";
+      const ACCEPTABLE_STAGES = new Set(["quote_sent", "quote_accepted"]);
+      if (!ACCEPTABLE_STAGES.has(currentStage)) {
+        if (currentStage === "quote_accepted") {
+          return res.status(409).json({ error: "Quote already accepted.", stage: currentStage });
+        }
+        return res.status(409).json({
+          error: `Quote acceptance is not available at the current stage (${getStageLabel(currentStage)}).`,
+          stage: currentStage,
+        });
+      }
+
+      const allQuotes = Array.isArray(doc.quotes) ? doc.quotes : [];
+      const receivedQuotes = allQuotes.filter((q) => (q as Record<string, unknown>).status === "received");
+
+      const { quoteId: _qid, fullName: _fn, consent: _consent } = req.body ?? {};
+      const fullName = (typeof _fn === "string" ? _fn : "").trim();
+      const consent = _consent === true || _consent === "true";
+
+      if (!consent) return res.status(400).json({ error: "Consent is required to accept this quote." });
+      if (!fullName) return res.status(400).json({ error: "Please type your full name to proceed." });
+
+      let quoteId = _qid;
+      if (!quoteId) {
+        if (receivedQuotes.length === 1) {
+          quoteId = (receivedQuotes[0] as Record<string, unknown>).id;
+        } else if (receivedQuotes.length === 0) {
+          return res.status(409).json({ error: "No received quotes available to accept." });
+        } else {
+          return res.status(400).json({
+            error: "Multiple quotes are available. Please specify quoteId in the request body.",
+            availableQuoteIds: receivedQuotes.map((q) => (q as Record<string, unknown>).id),
+          });
+        }
+      }
+
+      const targetQuote = allQuotes.find((q) => (q as Record<string, unknown>).id === quoteId) as Record<string, unknown> | undefined;
+      if (!targetQuote) return res.status(404).json({ error: `Quote ${quoteId} not found on this project.` });
+      if (targetQuote.status === "accepted") return res.status(409).json({ error: "This quote has already been accepted." });
+
+      const nowIso = new Date().toISOString();
+      const newStage = "quote_accepted";
+
+      const updatedQuotes = allQuotes.map((q) =>
+        (q as Record<string, unknown>).id === quoteId
+          ? {
+              ...(q as Record<string, unknown>),
+              status: "accepted",
+              acceptedAt: nowIso,
+              acceptedBy: userEmail,
+              typedFullName: fullName,
+              consent: true,
+              consentAt: nowIso,
+            }
+          : q,
+      );
+
+      await put(CLIENTS_COLLECTION, id, {
+        stage: newStage,
+        quotes: updatedQuotes,
+        quoteAcceptance: {
+          quoteId,
+          acceptedAt: nowIso,
+          acceptedBy: userEmail,
+          fromStage: currentStage,
+          total: targetQuote.total ?? null,
+          currency: targetQuote.currency ?? "USD",
+          typedFullName: fullName,
+          consent: true,
+          consentAt: nowIso,
+        },
+      });
+
+      log(`[client-status] Quote accepted: project=${id} quote=${quoteId} by=${userEmail}`);
+
+      // Fire-and-forget confirmation email.
+      const clientEmail = resolvePrincipalEmail(doc, id);
+      void enqueueEmail(
+        {
+          to: clientEmail,
+          subject: `Quote accepted — ${targetQuote.title ?? quoteId}`,
+          html: `<div style="font-family:sans-serif;max-width:540px"><h2>Quote accepted</h2><p>Thank you for accepting your quote. Your legal team will be in touch to confirm next steps.</p></div>`,
+        },
+        `quote_accept_${id}_${quoteId}`,
+      ).catch((e) => log(`[client-status] Quote acceptance email failed: ${e}`));
+
+      res.json({ success: true, newStage, quoteId, acceptedAt: nowIso });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  DETAILS (client-editable fields)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.patch(
+    "/api/client-status/project/:id/details",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const userEmail = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+      const isStaff = !!(req as Request & { isIrpStaff?: boolean }).isIrpStaff;
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+
+      if (isStaff) {
+        return res.status(403).json({ error: "Staff may not edit client project details via this endpoint." });
+      }
+      if (userEmail !== resolvePrincipalEmail(doc, id)) {
+        return res.status(403).json({ error: "Only the principal contact may edit project details." });
+      }
+
+      await ensureFieldConfig();
+      const editableRegistry = new Map(
+        getFieldConfigSync()
+          .filter(
+            (f) =>
+              f.active !== false &&
+              f.clientVisible === true &&
+              f.clientEditable === true &&
+              f.readOnly !== true &&
+              CLIENT_SCALAR_TYPES.has(f.valueType),
+          )
+          .map((f) => [f.id, f] as const),
+      );
+
+      const rootUpdates: Record<string, unknown> = {};
+      const consultations = Array.isArray(doc.consultations)
+        ? [...(doc.consultations as Record<string, unknown>[])]
+        : [];
+      const lastIdx = latestConsultationIndex(doc);
+      let consultationTouched = false;
+      const changedKeys: string[] = [];
+
+      for (const [k, v] of Object.entries(req.body ?? {})) {
+        const f = editableRegistry.get(k);
+        if (!f) continue;
+        const coerced = coerceFieldValue(v, f.valueType);
+        if (f.scope === "root") {
+          rootUpdates[k] = coerced;
+        } else {
+          consultations[lastIdx] = { ...(consultations[lastIdx] ?? {}), [k]: coerced };
+          consultationTouched = true;
+        }
+        changedKeys.push(k);
+      }
+
+      if (changedKeys.length === 0) {
+        return res.status(400).json({ error: "No valid (client-editable) fields provided." });
+      }
+
+      const patch: Record<string, unknown> = { ...rootUpdates };
+      if (consultationTouched) patch.consultations = consultations;
+      await put(CLIENTS_COLLECTION, id, patch);
+
+      log(`[client-status] Project details updated for ${id} by ${userEmail}: ${changedKeys.join(", ")}`);
+      res.json({ success: true, updated: changedKeys });
+    }),
+  );
+};

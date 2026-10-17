@@ -10,6 +10,7 @@ import { runAvailabilityAgent } from "./agents/availability-agent.ts";
 import { runSchedulerAgent } from "./agents/scheduler-agent.ts";
 import { executeConversationalAgent } from "./agents/conversational-agent.ts";
 import { runFieldExtractionAgent } from "./agents/field-extraction-agent.ts";
+import { runModeratorAgent, moderatorBlockedReply } from "./agents/moderator-agent.ts";
 import { buildConversationContext } from "./agents/agent-context.ts";
 import type { ChatMessage } from "./agents/agent-context.ts";
 import type { ConversationThread } from "./services/conversation-store.ts";
@@ -109,6 +110,31 @@ export default (app: Express) => {
 
       // ─── 2. ADD CURRENT MESSAGE TO HISTORY ─────────────────
       history.push({ role: "user", content: message });
+
+      // ─── 2a. MODERATOR SAFETY GATE ─────────────────────────
+      const moderation = await runModeratorAgent(message, sessionId);
+      if (moderation.blocked) {
+        const safeReply = moderatorBlockedReply(moderation.reason);
+        history.push({ role: "assistant", content: safeReply });
+        const threadData = {
+          sessionId,
+          authCode: authCode || thread?.authCode,
+          updatedAt: new Date().toISOString(),
+          formContextSnapshot: context || {},
+          skippedFields,
+          messages: history,
+          lastAvailabilitySlots: thread?.lastAvailabilitySlots || [],
+        };
+        if (thread) await put(COLLECTION_NAME, sessionId, threadData);
+        else await put(COLLECTION_NAME, sessionId, { ...threadData, createdAt: new Date().toISOString() });
+        return res.status(200).json({
+          success: true,
+          response: safeReply,
+          extractedFields: {},
+          sessionId,
+          moderated: true,
+        });
+      }
 
       // ─── 3. BUILD CONVERSATION CONTEXT ──────────────────────
       const { summary: convSummary, recentMessages } = buildConversationContext(history, 20);
