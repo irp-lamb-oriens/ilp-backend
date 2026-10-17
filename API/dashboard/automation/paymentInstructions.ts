@@ -48,7 +48,7 @@ export function resolveSchedule(ctx: PaymentScheduleContext): ResolvedSegment[] 
   const schedule = Array.isArray(ctx.schedule) ? ctx.schedule : [];
   const total = Number.isFinite(ctx.total) ? ctx.total : 0;
   return schedule
-    .map((p, i) => (typeof p === "number" && Number.isFinite(p) ? p : Number.NaN))
+    .map((p) => (typeof p === "number" && Number.isFinite(p) ? p : Number.NaN))
     .filter((p) => !Number.isNaN(p))
     .map((p, i) => ({
       index0: i,
