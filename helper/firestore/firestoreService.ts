@@ -75,11 +75,19 @@ async function firestoreRequest(
   target: string,
   url: string,
   init: RequestInit = {},
+  allowNotFound = false,
 ): Promise<Response> {
   const started = Date.now();
   const res = await fetchWithAuth(url, init);
 
   if (!res.ok) {
+    // A 404 is a normal "does not exist" signal for read/delete paths, not a
+    // fault. Let the caller decide how to handle it instead of throwing here.
+    if (allowNotFound && res.status === 404) {
+      log(`[FIRESTORE] ${operation} ${target} not found (404)`);
+      return res;
+    }
+
     const body = await res.text();
     log(`[FIRESTORE] ${operation} ${target} failed (${res.status}): ${body}`);
     throw new FirestoreError(operation, res.status, target, body);
@@ -97,7 +105,7 @@ export async function readDocument(
   id: string,
 ): Promise<Record<string, unknown> | null> {
   const url = getFirestoreDocumentUrl(collection, id);
-  const res = await firestoreRequest("GET", `${collection}/${id}`, url);
+  const res = await firestoreRequest("GET", `${collection}/${id}`, url, undefined, true);
 
   if (res.status === 404) return null;
 
@@ -197,7 +205,7 @@ export async function deleteDocument(
   const url = getFirestoreDocumentUrl(collection, id);
   const res = await firestoreRequest("delete", `${collection}/${id}`, url, {
     method: "DELETE",
-  });
+  }, true);
 
   if (res.status === 404) return false;
   return true;
