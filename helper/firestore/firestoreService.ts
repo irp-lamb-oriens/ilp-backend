@@ -123,7 +123,8 @@ export async function createDocument(
 }
 
 /**
- * Full-document replace (PUT). Clears unspecified fields.
+ * Full-document replace. Firestore REST has no PUT verb; a PATCH without an
+ * updateMask replaces the entire document (clearing unspecified fields).
  */
 export async function replaceDocument(
   collection: string,
@@ -132,7 +133,7 @@ export async function replaceDocument(
 ): Promise<void> {
   const url = getFirestoreDocumentUrl(collection, id);
   await firestoreRequest("put", `${collection}/${id}`, url, {
-    method: "PUT",
+    method: "PATCH",
     body: JSON.stringify(toFirestoreDocument(data)),
   });
 }
