@@ -17,7 +17,7 @@ export const OPENAI_API_KEY = env("OPENAI_API_KEY");
 export const OPENAI_MODEL = env("OPENAI_MODEL", "gpt-4o-mini");
 
 // ── Firebase / Firestore ────────────────────────────
-export const FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", "ilp");
+export const FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", "international-legal-partner");
 export const FIRESTORE_BASE_URL =
   `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 
