@@ -19,9 +19,11 @@ export const DEFAULT_GOOGLE_SCOPES = [
 
 export const getGoogleAccessToken = async (scopeOverride?: string[]) => {
   log("Parsing service account key...");
-  const serviceAccountJson = Deno.env.get("SERVICE_ACCOUNT_KEY");
+  const serviceAccountJson =
+    Deno.env.get("CALENDAR_SERVICE_ACCOUNT_KEY") ||
+    Deno.env.get("SERVICE_ACCOUNT_KEY");
   if (!serviceAccountJson) {
-    throw new Error("SERVICE_ACCOUNT_KEY not set in environment.");
+    throw new Error("CALENDAR_SERVICE_ACCOUNT_KEY not set in environment.");
   }
 
   let serviceAccount;
@@ -35,7 +37,7 @@ export const getGoogleAccessToken = async (scopeOverride?: string[]) => {
   const privateKey = serviceAccount.private_key;
   const subject =
     Deno.env.get("GOOGLE_SUBJECT_EMAIL") ??
-    "luisarmando@internationallegalpartner.com";
+    "luisarmando@internationalrelocationpartner.com";
 
   const scopes = (scopeOverride && scopeOverride.length > 0
     ? scopeOverride

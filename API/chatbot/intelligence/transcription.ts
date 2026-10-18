@@ -1,48 +1,102 @@
 /**
- * ILP — Legal Assistant audio transcription (OpenAI Whisper).
- * Uses Deno-native fetch; no npm deps.
+ * ILP — Legal Assistant audio transcription.
+ *
+ * Mirrors IRP-funnel's dashboard voice transcription: Gemini 2.5 Flash via
+ * OpenRouter (multimodal `input_audio`), using the dedicated
+ * `OPENROUTER_KEY_VOICE` key with a fallback to `OPENROUTER_API_KEY`.
+ *
+ * The public `transcribeAudio(audio, filename)` signature is preserved so the
+ * existing `/api/dashboard/voice-transcribe` route and
+ * `config/integrations.ts` keep working unchanged.
  */
 
-import { OPENAI_API_KEY } from "../config.ts";
+import log from "../../../helper/log.ts";
 
-const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+function openRouterKey(): string {
+  return Deno.env.get("OPENROUTER_KEY_VOICE") || Deno.env.get("OPENROUTER_API_KEY") || "";
+}
+
+/** Convert a byte array to a base64 string without blowing the call stack. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/** Map a filename to the short format label OpenRouter expects in input_audio. */
+function formatFromFilename(filename: string): string {
+  const clean = (filename || "audio.webm").split(";")[0].toLowerCase();
+  if (clean.includes("ogg")) return "ogg";
+  if (clean.includes("mp4")) return "mp4";
+  if (clean.includes("mpeg") || clean.includes("mp3")) return "mp3";
+  if (clean.includes("wav")) return "wav";
+  return "webm";
+}
 
 export async function transcribeAudio(
   audio: Uint8Array,
   filename = "audio.webm",
 ): Promise<string> {
-  if (!OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured");
+  const orKey = openRouterKey();
+  if (!orKey) {
+    throw new Error("OPENROUTER_KEY_VOICE is not configured");
   }
 
-  const form = new FormData();
-  form.append("model", "whisper-1");
-  // Copy into a fresh ArrayBuffer so the BlobPart type is a plain ArrayBuffer
-  // (the incoming Uint8Array may be backed by a SharedArrayBuffer).
-  const bytes = new Uint8Array(audio);
-  form.append(
-    "file",
-    new Blob([bytes.buffer], { type: "audio/webm" }),
-    filename,
-  );
+  const audioBase64 = bytesToBase64(audio);
+  const fmt = formatFromFilename(filename);
+  const approxBytes = audio.length;
 
-  const res = await fetch(`${OPENAI_BASE_URL}/audio/transcriptions`, {
+  log(`[voice-transcribe] → Gemini 2.5 Flash via OpenRouter | ~${approxBytes} bytes | fmt:${fmt}`);
+
+  const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${orKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://ilp-backend-nlbz.onrender.com",
+      "X-Title": "ILP Voice Transcription",
     },
-    body: form,
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Transcribe this audio recording verbatim into English text. Output only the spoken words — no commentary, no timestamps, no speaker labels.",
+          },
+          {
+            type: "input_audio",
+            input_audio: { data: audioBase64, format: fmt },
+          },
+        ],
+      }],
+      max_tokens: 4096,
+    }),
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Transcription failed (${res.status}): ${body}`);
+    let errBody: string;
+    try {
+      errBody = JSON.stringify(await res.json());
+    } catch {
+      errBody = await res.text();
+    }
+    log(`[voice-transcribe] Gemini/OpenRouter error (${res.status}): ${errBody}`);
+    throw new Error(`Transcription failed (${res.status}): ${errBody}`);
   }
 
-  const data = await res.json();
-  const text: string | undefined = data?.text;
-  if (!text) {
+  const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const transcript = (data.choices?.[0]?.message?.content || "").trim();
+  if (!transcript) {
     throw new Error("Transcription response missing text");
   }
-  return text;
+
+  log(`[voice-transcribe] Transcribed ~${approxBytes} bytes → ${transcript.length} chars`);
+  return transcript;
 }

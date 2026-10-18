@@ -1,6 +1,6 @@
 import { loadSync } from "dotenv/mod.ts";
 
-loadSync({ export: true, allowEmptyValues: true });
+loadSync({ export: true, allowEmptyValues: true, examplePath: null });
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
