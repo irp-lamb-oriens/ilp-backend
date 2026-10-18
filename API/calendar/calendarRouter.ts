@@ -14,7 +14,11 @@ export default (app: Express) => {
   log("Calendar router initialized.");
 
   const CALENDAR_ID = Deno.env.get("CALENDAR_ID");
-  log("CALENDAR_ID loaded from environment.");
+  if (CALENDAR_ID) {
+    log("CALENDAR_ID loaded from environment.");
+  } else {
+    log("CALENDAR_ID is not configured — /api/events will fail.", "calendar");
+  }
 
   app.get(
     "/api/events",

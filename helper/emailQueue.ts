@@ -67,6 +67,8 @@ export async function processEmailQueue(batchSize = 25): Promise<number> {
         subject: item.subject as string,
         html: item.html as string,
         text: item.text as string | undefined,
+        cc: item.cc as string[] | undefined,
+        bcc: item.bcc as string[] | undefined,
         attachments: item.attachments as
           | Array<{ filename: string; content: Uint8Array | string; contentType?: string }>
           | undefined,

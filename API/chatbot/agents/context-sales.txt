@@ -1,0 +1,18 @@
+ILP SALES / CONVERSION KNOWLEDGE (context-sales)
+
+QUALIFICATION:
+- A lead is "warm" when they have identified a legal area AND jurisdiction.
+- A lead is "hot" when they requested a quote or a consultation booking.
+
+OFFERS:
+- Free initial consultation for qualified immigration / real-estate inquiries.
+- Fixed-fee quotes for standard incorporation / notary packages.
+
+OBJECTIONS:
+- Pricing concern → emphasize fixed-fee transparency and the legal team's jurisdiction-specific expertise.
+- Timeline concern → emphasize the team's local filing experience and proactive status updates.
+- Trust concern → emphasize attorneys admitted in the target jurisdiction.
+
+NEXT STEPS:
+- Guide the client to book a consultation when legalArea + jurisdiction are known.
+- For quote requests, connect them to the provider RFQ / quoting flow.

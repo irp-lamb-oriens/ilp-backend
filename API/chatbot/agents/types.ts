@@ -123,3 +123,66 @@ export interface ChatbotGroundTruth {
   availability?: AvailabilityAgentResponse;
   scheduler?: SchedulerAgentResponse;
 }
+
+// ── R3 agent response types ─────────────────────────────────────────────────
+
+/** Knowledge-base (librarian) answer to a service/jurisdiction/stage question. */
+export interface LibrarianAgentResponse {
+  answered: boolean;
+  answer: string;
+  source: "context_information" | "context_sales" | "none";
+  matchedKeywords: string[];
+}
+
+/** LLM-generated conversation/thread summary. */
+export interface SummarizationAgentResponse {
+  summary: string;
+  messageCount: number;
+}
+
+/** Duplicate-intent/field check result. */
+export interface DeduplicationAgentResponse {
+  isDuplicate: boolean;
+  duplicateFields: string[];
+  changedFields: Record<string, { before: unknown; after: unknown }>;
+}
+
+/** Merged reply from parallel agent outputs. */
+export interface AggregatorAgentResponse {
+  mergedReply: string;
+  sources: string[];
+}
+
+/** Sales intent routing branch (quote/booking). */
+export interface SalesAgentResponse {
+  intent: "quote" | "booking" | "general";
+  confidenceGuestimate: number;
+  reply: string;
+}
+
+/** Support intent routing branch (issue classification). */
+export interface SupportAgentResponse {
+  intent: "document" | "deadline" | "payment" | "status" | "other";
+  reply: string;
+}
+
+/** Proactive follow-up nudges from pending actions. */
+export interface ActivatorAgentResponse {
+  shouldNudge: boolean;
+  nudge: string;
+  resolvedActionIds: string[];
+}
+
+/** Task-status answer from the tasks collection. */
+export interface TaskProgressAgentResponse {
+  found: boolean;
+  statusText: string;
+  taskId: string | null;
+}
+
+/** Escalation to staff as pending action + optional email. */
+export interface LegalOpsNotifierAgentResponse {
+  escalated: boolean;
+  pendingActionId: string | null;
+  emailQueued: boolean;
+}

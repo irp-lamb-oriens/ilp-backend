@@ -1,4 +1,6 @@
-import "dotenv/load.ts";
+import { loadSync } from "dotenv/mod.ts";
+
+loadSync({ export: true, allowEmptyValues: true });
 import put from "../db/put.ts";
 import get from "../db/get.ts";
 import log from "../helper/log.ts";

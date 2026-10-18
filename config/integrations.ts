@@ -14,6 +14,7 @@ import {
   listAvailableSlots as listAvailableSlotsImpl,
   createCalendarEvent as createCalendarEventImpl,
 } from "../helper/calendar.ts";
+import { transcribeAudio as transcribeAudioWhisper } from "../API/chatbot/intelligence/transcription.ts";
 
 export interface EmailAttachment {
   filename: string;
@@ -27,6 +28,10 @@ export interface EmailMessage {
   html: string;
   text?: string;
   attachments?: EmailAttachment[];
+  /** Optional CC recipients (team copy). */
+  cc?: string[];
+  /** Optional BCC recipients (team copy). */
+  bcc?: string[];
 }
 
 export interface CalendarSlot {
@@ -67,6 +72,8 @@ export async function sendEmailTransport(message: EmailMessage): Promise<void> {
   await transporter.sendMail({
     from,
     to: message.to,
+    cc: message.cc,
+    bcc: message.bcc,
     subject: message.subject,
     html: message.html,
     text: message.text,
@@ -97,13 +104,9 @@ export async function createCalendarEvent(opts: {
   return await createCalendarEventImpl(opts);
 }
 
-/** Call recording / transcription (HappyScribe, AssemblyAI, Deepgram). */
-export async function transcribeAudio(audioUrl: string): Promise<{
-  transcript: string;
-  summary?: string;
-}> {
-  void audioUrl;
-  return await notImplemented("transcription");
+/** Call recording / transcription (OpenAI Whisper). */
+export async function transcribeAudio(audio: Uint8Array): Promise<string> {
+  return await transcribeAudioWhisper(audio);
 }
 
 /** Payment capture (Stripe, Adyen, PayU for LATAM). */
@@ -114,17 +117,6 @@ export async function createCheckoutSession(opts: {
 }): Promise<{ sessionId: string; url: string }> {
   void opts;
   return await notImplemented("payments");
-}
-
-/** LLM completion (OpenAI, Anthropic, Gemini). */
-export async function llmComplete(opts: {
-  prompt: string;
-  systemInstruction?: string;
-  temperature?: number;
-  maxTokens?: number;
-}): Promise<{ content: string }> {
-  void opts;
-  return await notImplemented("llm");
 }
 
 /** WhatsApp message delivery (Twilio, Meta Cloud API). */

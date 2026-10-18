@@ -12,6 +12,11 @@ import { executeConversationalAgent } from "./agents/conversational-agent.ts";
 import { runFieldExtractionAgent } from "./agents/field-extraction-agent.ts";
 import { runModeratorAgent, moderatorBlockedReply } from "./agents/moderator-agent.ts";
 import { buildConversationContext } from "./agents/agent-context.ts";
+import { runLibrarianAgent } from "./agents/librarian-agent.ts";
+import { runTaskProgressAgent } from "./agents/task-progress-agent.ts";
+import { runSalesAgent } from "./agents/sales-agent.ts";
+import { runSupportAgent } from "./agents/support-agent.ts";
+import { runAggregatorAgent } from "./agents/aggregator-agent.ts";
 import type { ChatMessage } from "./agents/agent-context.ts";
 import type { ConversationThread } from "./services/conversation-store.ts";
 import type { AvailabilityAgentResponse, SchedulerAgentResponse } from "./agents/types.ts";
@@ -235,6 +240,45 @@ export default (app: Express) => {
         { availability: availability || undefined, scheduler: scheduler || undefined },
         message
       );
+
+      // ─── 8b. SPECIALIST AGENT ORCHESTRATION (R3) ─────────────
+      // Route service/jurisdiction/stage questions to the librarian, task-status
+      // questions to task-progress, and intent branches to sales/support. The
+      // aggregator prefers a grounded specialist answer; otherwise the
+      // conversational reply (already computed) wins.
+      try {
+        const outputs: Array<{ id: string; text: string; priority: number }> = [];
+        outputs.push({ id: "conversational", text: replyText, priority: 1 });
+
+        const librarian = await runLibrarianAgent(message, conversationContext, sessionId);
+        if (librarian.answered && librarian.answer) {
+          outputs.push({ id: "librarian", text: librarian.answer, priority: 3 });
+        }
+
+        if (/task|ticket|status of my/i.test(message)) {
+          const tp = await runTaskProgressAgent(message, userEmail || undefined);
+          if (tp.found && tp.statusText) {
+            outputs.push({ id: "task_progress", text: tp.statusText, priority: 4 });
+          }
+        }
+
+        const sales = runSalesAgent(message);
+        if (sales.intent !== "general" && sales.reply) {
+          outputs.push({ id: "sales", text: sales.reply, priority: 2 });
+        }
+        const support = runSupportAgent(message);
+        if (support.intent !== "other") {
+          outputs.push({ id: "support", text: support.reply, priority: 2 });
+        }
+
+        const aggregated = runAggregatorAgent(outputs);
+        if (aggregated.mergedReply && aggregated.mergedReply !== replyText) {
+          replyText = aggregated.mergedReply;
+          log(`[CHATBOT] specialist agent overrode reply: ${aggregated.sources.join(" | ") || "none"}`);
+        }
+      } catch (err) {
+        log(`[CHATBOT] specialist orchestration skipped: ${err instanceof Error ? err.message : err}`);
+      }
 
       // ─── 9. PERSIST ─────────────────────────────────────────
       history.push({ role: "assistant", content: replyText, extractedFields });

@@ -2,6 +2,7 @@ import { processEmailQueue } from "../helper/emailQueue.ts";
 import { dispatchDueAlerts } from "./dispatchAlerts.ts";
 import { runEscalationWorkflow } from "./escalation.ts";
 import { generateAlerts } from "../helper/alertEngine.ts";
+import { deadlineFollowupSweep } from "./deadlineFollowup.ts";
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -38,5 +39,10 @@ export const jobs: JobDef[] = [
     name: "runEscalationWorkflow",
     cron: "0 * * * *",
     handler: runEscalationWorkflow,
+  },
+  {
+    name: "deadlineFollowupSweep",
+    cron: "0 */6 * * *",
+    handler: deadlineFollowupSweep,
   },
 ];

@@ -25,6 +25,32 @@ function calendarId(): string {
   return id;
 }
 
+/** Fetch a single calendar event by id (for sync-meet-notes). */
+export async function getCalendarEvent(
+  eventId: string,
+): Promise<{
+  id?: string;
+  description?: string;
+  summary?: string;
+  start?: { dateTime?: string; date?: string };
+} | null> {
+  const token = await getGoogleAccessToken();
+  const url =
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId()}/events/${encodeURIComponent(eventId)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to fetch calendar event (${res.status}): ${body}`);
+  }
+  return (await res.json()) as {
+    id?: string;
+    description?: string;
+    summary?: string;
+    start?: { dateTime?: string; date?: string };
+  };
+}
+
 /** List busy events in [from, to] as `{ start, end }` ISO strings. */
 export async function listBusySlots(
   from: string,

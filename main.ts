@@ -1,4 +1,6 @@
-import "dotenv/load.ts";
+import { loadSync } from "dotenv/mod.ts";
+
+loadSync({ export: true, allowEmptyValues: true });
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -42,6 +44,8 @@ import stageGatesRouter from "./API/dashboard/stageGatesRouter.ts";
 import stageConfigRouter from "./API/dashboard/stageConfigRouter.ts";
 import overviewFieldsRouter from "./API/dashboard/overviewFieldsRouter.ts";
 import crmLilyRouter from "./API/dashboard/crmLilyRouter.ts";
+import clientsBulkImportRouter from "./API/dashboard/clientsBulkImportRouter.ts";
+import portalRouter from "./API/portal/portalRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -129,6 +133,8 @@ function createServer() {
     stageConfigRouter(app);
     overviewFieldsRouter(app);
     crmLilyRouter(app);
+    clientsBulkImportRouter(app);
+    portalRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });

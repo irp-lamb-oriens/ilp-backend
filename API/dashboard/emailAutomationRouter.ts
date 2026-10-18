@@ -45,6 +45,12 @@ import {
   saveClientOfferConfig,
   type ClientOfferConfig,
 } from "./automation/clientOffer.ts";
+import {
+  listRecipientRules,
+  upsertRecipientRule,
+  deleteRecipientRule,
+  teamRecipientPool,
+} from "./automation/recipientRules.ts";
 
 /** The legal-pipeline email type registry (label + category). */
 const EMAIL_TYPE_REGISTRY: Record<string, { label: string; category: "sales" | "ops" | "followup" }> = {
@@ -54,6 +60,7 @@ const EMAIL_TYPE_REGISTRY: Record<string, { label: string; category: "sales" | "
   quote_accepted_confirmation: { label: "Quote accepted confirmation", category: "sales" },
   filing_started: { label: "Filing started", category: "ops" },
   matter_closed: { label: "Matter closed", category: "followup" },
+  filing_deadline_reminder: { label: "Filing deadline reminder", category: "followup" },
 };
 
 /** Union of every stage we know about, so the editor can offer a dropdown. */
@@ -255,7 +262,54 @@ export default function emailAutomationRouter(app: Express): void {
         })),
         conditions: RULE_CONDITIONS,
         modes: RULE_MODES,
+        recipientPool: teamRecipientPool(),
       });
+    }),
+  );
+
+  // ── Recipient rules (per-email-type CC/BCC exclusions) ────────────────────
+
+  app.get(
+    "/api/dashboard/automation/recipient-rules",
+    requireDashboardAuth,
+    asyncHandler(async (_req: Request, res: Response) => {
+      const rules = await listRecipientRules();
+      res.json({ rules, pool: teamRecipientPool() });
+    }),
+  );
+
+  app.get(
+    "/api/dashboard/automation/recipient-rules/:emailType",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { emailType } = req.params;
+      const rules = await listRecipientRules();
+      const rule = rules.find((r) => r.emailType === emailType);
+      res.json({ rule: rule ?? { emailType, excludedRecipients: [] } });
+    }),
+  );
+
+  app.put(
+    "/api/dashboard/automation/recipient-rules/:emailType",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { emailType } = req.params;
+      const b = req.body ?? {};
+      const saved = await upsertRecipientRule({
+        emailType,
+        excludedRecipients: Array.isArray(b.excludedRecipients) ? b.excludedRecipients : [],
+        updatedBy: (req as any).dashboardUser ?? b.updatedBy,
+      });
+      res.json({ rule: saved });
+    }),
+  );
+
+  app.delete(
+    "/api/dashboard/automation/recipient-rules/:emailType",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      await deleteRecipientRule(req.params.emailType);
+      res.json({ ok: true });
     }),
   );
 

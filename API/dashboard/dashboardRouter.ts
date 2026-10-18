@@ -15,7 +15,10 @@ import {
 } from "../../helper/auth/otp.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
 import { transcribeAudio } from "../chatbot/intelligence/transcription.ts";
-import { createCalendarEvent } from "../../helper/calendar.ts";
+import { createCalendarEvent, getCalendarEvent } from "../../helper/calendar.ts";
+import { enqueueEmail } from "../../helper/emailQueue.ts";
+import { resolveEmailCc, resolveEmailBcc } from "./automation/recipientRules.ts";
+import { renderLegalEmail, legalEmailTypes } from "./automation/renderLegalEmail.ts";
 
 import {
   buildClientSummary,
@@ -53,6 +56,31 @@ const NOTE_GHOST_ADMIN_EMAILS = [
 function viewerIsNoteAdmin(req: Request): boolean {
   const actor = (req as Request & { dashboardUser?: string }).dashboardUser;
   return typeof actor === "string" && NOTE_GHOST_ADMIN_EMAILS.includes(actor);
+}
+
+/** Build the interpolation data dict for a legal email (preview + trigger). */
+function buildLegalEmailData(
+  doc: Record<string, unknown>,
+  id: string,
+  clientEmail: string,
+): Record<string, unknown> {
+  const consultations = Array.isArray(doc.consultations)
+    ? (doc.consultations as Record<string, unknown>[])
+    : [];
+  const base: Record<string, unknown> = consultations.length > 0
+    ? { ...consultations[consultations.length - 1] }
+    : { ...doc };
+
+  for (const key of [
+    "dripEmail", "legalArea", "legalMatter", "jurisdiction", "name", "surname",
+    "notes", "transcript", "transcriptInsights", "stage",
+  ]) {
+    if (base[key] === undefined && doc[key] !== undefined) base[key] = doc[key];
+  }
+  base.email = base.email || clientEmail;
+  const DASHBOARD_URL = Deno.env.get("DASHBOARD_URL") || "https://internationallegalpartner.netlify.app";
+  base.statusPageUrl = `${DASHBOARD_URL}/status/${id}`;
+  return base;
 }
 
 export { requireDashboardAuth };
@@ -380,6 +408,32 @@ export default (app: Express) => {
     })
   );
 
+  app.delete(
+    "/api/dashboard/clients/:id",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const actor = (req as Request & { dashboardUser?: string }).dashboardUser ?? "system";
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+
+      const nowIso = new Date().toISOString();
+      await put(CLIENTS_COLLECTION, id, {
+        archived: true,
+        archivedAt: nowIso,
+        archivedBy: actor,
+        updatedAt: nowIso,
+        activityLog: [
+          ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
+          { type: "client_archived", actor, timestamp: nowIso },
+        ],
+      });
+
+      log(`[dashboard] ${actor} archived client ${id}`);
+      res.json({ success: true, archived: true, id });
+    })
+  );
+
   app.patch(
     "/api/dashboard/clients/:id",
     requireDashboardAuth,
@@ -621,17 +675,46 @@ export default (app: Express) => {
       const doc = await get(CLIENTS_COLLECTION, id);
       if (!doc) return res.status(404).json({ error: "Client not found." });
 
+      // ── Admin action-permissions gate ──────────────────────────────────────
+      // `dashboard_config/action_permissions` is { permissions: Record<email, Record<actionKey, boolean>> }.
+      // An explicit false for (actor, actionKey) blocks execution; absence = allow.
+      const permDoc = await get("dashboard_config", "action_permissions").catch(() => null);
+      const perms = (permDoc?.permissions ?? {}) as Record<string, Record<string, boolean>>;
+      const actorKey = typeof actor === "string" ? actor : "";
+      if (actorKey && perms[actorKey] && perms[actorKey][actionKey] === false) {
+        return res.status(403).json({ error: `You do not have permission to run "${actionKey}".` });
+      }
+
       const nowIso = new Date().toISOString();
+      const clientArgs = (req.body?.args ?? {}) as Record<string, unknown>;
+      const stage = computeStage(doc);
+
+      let result: { success: boolean; message?: string; data?: Record<string, unknown> } | null = null;
+      if (action.handler) {
+        try {
+          result = await action.handler({ clientId: id, clientDoc: doc, stage, actor, args: clientArgs });
+        } catch (err) {
+          log(`[dashboard] action ${actionKey} failed on ${id}: ${err instanceof Error ? err.message : err}`);
+          await put(CLIENTS_COLLECTION, id, {
+            activityLog: [
+              ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
+              { type: "action_executed", actionKey, actor, timestamp: nowIso, success: false, error: err instanceof Error ? err.message : String(err) },
+            ],
+          });
+          return res.status(500).json({ error: `Action failed: ${err instanceof Error ? err.message : err}` });
+        }
+      }
+
       await put(CLIENTS_COLLECTION, id, {
         updatedAt: nowIso,
         activityLog: [
           ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
-          { type: "action_executed", actionKey, actor, timestamp: nowIso },
+          { type: "action_executed", actionKey, actor, timestamp: nowIso, success: result?.success ?? true, result },
         ],
       });
 
       log(`[dashboard] ${actor} executed action ${actionKey} on ${id}`);
-      res.json({ success: true, actionKey });
+      res.json({ success: true, actionKey, result });
     })
   );
 
@@ -745,6 +828,7 @@ export default (app: Express) => {
           { id: "quote_accepted_confirmation", label: "Quote accepted confirmation" },
           { id: "filing_started", label: "Filing started" },
           { id: "matter_closed", label: "Matter closed" },
+          { id: "filing_deadline_reminder", label: "Filing deadline reminder" },
         ],
       });
     })
@@ -931,6 +1015,26 @@ export default (app: Express) => {
 
       const activity = aggregateActivity(clientDocs);
 
+      // Deadline follow-up loop state (1.5): aggregate over the active loops so
+      // the dashboard can surface how many follow-ups are live / urgent / overdue.
+      let followupActive = 0;
+      let followupOverdue = 0;
+      let followupUrgent = 0;
+      for (const { data } of clientDocs) {
+        const f = (data.deadlineFollowup ?? {}) as Record<string, unknown>;
+        if (!f || f.status !== "active") continue;
+        followupActive++;
+        const deadlineStr = typeof f.deadline === "string" && f.deadline
+          ? f.deadline
+          : (typeof data.filingDeadline === "string" ? data.filingDeadline : null);
+        if (!deadlineStr) continue;
+        const dl = new Date(deadlineStr).getTime();
+        if (Number.isNaN(dl)) continue;
+        const daysOut = (dl - Date.now()) / 86_400_000;
+        if (daysOut <= 0) followupOverdue++;
+        else if (daysOut <= 7) followupUrgent++;
+      }
+
       res.json({
         pipeline: { stageCounts, stageLabels, total: totalClients },
         emailQueue: email,
@@ -938,6 +1042,11 @@ export default (app: Express) => {
         monthlyLeads,
         sourceBreakdown,
         jurisdictionBreakdown,
+        deadlineFollowup: {
+          active: followupActive,
+          overdue: followupOverdue,
+          urgent: followupUrgent,
+        },
         stageRatings: {
           perStage,
           globalAverage: ratingsCount > 0 ? Math.round((ratingsSum / ratingsCount) * 100) / 100 : 0,
@@ -1060,6 +1169,188 @@ export default (app: Express) => {
       } catch (err) {
         log(`[extract-insights] error: ${err instanceof Error ? err.message : err}`);
         return res.status(502).json({ error: "Extraction failed" });
+      }
+    })
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  EMAILS TAB — PREVIEW / TRIGGER / SENT READ / MEET-NOTES SYNC
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get(
+    "/api/dashboard/clients/:id/email-preview",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const emailType = typeof req.query.type === "string" ? req.query.type.trim() : "";
+
+      if (!emailType || !legalEmailTypes().includes(emailType)) {
+        return res.status(400).json({
+          error: `Invalid or missing email type. Must be one of: ${legalEmailTypes().join(", ")}`,
+        });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+
+      const clientEmail = resolveClientEmail(doc, id);
+      const data = buildLegalEmailData(doc, id, clientEmail);
+      const { subject, bodyHtml } = renderLegalEmail(emailType, data);
+
+      res.json({
+        success: true,
+        emailType,
+        subject,
+        bodyHtml,
+        context: data,
+        clientEmail,
+        note: "Preview only — not sent. Call POST /trigger-email to dispatch.",
+      });
+    })
+  );
+
+  app.post(
+    "/api/dashboard/clients/:id/trigger-email",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const { emailType, editMeta, suggestionId } = req.body ?? {};
+      const actor = (req as Request & { dashboardUser?: string }).dashboardUser ?? "system";
+
+      if (!emailType || !legalEmailTypes().includes(emailType)) {
+        return res.status(400).json({
+          error: "Invalid email type.",
+          validTypes: legalEmailTypes(),
+        });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+
+      const clientEmail = resolveClientEmail(doc, id);
+      const data = buildLegalEmailData(doc, id, clientEmail);
+      const { subject, bodyHtml } = renderLegalEmail(emailType, data);
+
+      const cc = resolveEmailCc(emailType);
+      const bcc = resolveEmailBcc(emailType);
+
+      await enqueueEmail(
+        { to: clientEmail, subject, html: bodyHtml, cc, bcc },
+        `${id}__${emailType}__${Date.now()}`,
+      );
+
+      const nowIso = new Date().toISOString();
+      const activityEntry: Record<string, unknown> = {
+        type: "email_triggered",
+        emailType,
+        actor,
+        timestamp: nowIso,
+      };
+      if (editMeta && typeof editMeta === "object") {
+        activityEntry.emailEdited = true;
+        activityEntry.editedBy = (editMeta as Record<string, unknown>).editedBy || actor;
+        activityEntry.editedAt = (editMeta as Record<string, unknown>).editedAt || nowIso;
+      }
+      if (suggestionId) activityEntry.resolvedSuggestionId = suggestionId;
+
+      const payload: Record<string, unknown> = {
+        activityLog: [
+          ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
+          activityEntry,
+        ],
+      };
+
+      const existingSuggestions = Array.isArray(doc.pendingEmailSuggestions)
+        ? (doc.pendingEmailSuggestions as Array<Record<string, unknown>>)
+        : [];
+      if (existingSuggestions.length > 0) {
+        const updated = existingSuggestions.filter(
+          (s) =>
+            !(s?.status === "pending" &&
+              (s.suggestionId === suggestionId || (!suggestionId && s.emailType === emailType))),
+        );
+        if (updated.length !== existingSuggestions.length) {
+          payload.pendingEmailSuggestions = updated;
+        }
+      }
+
+      await put(CLIENTS_COLLECTION, id, payload);
+      log(`[dashboard] ${actor} triggered ${emailType} for ${id}`);
+      res.json({ success: true, emailType, clientEmail });
+    })
+  );
+
+  app.get(
+    "/api/dashboard/sent-emails/:id",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const id = String(req.params.id ?? "").trim();
+      if (!id) return res.status(400).json({ error: "Missing sent-email id" });
+      const doc = await get("email_queue", id);
+      if (!doc) return res.status(404).json({ error: "Sent email not found" });
+      res.json({ id, ...doc });
+    })
+  );
+
+  app.post(
+    "/api/dashboard/clients/:id/sync-meet-notes",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const actor = (req as Request & { dashboardUser?: string }).dashboardUser ?? "system";
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+
+      const cal = (doc.lastCalendarEvent ?? {}) as Record<string, unknown>;
+      const eventId = typeof cal.eventId === "string" ? cal.eventId : undefined;
+      if (!eventId) {
+        return res.status(400).json({
+          error: "no_calendar_event",
+          message: "This client has no calendar event linkage saved.",
+        });
+      }
+
+      log(`[dashboard] ${actor} requested sync-meet-notes for ${id} (event ${eventId})`);
+
+      try {
+        const event = await getCalendarEvent(eventId);
+        const description = (event?.description ?? "").trim();
+        if (!description) {
+          return res.json({
+            success: false,
+            status: "not_ready",
+            message: "The calendar event has no description/notes yet.",
+          });
+        }
+
+        const fields = await extractClientFieldsServer(description);
+        const nowIso = new Date().toISOString();
+        const notes = { fetched: true, fetchedAt: nowIso, eventId, text: description, fields };
+
+        await put(CLIENTS_COLLECTION, id, {
+          lastCalendarEvent: { ...cal, notes },
+          ...(fields as Record<string, unknown>),
+          updatedAt: nowIso,
+          activityLog: [
+            ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
+            { type: "meet_notes_synced", eventId, actor, timestamp: nowIso, source: "manual_sync" },
+          ],
+        });
+
+        res.json({
+          success: true,
+          status: "fetched",
+          eventId,
+          textLength: description.length,
+          fields,
+        });
+      } catch (err) {
+        log(`[dashboard] sync-meet-notes error ${id}: ${err instanceof Error ? err.message : err}`);
+        return res.status(500).json({
+          error: "fetch_failed",
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     })
   );

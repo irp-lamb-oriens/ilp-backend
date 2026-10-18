@@ -1,0 +1,31 @@
+ILP LEGAL SERVICE KNOWLEDGE (context-information)
+
+SERVICES:
+- Immigration (residency / visa / citizenship): residency applications, visa processing, naturalization, DIMEX renewals.
+- Corporate (formation, contracts, compliance): SRL incorporation, shareholder agreements, regulatory compliance.
+- Real Estate (property, title, conveyance): property purchase, title search, notary transfer, due diligence.
+- Notary (notarization, apostille, certified copies): document notarization, apostille, authentication.
+- Family & Estate (wills, estates, family law): wills, succession, estate planning, family matters.
+
+JURISDICTIONS ILP PRACTICES IN:
+- Costa Rica (primary)
+- Panama
+- Mexico
+- United States (limited)
+
+STAGES OF A LEGAL MATTER:
+1. intake — client initial contact and field collection.
+2. scoping — defining the legal area and matter.
+3. legal_review — attorneys review the matter and gather documents.
+4. quote_sent — a quote has been prepared and sent to the client.
+5. quote_accepted — the client accepted the quote.
+6. filing — the filing / matter work is underway.
+7. closed — the matter is complete.
+
+COSTS / TIMING:
+- Quotes are prepared by the legal team after scoping; pricing varies by matter complexity.
+- Immigration residency timelines vary by jurisdiction and case type; the team provides case-specific estimates.
+- Notary services are typically faster; apostille timelines depend on the issuing authority.
+
+CONTACT:
+- The legal team follows up with clients after intake; clients can also book a consultation.
