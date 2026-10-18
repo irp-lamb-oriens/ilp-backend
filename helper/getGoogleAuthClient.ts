@@ -23,14 +23,16 @@ export const getGoogleAccessToken = async (scopeOverride?: string[]) => {
     Deno.env.get("CALENDAR_SERVICE_ACCOUNT_KEY") ||
     Deno.env.get("SERVICE_ACCOUNT_KEY");
   if (!serviceAccountJson) {
-    throw new Error("CALENDAR_SERVICE_ACCOUNT_KEY not set in environment.");
+    throw new Error(
+      "CALENDAR_SERVICE_ACCOUNT_KEY (or SERVICE_ACCOUNT_KEY) not set in environment.",
+    );
   }
 
   let serviceAccount;
   try {
     serviceAccount = JSON.parse(serviceAccountJson);
   } catch (_error) {
-    throw new Error("Failed to parse SERVICE_ACCOUNT_KEY.");
+    throw new Error("Failed to parse CALENDAR_SERVICE_ACCOUNT_KEY.");
   }
 
   const email = serviceAccount.client_email;

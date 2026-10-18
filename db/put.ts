@@ -1,7 +1,7 @@
 import { replaceDocument } from "../helper/firestore/firestoreService.ts";
 
 /**
- * Full-document replace (PUT). Clears unspecified fields.
+ * Full-document replace. Clears unspecified fields.
  * Delegates to the centralized Firestore service.
  */
 export default function put(
