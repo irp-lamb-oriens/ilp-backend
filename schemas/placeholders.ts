@@ -7,6 +7,9 @@
  *
  * These are the "all configurations of possible documents" — one factory per
  * collection, plus fixed-id config placeholders for `dashboard_config`.
+ *
+ * Every factory stamps `isPlaceholder: true` so seeded/placeholder documents
+ * are self-identifying and can be swept or filtered later.
  */
 import type { IsoTimestamp } from "./types.ts";
 import type {
@@ -92,21 +95,21 @@ const now = (): IsoTimestamp => new Date().toISOString();
 export function dashboardSessionPlaceholder(
   email = "",
 ): DashboardSession {
-  return { email, createdAt: now(), expiresAt: now() };
+  return { email, createdAt: now(), expiresAt: now(), isPlaceholder: true };
 }
 
 export function dashboardOtpPlaceholder(email = ""): DashboardOtp {
-  return { code: "", email, createdAt: now(), expiresAt: now() };
+  return { code: "", email, createdAt: now(), expiresAt: now(), isPlaceholder: true };
 }
 
 export function clientStatusSessionPlaceholder(
   email = "",
 ): ClientStatusSession {
-  return { email, createdAt: now(), expiresAt: now() };
+  return { email, createdAt: now(), expiresAt: now(), isPlaceholder: true };
 }
 
 export function clientStatusOtpPlaceholder(email = ""): ClientStatusOtp {
-  return { code: "", email, createdAt: now(), expiresAt: now() };
+  return { code: "", email, createdAt: now(), expiresAt: now(), isPlaceholder: true };
 }
 
 // ── Clients (CRM core) ─────────────────────────────────────────────────────
@@ -127,11 +130,12 @@ export function clientPlaceholder(id = "", email = ""): ClientDoc {
     conversations: [],
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
 export function consultationPlaceholder(): ConsultationDoc {
-  return { createdAt: now(), updatedAt: now() };
+  return { createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function pricingRequestPlaceholder(
@@ -144,6 +148,7 @@ export function pricingRequestPlaceholder(
     options: [],
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
@@ -151,14 +156,14 @@ export function clientConversationPlaceholder(
   id = "",
   clientId = "",
 ): ClientConversationDoc {
-  return { id, clientId, messages: [], createdAt: now(), updatedAt: now() };
+  return { id, clientId, messages: [], createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function statusChatThreadPlaceholder(
   id = "",
   clientId = "",
 ): StatusChatThreadDoc {
-  return { id, clientId, comments: [], createdAt: now(), updatedAt: now() };
+  return { id, clientId, comments: [], createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 // ── Pipeline / stage config ────────────────────────────────────────────────
@@ -169,7 +174,7 @@ export function stageConfigPlaceholder(
   label = "",
   order = 0,
 ): StageConfigDoc {
-  return { id, key, label, order, createdAt: now(), updatedAt: now() };
+  return { id, key, label, order, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function stageGatePlaceholder(
@@ -177,7 +182,7 @@ export function stageGatePlaceholder(
   stage = "",
   gate = "",
 ): StageGateDoc {
-  return { id, stage, gate, enabled: true, createdAt: now(), updatedAt: now() };
+  return { id, stage, gate, enabled: true, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function stageGateRulePlaceholder(
@@ -185,7 +190,7 @@ export function stageGateRulePlaceholder(
   stage = "",
   gate = "",
 ): StageGateRuleDoc {
-  return { id, stage, gate, enabled: true, createdAt: now(), updatedAt: now() };
+  return { id, stage, gate, enabled: true, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function overviewFieldPlaceholder(
@@ -193,7 +198,7 @@ export function overviewFieldPlaceholder(
   key = "",
   label = "",
 ): OverviewFieldDoc {
-  return { id, key, label, createdAt: now(), updatedAt: now() };
+  return { id, key, label, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 // ── Quotes ─────────────────────────────────────────────────────────────────
@@ -202,31 +207,31 @@ export function quoteTemplatePlaceholder(
   id = "",
   title = "",
 ): QuoteTemplateDoc {
-  return { id, title, blocks: [], createdAt: now(), updatedAt: now() };
+  return { id, title, blocks: [], createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function quoteLineTemplatePlaceholder(
   id = "",
   label = "",
 ): QuoteLineTemplateDoc {
-  return { id, label, createdAt: now(), updatedAt: now() };
+  return { id, label, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function quoteLabelPlaceholder(id = "", label = ""): QuoteLabelDoc {
-  return { id, label, createdAt: now(), updatedAt: now() };
+  return { id, label, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function quoteServiceTypePlaceholder(
   id = "",
   label = "",
 ): QuoteServiceTypeDoc {
-  return { id, label, createdAt: now(), updatedAt: now() };
+  return { id, label, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function quoteTemplateMapPlaceholder(
   id = "",
 ): QuoteTemplateMapDoc {
-  return { id, map: {}, createdAt: now(), updatedAt: now() };
+  return { id, map: {}, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 // ── Email / automation ─────────────────────────────────────────────────────
@@ -245,6 +250,7 @@ export function emailQueuePlaceholder(
     status: "pending",
     attempts: 0,
     createdAt: now(),
+    isPlaceholder: true,
   };
 }
 
@@ -259,6 +265,7 @@ export function emailTemplatePlaceholder(
     body: "",
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
@@ -278,13 +285,14 @@ export function stageEmailRulePlaceholder(
     label: `${triggerStage} → ${emailType}`,
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
 export function emailRecipientRulePlaceholder(
   id = "",
 ): EmailRecipientRuleDoc {
-  return { id, recipients: [], createdAt: now(), updatedAt: now() };
+  return { id, recipients: [], createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function automationRulePlaceholder(
@@ -292,7 +300,7 @@ export function automationRulePlaceholder(
   trigger = "",
   action = "",
 ): AutomationRuleDoc {
-  return { id, trigger, action, enabled: true, createdAt: now(), updatedAt: now() };
+  return { id, trigger, action, enabled: true, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function actionRegistryPlaceholder(
@@ -300,29 +308,29 @@ export function actionRegistryPlaceholder(
   key = "",
   label = "",
 ): ActionRegistryDoc {
-  return { id, key, label, createdAt: now(), updatedAt: now() };
+  return { id, key, label, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 // ── LLM / analytics ────────────────────────────────────────────────────────
 
 export function llmCostPlaceholder(id = "", costUSD = 0): LlmCostDoc {
-  return { id, costUSD, createdAt: now() };
+  return { id, costUSD, createdAt: now(), isPlaceholder: true };
 }
 
 export function evoAssignmentPlaceholder(id = ""): EvoAssignmentDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function evoExposurePlaceholder(id = ""): EvoExposureDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function evoInteractionPlaceholder(id = ""): EvoInteractionDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function metricsPlaceholder(id = ""): MetricsDoc {
-  return { id };
+  return { id, isPlaceholder: true };
 }
 
 // ── Content ────────────────────────────────────────────────────────────────
@@ -339,46 +347,47 @@ export function postPlaceholder(
     title,
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
 export function updatePlaceholder(id = "", title = ""): UpdateDoc {
-  return { id, title, createdAt: now(), updatedAt: now() };
+  return { id, title, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function templatePlaceholder(id = "", title = ""): TemplateDoc {
-  return { id, title, createdAt: now(), updatedAt: now() };
+  return { id, title, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function templateDownloadPlaceholder(
   id = "",
   templateId = "",
 ): TemplateDownloadDoc {
-  return { id, templateId, createdAt: now() };
+  return { id, templateId, createdAt: now(), isPlaceholder: true };
 }
 
 // ── People / entities ──────────────────────────────────────────────────────
 
 export function providerPlaceholder(id = ""): ProviderDoc {
-  return { id, status: "pending", createdAt: now(), updatedAt: now() };
+  return { id, status: "pending", createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function providerFieldSchemaPlaceholder(
   id = "global",
 ): ProviderFieldSchemaDoc {
-  return { id, knownFields: [] };
+  return { id, knownFields: [], isPlaceholder: true };
 }
 
 export function profilePlaceholder(id = ""): ProfileDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function vendorPlaceholder(id = ""): VendorDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function leadPlaceholder(id = "", email = ""): LeadDoc {
-  return { id, email, createdAt: now() };
+  return { id, email, createdAt: now(), isPlaceholder: true };
 }
 
 export function consultationBookingPlaceholder(
@@ -394,76 +403,77 @@ export function consultationBookingPlaceholder(
     status: "requested",
     createdAt: now(),
     updatedAt: now(),
+    isPlaceholder: true,
   };
 }
 
 // ── Ops ────────────────────────────────────────────────────────────────────
 
 export function taskPlaceholder(id = ""): TaskDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function alertPlaceholder(id = ""): AlertDoc {
-  return { id, status: "scheduled", createdAt: now(), updatedAt: now() };
+  return { id, status: "scheduled", createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function rulePlaceholder(id = ""): RuleDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function auditLogPlaceholder(id = ""): AuditLogDoc {
-  return { id, at: now() };
+  return { id, at: now(), isPlaceholder: true };
 }
 
 export function cronStatePlaceholder(id = ""): CronStateDoc {
-  return { id, lastRanAt: now() };
+  return { id, lastRanAt: now(), isPlaceholder: true };
 }
 
 export function bugReportPlaceholder(id = ""): BugReportDoc {
-  return { id, createdAt: now() };
+  return { id, createdAt: now(), isPlaceholder: true };
 }
 
 export function chatbotThreadPlaceholder(
   id = "",
   clientId = "",
 ): ChatbotThreadDoc {
-  return { id, clientId, messages: [], createdAt: now(), updatedAt: now() };
+  return { id, clientId, messages: [], createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 export function invoicePlaceholder(id = ""): InvoiceDoc {
-  return { id, createdAt: now(), updatedAt: now() };
+  return { id, createdAt: now(), updatedAt: now(), isPlaceholder: true };
 }
 
 // ── Dashboard config (fixed-id docs) ───────────────────────────────────────
 
 export function quoteApproversConfigPlaceholder(): QuoteApproversConfigDoc {
-  return { id: "quote_approvers", approvers: [], updatedAt: now() };
+  return { id: "quote_approvers", approvers: [], updatedAt: now(), isPlaceholder: true };
 }
 
 export function clientOfferPopupConfigPlaceholder(): ClientOfferPopupConfigDoc {
-  return { id: "client_offer_popup", enabled: false, updatedAt: now() };
+  return { id: "client_offer_popup", enabled: false, updatedAt: now(), isPlaceholder: true };
 }
 
 export function contractRecipientsConfigPlaceholder(): ContractRecipientsConfigDoc {
-  return { id: "contract_recipients", recipients: [], updatedAt: now() };
+  return { id: "contract_recipients", recipients: [], updatedAt: now(), isPlaceholder: true };
 }
 
 export function bankInfoConfigPlaceholder(): BankInfoConfigDoc {
-  return { id: "bank_info", updatedAt: now() };
+  return { id: "bank_info", updatedAt: now(), isPlaceholder: true };
 }
 
 export function accessConfigPlaceholder(): AccessConfigDoc {
-  return { id: "access_config", views: {}, collaborators: [], updatedAt: now() };
+  return { id: "access_config", views: {}, collaborators: [], updatedAt: now(), isPlaceholder: true };
 }
 
 export function actionPermissionsPlaceholder(): ActionPermissionsDoc {
-  return { id: "action_permissions", permissions: {}, updatedAt: now() };
+  return { id: "action_permissions", permissions: {}, updatedAt: now(), isPlaceholder: true };
 }
 
 export function collaboratorsPlaceholder(): CollaboratorsDoc {
-  return { id: "collaborators", collaborators: [], updatedAt: now() };
+  return { id: "collaborators", collaborators: [], updatedAt: now(), isPlaceholder: true };
 }
 
 export function quoteTemplateMapConfigPlaceholder(): QuoteTemplateMapConfigDoc {
-  return { id: "quoteTemplateMap", map: {}, updatedAt: now() };
+  return { id: "quoteTemplateMap", map: {}, updatedAt: now(), isPlaceholder: true };
 }
