@@ -1,19 +1,66 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "./verifyToken.ts";
 import type { Role, SessionUser } from "./types.ts";
+import get from "../../db/get.ts";
 import log from "../log.ts";
 
 /**
- * Express middleware that resolves the current user from the Authorization
- * header and optional role checks.
+ * Express middleware that resolves the current user from EITHER:
+ *   1. `x-dashboard-token` (dashboard OTP session) — treated as staff, OR
+ *   2. `Authorization: Bearer <JWT>` (customer / provider / staff JWT)
+ * and applies optional role checks.
  *
  * Usage:
  *   validateUser()                       — any authenticated user
  *   validateUser("staff")                — staff only
  *   validateUser(["staff", "provider"])  — staff OR provider
+ *
+ * Backward compatible: the JWT Bearer path is unchanged. The dashboard session
+ * path is additive so the staff dashboard (which authenticates via OTP and
+ * stores a session token, not a JWT) can reach every `validateUser("staff")`
+ * route without a second login.
  */
 export default function validateUser(allowed?: Role | Role[]) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const allowedRoles = allowed
+      ? Array.isArray(allowed) ? allowed : [allowed]
+      : null;
+
+    // 1. Dashboard OTP session token (staff). The dashboard authenticates via
+    //    OTP and stores a session doc keyed by a random token; it never mints a
+    //    JWT. Resolve that session here so staff routes work with the same
+    //    token the rest of the dashboard uses.
+    const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
+    if (dashboardToken) {
+      try {
+        const session = await get("dashboard_sessions", dashboardToken);
+        if (session && session.email) {
+          const expired = session.expiresAt &&
+            new Date(session.expiresAt as string) < new Date();
+          if (!expired) {
+            if (allowedRoles && !allowedRoles.includes("staff")) {
+              return res.status(403).json({ error: "Insufficient permissions." });
+            }
+            const user: SessionUser = {
+              uid: session.email as string,
+              email: session.email as string,
+              role: "staff",
+            };
+            (req as Request & { sessionUser?: SessionUser }).sessionUser = user;
+            (req as Request & { dashboardUser?: string }).dashboardUser =
+              session.email as string;
+            return next();
+          }
+        }
+      } catch (err) {
+        log(
+          `Dashboard session auth failed: ${err instanceof Error ? err.message : err}`,
+          "auth",
+        );
+      }
+    }
+
+    // 2. JWT Bearer token (customer / provider / staff).
     try {
       const header = req.headers.authorization;
       if (!header || !header.startsWith("Bearer ")) {
@@ -22,10 +69,6 @@ export default function validateUser(allowed?: Role | Role[]) {
 
       const token = header.slice("Bearer ".length).trim();
       const payload = verifyToken(token);
-
-      const allowedRoles = allowed
-        ? Array.isArray(allowed) ? allowed : [allowed]
-        : null;
 
       if (allowedRoles && !allowedRoles.includes(payload.role)) {
         return res.status(403).json({ error: "Insufficient permissions." });
@@ -37,7 +80,6 @@ export default function validateUser(allowed?: Role | Role[]) {
         role: payload.role,
       };
 
-      // Attach to the request for downstream handlers.
       (req as Request & { sessionUser?: SessionUser }).sessionUser = user;
       next();
     } catch (err) {
