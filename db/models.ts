@@ -3,98 +3,60 @@
  * ──────────────────────────────────────────────────────────────────────────
  * Document-shape types for the ILP Firestore data model.
  *
- * These are advisory TypeScript shapes (Firestore is schemaless), used to keep
- * the CRM, client-portal, and automation routers consistent. Ported from
- * IRP-funnel's client/consultation model, retargeted to ILP's legal taxonomy.
+ * Backward-compatible re-export of the centralized schema system in
+ * `schemas/`. New code should import from `schemas/` directly; this file
+ * keeps the historical names (`Consultation`, `ClientDoc`, `SessionDoc`,
+ * `OtpDoc`, etc.) available so existing importers do not break.
  */
+import type {
+  ConsultationDoc,
+  ClientDoc,
+  PricingRequestDoc,
+  ClientConversationDoc,
+  StatusChatThreadDoc,
+} from "../schemas/collections/clients.ts";
+import type {
+  StageRating,
+  StatusComment,
+  Charge,
+  Quote,
+  ClientNote,
+  PendingAction,
+  JourneyStep,
+  CalendarSlot,
+} from "../schemas/types.ts";
+import type {
+  DashboardSession,
+  DashboardOtp,
+  ClientStatusSession,
+  ClientStatusOtp,
+} from "../schemas/collections/auth.ts";
 
-/** A single consultation record (the latest is the "current" intake). */
-export interface Consultation {
-  name?: string;
-  surname?: string;
-  email?: string;
-  phone?: string;
-  legalArea?: string;
-  legalMatter?: string;
-  jurisdiction?: string;
-  documents?: string[];
-  notes?: string;
-  serviceType?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  [key: string]: unknown;
-}
+export type {
+  StageRating,
+  StatusComment,
+  Charge,
+  Quote,
+  ClientNote,
+  PendingAction,
+  JourneyStep,
+  CalendarSlot,
+  ConsultationDoc,
+  ClientDoc,
+  PricingRequestDoc,
+  ClientConversationDoc,
+  StatusChatThreadDoc,
+  DashboardSession,
+  DashboardOtp,
+  ClientStatusSession,
+  ClientStatusOtp,
+};
 
-/** A pipeline stage rating submitted by a client (1–5). */
-export interface StageRating {
-  stage: string;
-  rating: number;
-  comment?: string;
-  createdAt: string;
-}
+/** @deprecated Use `ConsultationDoc` from `schemas/collections/clients.ts`. */
+export type Consultation = ConsultationDoc;
 
-/** A status-page comment thread entry. */
-export interface StatusComment {
-  id: string;
-  author: string;
-  authorRole: "client" | "staff";
-  body: string;
-  createdAt: string;
-}
+/** @deprecated Use `DashboardSession` / `ClientStatusSession`. */
+export type SessionDoc = DashboardSession;
 
-/** A charge line on the client's project. */
-export interface Charge {
-  id: string;
-  label: string;
-  amountMinor: number;
-  currency: string;
-  status: "pending" | "paid" | "void";
-  createdAt: string;
-}
-
-/** A quote sent to a client, with acceptance state. */
-export interface Quote {
-  id: string;
-  title: string;
-  lines: Array<{ label: string; amountMinor: number }>;
-  totalMinor: number;
-  currency: string;
-  status: "draft" | "sent" | "accepted" | "declined";
-  acceptanceToken?: string;
-  createdAt: string;
-}
-
-/** The canonical client document (CRM core). */
-export interface ClientDoc {
-  id: string;
-  email: string;
-  stage: string;
-  stageEnteredAt?: string;
-  clientFields: Record<string, unknown>;
-  consultations: Consultation[];
-  journey: Array<{ stage: string; enteredAt: string }>;
-  stageRatings: StageRating[];
-  charges: Charge[];
-  quotes: Quote[];
-  notes: Array<{ id: string; body: string; author: string; createdAt: string }>;
-  pendingActions: Array<{ id: string; label: string; dueAt?: string }>;
-  conversations: string[];
-  statusChatThread?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** A dashboard or client-status session doc. */
-export interface SessionDoc {
-  email: string;
-  createdAt: string;
-  expiresAt: string;
-}
-
-/** An OTP doc (dashboard or client-status). */
-export interface OtpDoc {
-  code: string;
-  email: string;
-  createdAt: string;
-  expiresAt: string;
-}
+/** @deprecated Use `DashboardOtp` / `ClientStatusOtp`. */
+export type OtpDoc = DashboardOtp;
