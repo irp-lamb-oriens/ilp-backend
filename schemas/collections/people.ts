@@ -6,7 +6,7 @@
  */
 import type { CalendarSlot, Extensible, IsoTimestamp } from "../types.ts";
 
-/** providers — a vetted service provider. */
+/** providers — a vetted service provider (lawyer). */
 export interface ProviderDoc extends Extensible {
   id: string;
   name?: string;
@@ -15,12 +15,19 @@ export interface ProviderDoc extends Extensible {
   website?: string;
   country?: string;
   specialties?: unknown;
+  /** Legal service areas this provider covers. */
+  legalAreas?: string[];
+  /** Countries/regions this provider is admitted to practice in. */
+  jurisdictions?: string[];
+  /** Languages the provider works in. */
   languages?: unknown;
   insurance?: Record<string, unknown>;
   slaStatus?: string;
   status?: "pending" | "vetted" | "active" | "inactive";
   active?: boolean;
   uid?: string;
+  /** Operator quality score, 0–5 in half-star steps. Drives assignment priority. */
+  score?: number | null;
   vettedAt?: IsoTimestamp;
   createdAt?: IsoTimestamp;
   updatedAt?: IsoTimestamp;

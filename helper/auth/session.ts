@@ -91,6 +91,39 @@ export async function requireClientStatusAuth(
 }
 
 /**
+ * Middleware: resolve a provider (lawyer) session and attach the provider's
+ * email + id to the request as `providerUser` / `providerId`. Providers are
+ * the "drivers" of the ILP marketplace: each gets an isolated dashboard
+ * scoped to their assigned clients. Mirrors `requireDashboardAuth` but
+ * validates against `provider_sessions`.
+ */
+export async function requireProviderAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const token = resolveToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Authentication required." });
+    return;
+  }
+  try {
+    const session = await resolveSession("provider_sessions", token);
+    if (!session) {
+      res.status(401).json({ error: "Invalid or expired session." });
+      return;
+    }
+    (req as Request & { providerUser?: string; providerId?: string }).providerUser =
+      session.email;
+    (req as Request & { providerUser?: string; providerId?: string }).providerId =
+      (session as unknown as { providerId?: string }).providerId ?? "";
+    next();
+  } catch {
+    res.status(401).json({ error: "Authentication failed." });
+  }
+}
+
+/**
  * Combined client-portal auth: staff bypass via `x-dashboard-token` (org
  * domain) OR end-customer via `x-client-token`. Mirrors IRP's
  * `requireClientAuth`. Attaches `clientUser` and `isIrpStaff`.

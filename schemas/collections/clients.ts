@@ -37,6 +37,8 @@ export interface ClientDoc extends Extensible {
   email: string;
   stage: string;
   stageEnteredAt?: IsoTimestamp;
+  /** The provider (lawyer) this client is assigned to, if any. */
+  assignedProviderId?: string;
   clientFields: Record<string, unknown>;
   consultations: ConsultationDoc[];
   journey: JourneyStep[];
