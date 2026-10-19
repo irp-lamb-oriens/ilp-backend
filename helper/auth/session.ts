@@ -17,6 +17,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import get from "../../db/get.ts";
+import getAll from "../../db/getAll.ts";
 
 /** Shared token resolution: header first, then `?token=` query param. */
 function resolveToken(req: Request): string | undefined {
@@ -24,16 +25,45 @@ function resolveToken(req: Request): string | undefined {
 }
 
 /** Shared session validation against a given collection. */
+interface ResolvedSession {
+  email: string;
+  providerId?: string;
+}
+
 async function resolveSession(
   collection: string,
   token: string,
-): Promise<{ email: string } | null> {
+): Promise<ResolvedSession | null> {
   const session = await get(collection, token);
   if (!session || !session.email) return null;
   if (session.expiresAt && new Date(session.expiresAt as string) < new Date()) {
     return null;
   }
-  return { email: session.email as string };
+  return {
+    email: session.email as string,
+    providerId: typeof session.providerId === "string" ? session.providerId : undefined,
+  };
+}
+
+/** Resolve a provider doc for a staff member (dashboard bypass). */
+async function findProviderForStaff(
+  email: string,
+): Promise<Record<string, unknown> | null> {
+  const normalized = email.trim().toLowerCase();
+  const all = await getAll("providers").catch(() => []);
+  const exact = all.find(
+    (p) => typeof p?.email === "string" && p.email.trim().toLowerCase() === normalized,
+  );
+  if (exact) return exact;
+  const local = normalized.split("@")[0];
+  if (!local) return null;
+  return (
+    all.find(
+      (p) =>
+        typeof p?.email === "string" &&
+        p.email.trim().toLowerCase().split("@")[0] === local,
+    ) ?? null
+  );
 }
 
 /**
@@ -102,7 +132,34 @@ export async function requireProviderAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const token = resolveToken(req);
+  // 1. Staff bypass via dashboard session (mirrors requireClientAuth).
+  const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
+  if (dashboardToken) {
+    try {
+      const session = await resolveSession("dashboard_sessions", dashboardToken);
+      if (session) {
+        const domain = session.email.toLowerCase().split("@")[1];
+        if (
+          domain ===
+          (Deno.env.get("DASHBOARD_ALLOWED_DOMAIN") ?? "internationallegalpartner.com")
+        ) {
+          const provider = await findProviderForStaff(session.email);
+          (req as Request & { providerUser?: string; providerId?: string }).providerUser =
+            session.email;
+          (req as Request & { providerUser?: string; providerId?: string }).providerId =
+            provider?.id ? String(provider.id) : "";
+          next();
+          return;
+        }
+      }
+    } catch {
+      // Fall through to provider-token check.
+    }
+  }
+
+  // 2. Provider session via x-provider-token.
+  const token =
+    (req.headers["x-provider-token"] as string) || (req.query.token as string);
   if (!token) {
     res.status(401).json({ error: "Authentication required." });
     return;
@@ -116,7 +173,7 @@ export async function requireProviderAuth(
     (req as Request & { providerUser?: string; providerId?: string }).providerUser =
       session.email;
     (req as Request & { providerUser?: string; providerId?: string }).providerId =
-      (session as unknown as { providerId?: string }).providerId ?? "";
+      session.providerId ?? "";
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });
