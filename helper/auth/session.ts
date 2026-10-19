@@ -132,7 +132,29 @@ export async function requireProviderAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  // 1. Staff bypass via dashboard session (mirrors requireClientAuth).
+  // 1. Provider session via x-provider-token (the lawyer's own login). This
+  //    takes precedence so a lawyer who also holds a staff dashboard session
+  //    is still resolved as the lawyer, not the staff member.
+  const token =
+    (req.headers["x-provider-token"] as string) || (req.query.token as string);
+  if (token) {
+    try {
+      const session = await resolveSession("provider_sessions", token);
+      if (session) {
+        (req as Request & { providerUser?: string; providerId?: string }).providerUser =
+          session.email;
+        (req as Request & { providerUser?: string; providerId?: string }).providerId =
+          session.providerId ?? "";
+        next();
+        return;
+      }
+    } catch {
+      // Fall through to staff bypass.
+    }
+  }
+
+  // 2. Staff bypass via dashboard session (mirrors requireClientAuth). Only
+  //    reached when there is no valid provider token.
   const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
   if (dashboardToken) {
     try {
@@ -153,31 +175,11 @@ export async function requireProviderAuth(
         }
       }
     } catch {
-      // Fall through to provider-token check.
+      // Fall through to the final 401.
     }
   }
 
-  // 2. Provider session via x-provider-token.
-  const token =
-    (req.headers["x-provider-token"] as string) || (req.query.token as string);
-  if (!token) {
-    res.status(401).json({ error: "Authentication required." });
-    return;
-  }
-  try {
-    const session = await resolveSession("provider_sessions", token);
-    if (!session) {
-      res.status(401).json({ error: "Invalid or expired session." });
-      return;
-    }
-    (req as Request & { providerUser?: string; providerId?: string }).providerUser =
-      session.email;
-    (req as Request & { providerUser?: string; providerId?: string }).providerId =
-      session.providerId ?? "";
-    next();
-  } catch {
-    res.status(401).json({ error: "Authentication failed." });
-  }
+  res.status(401).json({ error: "Authentication required." });
 }
 
 /**
