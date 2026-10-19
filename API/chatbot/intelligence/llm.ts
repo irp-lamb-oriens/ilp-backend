@@ -1,12 +1,16 @@
 /**
  * API/chatbot/intelligence/llm.ts
  * ──────────────────────────────────────────────────────────────────────────
- * ILP — Legal Assistant LLM client with a 3-tier fallback chain.
+ * ILP — Legal Assistant LLM client with a 2-tier fallback chain.
  *
  * Ported from IRP-funnel's `API/chatbot/intelligence/llm.ts`:
  *   1. OpenRouter (primary model, then fallback model, with 429 backoff)
  *   2. Gemini direct (generativelanguage API)
- *   3. Selenium Gemini web scraper (ultimate free fallback)
+ *
+ * The Selenium web-scraper fallback has been removed. The chatbot is
+ * LLM-only: if no API key is configured, the call fails with a clear error
+ * instead of attempting a browser driver that does not exist in the
+ * container.
  *
  * Cost tracking writes to the `llm_costs` collection when a `sessionId` is
  * present. The public `callLLMWithFallback` keeps the `{ content }` shape the
@@ -17,7 +21,6 @@
 import log from "../../../helper/log.ts";
 import put from "../../../db/put.ts";
 import type { ChatMessage } from "../agents/types.ts";
-import { GeminiWebAdapter, type Message } from "./scraperLLM.ts";
 
 // ── Provider config (inline from env vars) ────────────────────────────────
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY") || "";
@@ -45,7 +48,7 @@ export interface LlmRequest {
 
 export interface LlmResponse {
   content: string;
-  provider?: "openrouter" | "google" | "selenium_scraper";
+  provider?: "openrouter" | "google";
   model?: string;
   tokensUsed?: number;
   costEstimate?: number;
@@ -130,13 +133,14 @@ export async function callLLMWithFallback(request: LlmRequest): Promise<LlmRespo
     try {
       return await callGeminiDirect(request);
     } catch (geminiError) {
-      log(`[LLM] Gemini direct failed, falling back to web scraper: ${geminiError}`);
+      log(`[LLM] Gemini direct failed: ${geminiError}`);
     }
   }
 
-  // 3. Selenium web scraper
-  log("[LLM] Using Gemini Web Scraper (no API keys or API failed)...");
-  return await callGeminiScraper(request);
+  // No provider available. Fail loudly instead of attempting a browser driver.
+  throw new Error(
+    "[LLM] No LLM provider available. Set OPENROUTER_API_KEY or GEMINI_API_KEY.",
+  );
 }
 
 async function callOpenRouter(request: LlmRequest, model: string): Promise<LlmResponse> {
@@ -283,41 +287,6 @@ async function callGeminiDirect(request: LlmRequest): Promise<LlmResponse> {
     latencyMs,
     usage: { inputTokens, outputTokens },
   };
-}
-
-async function callGeminiScraper(request: LlmRequest): Promise<LlmResponse> {
-  const startTime = Date.now();
-  const adapter = new GeminiWebAdapter();
-
-  const messages: Message[] = request.messages
-    ? request.messages.map((m) => ({ role: m.role, content: m.content }))
-    : [
-        ...(request.systemInstruction
-          ? [{ role: "system" as const, content: request.systemInstruction }]
-          : []),
-        { role: "user" as const, content: request.prompt ?? "" },
-      ];
-
-  try {
-    const rawResult = await adapter.createCompletion({ messages });
-    const content = typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult);
-    const latencyMs = Date.now() - startTime;
-
-    log(`[LLM] Selenium Scraper responded in ${latencyMs}ms (Cost: $0.00)`);
-
-    return {
-      content,
-      provider: "selenium_scraper",
-      model: "gemini-web-ui",
-      tokensUsed: 0,
-      costEstimate: 0,
-      latencyMs,
-      usage: { inputTokens: 0, outputTokens: 0 },
-    };
-  } catch (error) {
-    log(`[LLM] Selenium Scraper completely failed: ${error instanceof Error ? error.message : error}`);
-    throw error;
-  }
 }
 
 // ── Backward-compatible single-shot helper (kept for any direct importers) ──
