@@ -18,11 +18,14 @@ export interface ExtractedClientFields {
   jurisdiction?: string;
   documents?: string[];
   notes?: string;
+  confidence?: number;
+  reasoning?: string;
 }
 
 const SYSTEM_PROMPT = `You extract structured legal-intake fields from a consultation transcript.
 Return ONLY a JSON object with these optional keys (omit empty ones):
-name, surname, email, phone, legalArea, legalMatter, jurisdiction, documents (string array), notes.
+name, surname, email, phone, legalArea, legalMatter, jurisdiction, documents (string array), notes,
+confidence (integer 0-100, your certainty in the overall extraction), reasoning (one short sentence explaining the classification).
 legalArea must be one of: immigration, corporate, real_estate, notary, other.
 legalMatter must be one of: residency_visa, business, property, family_estate, other.
 Do not invent values. Use null or omit when absent.`;

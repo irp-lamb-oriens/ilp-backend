@@ -36,6 +36,7 @@ import {
   type LawyerProfile,
 } from "../chatbot/services/lilyChatEngine.ts";
 import { extractClientFieldsServer } from "../dashboard/extractClientFieldsServer.ts";
+import { addPendingAction, resolvePendingAction } from "../dashboard/pendingActions.ts";
 
 const CLIENTS_COLLECTION = "clients";
 const SETTLEMENTS = "quoteSettlements";
@@ -163,6 +164,39 @@ export default function providerDashboardRouter(app: Express) {
     })
   );
 
+  app.patch(
+    "/api/provider/clients/:id/field",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id } = req.params;
+      const { field, value } = req.body ?? {};
+      const actor = providerEmailOf(req);
+
+      if (!field || typeof field !== "string") {
+        return res.status(400).json({ error: "field is required." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      const nowIso = new Date().toISOString();
+      await put(CLIENTS_COLLECTION, id, {
+        [field]: value,
+        updatedAt: nowIso,
+        activityLog: [
+          ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
+          { type: "field_update", fields: [field], actor, timestamp: nowIso },
+        ],
+      });
+
+      res.json({ success: true, field, value });
+    })
+  );
+
   app.post(
     "/api/provider/clients/:id/lily",
     requireProviderAuth,
@@ -227,6 +261,16 @@ export default function providerDashboardRouter(app: Express) {
   );
 
   app.get(
+    "/api/provider/collaborators",
+    requireProviderAuth,
+    asyncHandler(async (_req: Request, res: Response) => {
+      const doc = await get("dashboard_config", "collaborators").catch(() => null);
+      const collaborators = Array.isArray(doc?.collaborators) ? doc.collaborators : [];
+      res.json({ collaborators });
+    })
+  );
+
+  app.get(
     "/api/provider/clients/:id/notes",
     requireProviderAuth,
     asyncHandler(async (req: Request, res: Response) => {
@@ -250,7 +294,7 @@ export default function providerDashboardRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const providerId = providerIdOf(req);
       const { id } = req.params;
-      const { text } = req.body ?? {};
+      const { text, recipients } = req.body ?? {};
       const actor = providerEmailOf(req);
 
       if (!text || typeof text !== "string" || !text.trim()) {
@@ -263,17 +307,40 @@ export default function providerDashboardRouter(app: Express) {
         return res.status(403).json({ error: "This client is not assigned to you." });
       }
 
+      const cleanRecipients: string[] = Array.isArray(recipients)
+        ? [...new Set(recipients.filter((e: unknown) => typeof e === "string" && e.includes("@")).map((e: string) => e.trim().toLowerCase()))]
+        : [];
+
       const nowIso = new Date().toISOString();
       const note: Record<string, unknown> = { text: text.trim(), author: actor, createdAt: nowIso };
+      const noteActivity: Record<string, unknown> = { type: "note_added", actor, timestamp: nowIso };
+      if (cleanRecipients.length > 0) {
+        note.recipients = cleanRecipients;
+        noteActivity.recipients = cleanRecipients;
+      }
 
       await put(CLIENTS_COLLECTION, id, {
         notes: [...(Array.isArray(doc.notes) ? doc.notes : []), note],
         activityLog: [
           ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
-          { type: "note_added", actor, timestamp: nowIso },
+          noteActivity,
         ],
         updatedAt: nowIso,
       });
+
+      if (cleanRecipients.length > 0) {
+        const clientName = (doc.name || doc.email || id) as string;
+        const preview = text.trim().length > 140 ? `${text.trim().slice(0, 140)}…` : text.trim();
+        void addPendingAction(id, {
+          type: "note_mention",
+          tab: "notes",
+          title: `📝 ${actor} addressed a note to you — ${clientName}`,
+          priority: "normal",
+          assignedTo: cleanRecipients,
+          triggeredBy: actor,
+          meta: { noteCreatedAt: nowIso, body: preview, fullBody: text.trim(), from: actor, clientName },
+        }).catch((err) => log(`[provider] note in-app notify failed: ${err}`));
+      }
 
       res.json({ success: true, note });
     })
@@ -401,6 +468,59 @@ export default function providerDashboardRouter(app: Express) {
         log(`[provider] insights extraction failed for ${id}: ${err instanceof Error ? err.message : err}`);
         return res.status(502).json({ error: "Extraction failed. Try again shortly." });
       }
+    })
+  );
+
+  app.post(
+    "/api/provider/clients/:id/pending-actions/:actionId/resolve",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id, actionId } = req.params;
+      const actor = providerEmailOf(req);
+      const { resolution } = req.body ?? {};
+
+      if (resolution !== "done" && resolution !== "dismissed") {
+        return res.status(400).json({ error: "resolution must be 'done' or 'dismissed'." });
+      }
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      await resolvePendingAction(id, actionId, resolution, actor);
+      res.json({ success: true });
+    })
+  );
+
+  app.post(
+    "/api/provider/clients/:id/undo-last",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id } = req.params;
+      const actor = providerEmailOf(req);
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      const logArr = Array.isArray(doc.activityLog)
+        ? [...(doc.activityLog as Record<string, unknown>[])]
+        : [];
+      const last = logArr.pop();
+      if (!last) return res.status(400).json({ error: "No activity to undo." });
+
+      await put(CLIENTS_COLLECTION, id, {
+        activityLog: logArr,
+        updatedAt: new Date().toISOString(),
+      });
+      log(`[provider] ${actor} undid last activity on ${id}`);
+      res.json({ success: true, undone: last });
     })
   );
 

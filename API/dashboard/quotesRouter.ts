@@ -47,7 +47,7 @@ const CLIENTS_COLLECTION = "clients";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function nanoId(size = 12): string {
+export function nanoId(size = 12): string {
   const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const arr = crypto.getRandomValues(new Uint8Array(size));
   return Array.from(arr).map((b) => chars[b % chars.length]).join("");
@@ -58,7 +58,7 @@ function nanoId(size = 12): string {
  * Each value must be a non-negative finite number and the sum must not exceed
  * 100. Returns a clean number[] or null for a legacy/cleared schedule.
  */
-function normalizePaymentSchedule(raw: unknown): number[] | null {
+export function normalizePaymentSchedule(raw: unknown): number[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const nums: number[] = [];
   for (const v of raw) {
@@ -72,7 +72,7 @@ function normalizePaymentSchedule(raw: unknown): number[] | null {
 }
 
 /** Server-side margin math: costSubtotal, client total, earnings. */
-function computeQuoteMath(lineItems: any[]): { costSubtotal: number; total: number; earnings: number } {
+export function computeQuoteMath(lineItems: any[]): { costSubtotal: number; total: number; earnings: number } {
   if (!Array.isArray(lineItems)) return { costSubtotal: 0, total: 0, earnings: 0 };
   let costSubtotal = 0;
   let total = 0;
@@ -86,7 +86,7 @@ function computeQuoteMath(lineItems: any[]): { costSubtotal: number; total: numb
   return { costSubtotal, total, earnings: Math.round((total - costSubtotal) * 100) / 100 };
 }
 
-function normalizeLineItems(raw: any[], defaultCurrency = "USD"): any[] {
+export function normalizeLineItems(raw: any[], defaultCurrency = "USD"): any[] {
   return (Array.isArray(raw) ? raw : []).map((item: any) => {
     const mode: "pct" | "flat" = item.marginMode === "flat" ? "flat" : "pct";
     return {
@@ -108,7 +108,7 @@ function normalizeLineItems(raw: any[], defaultCurrency = "USD"): any[] {
   });
 }
 
-function normalizeLineGroups(raw: any[], defaultCurrency = "USD"): any[] | null {
+export function normalizeLineGroups(raw: any[], defaultCurrency = "USD"): any[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   return raw.map((g: any) => ({
     groupId: g.groupId || nanoId(10),
@@ -120,13 +120,13 @@ function normalizeLineGroups(raw: any[], defaultCurrency = "USD"): any[] | null 
   }));
 }
 
-function flattenLineGroups(groups: any[]): any[] {
+export function flattenLineGroups(groups: any[]): any[] {
   return (Array.isArray(groups) ? groups : []).flatMap((g: any) =>
     Array.isArray(g.lineItems) ? g.lineItems : []
   );
 }
 
-function makeChangeEntry(actor: string, type: string, summary: string, extra: Record<string, any> = {}) {
+export function makeChangeEntry(actor: string, type: string, summary: string, extra: Record<string, any> = {}) {
   return {
     changeId: nanoId(10),
     actor,
@@ -137,7 +137,7 @@ function makeChangeEntry(actor: string, type: string, summary: string, extra: Re
   };
 }
 
-const VALID_STATUSES = new Set([
+export const VALID_STATUSES = new Set([
   "draft",
   "pending_approval",
   "changes_requested",
@@ -147,23 +147,23 @@ const VALID_STATUSES = new Set([
 ]);
 
 /** Read the quotes array off a client doc (empty when absent). */
-async function readQuotes(clientId: string): Promise<any[]> {
+export async function readQuotes(clientId: string): Promise<any[]> {
   const doc = await get(CLIENTS_COLLECTION, clientId);
   return Array.isArray(doc?.quotes) ? doc.quotes : [];
 }
 
 /** Persist the quotes array back onto the client doc (merge, not replace). */
-async function writeQuotes(clientId: string, quotes: any[]): Promise<void> {
+export async function writeQuotes(clientId: string, quotes: any[]): Promise<void> {
   await patch(CLIENTS_COLLECTION, clientId, { quotes });
 }
 
 /** Find a quote by id within the array. */
-function findQuote(quotes: any[], quoteId: string): any | undefined {
+export function findQuote(quotes: any[], quoteId: string): any | undefined {
   return quotes.find((q) => (q?.quoteId ?? q?.id) === quoteId);
 }
 
 /** Build the client-safe description input for the AI scope description. */
-function buildQuoteDescriptionInput(quote: any, clientDoc: any): Record<string, any> {
+export function buildQuoteDescriptionInput(quote: any, clientDoc: any): Record<string, any> {
   const groupsSrc = Array.isArray(quote.lineGroups) && quote.lineGroups.length > 0
     ? quote.lineGroups
     : [{ title: "", role: "required", lineItems: Array.isArray(quote.lineItems) ? quote.lineItems : [] }];
@@ -186,7 +186,7 @@ function buildQuoteDescriptionInput(quote: any, clientDoc: any): Record<string, 
 }
 
 /** Deterministic hash of the description input (scope-change detection). */
-function hashQuoteDescriptionInput(input: Record<string, any>): string {
+export function hashQuoteDescriptionInput(input: Record<string, any>): string {
   const canonical = JSON.stringify(input, Object.keys(input).sort());
   let hash = 0;
   for (let i = 0; i < canonical.length; i++) {
@@ -196,7 +196,7 @@ function hashQuoteDescriptionInput(input: Record<string, any>): string {
 }
 
 /** Generate the client-facing scope description via the LLM fallback chain. */
-async function generateQuoteClientDescription(input: Record<string, any>): Promise<string> {
+export async function generateQuoteClientDescription(input: Record<string, any>): Promise<string> {
   const prompt = `Write a concise, client-facing scope description for a legal services quote. Use plain language, no prices. Return only the description text.
 
 Quote title: ${input.title || "Legal services"}

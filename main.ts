@@ -18,6 +18,7 @@ import dashboardProvidersRouter from "./API/dashboard/providersRouter.ts";
 import providerRfqDashboardRouter from "./API/dashboard/providerRfqDashboardRouter.ts";
 import providerAuthRouter from "./API/provider/providerAuthRouter.ts";
 import providerDashboardRouter from "./API/provider/providerDashboardRouter.ts";
+import providerQuotesRouter from "./API/provider/providerQuotesRouter.ts";
 import assignmentRouter from "./API/dashboard/assignmentRouter.ts";
 import pricingRequestsRouter from "./API/dashboard/pricingRequestsRouter.ts";
 import vendorRouter from "./API/vendors/vendorRouter.ts";
@@ -110,6 +111,7 @@ function createServer() {
     providerRfqDashboardRouter(app);
     providerAuthRouter(app);
     providerDashboardRouter(app);
+    providerQuotesRouter(app);
     assignmentRouter(app);
     pricingRequestsRouter(app);
     vendorRouter(app);

@@ -78,6 +78,7 @@ export function buildClientSummary(
     documents: pick("documents"),
     stage: computeStage(doc),
     stageEnteredAt: doc.stageEnteredAt ?? null,
+    rankIndex: typeof doc.rankIndex === "number" ? doc.rankIndex : null,
     notes,
     activityLog: Array.isArray(doc.activityLog) ? doc.activityLog : [],
     pendingActions,
