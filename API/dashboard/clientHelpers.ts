@@ -86,6 +86,8 @@ export function buildClientSummary(
     ).length,
     quotes: Array.isArray(doc.quotes) ? doc.quotes : [],
     charges: Array.isArray(doc.charges) ? doc.charges : [],
+    transcript: typeof doc.transcript === "string" ? doc.transcript : null,
+    transcriptInsights: (doc.transcriptInsights ?? null) as Record<string, unknown> | null,
     stageRatings: (doc.stageRatings ?? {}) as Record<string, unknown>,
     quoteAcceptance: doc.quoteAcceptance ?? null,
     statusChatThread: Array.isArray(doc.statusChatThread)

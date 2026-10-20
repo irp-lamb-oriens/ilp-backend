@@ -44,6 +44,13 @@ export interface LilyChatResult {
   };
 }
 
+/** Optional lawyer profile injected into the CRM prompt as context. */
+export interface LawyerProfile {
+  name?: string | null;
+  legalAreas?: string[];
+  jurisdictions?: string[];
+}
+
 /** The field on the client doc that holds the thread for a given scope. */
 function threadField(scope: LilyScope): "statusChatThread" | "crmLilyThread" {
   return scope === "crm" ? "crmLilyThread" : "statusChatThread";
@@ -107,20 +114,42 @@ function buildProjectBrief(doc: Record<string, unknown>): string {
     lines.push(`Recent activity: ${recent.join("; ")}`);
   }
 
+  const notes = Array.isArray(doc.notes) ? doc.notes : [];
+  if (notes.length > 0) {
+    const recentNotes = notes.slice(-5).map((n) => {
+      const e = n as Record<string, unknown>;
+      return `- ${e.author ?? "note"}: ${e.text ?? ""}`;
+    });
+    lines.push(`Notes:\n${recentNotes.join("\n")}`);
+  }
+
+  const insights = doc.transcriptInsights as Record<string, unknown> | undefined;
+  if (insights && Object.keys(insights).length > 0) {
+    lines.push(`Extracted insights: ${JSON.stringify(insights)}`);
+  }
+
   return lines.length > 0 ? lines.join("\n") : "(no project details on file yet)";
 }
 
 /** The system prompt, scoped to the actor's role. */
-function buildSystemPrompt(scope: LilyScope, brief: string): string {
+function buildSystemPrompt(
+  scope: LilyScope,
+  brief: string,
+  lawyerProfile?: LawyerProfile,
+): string {
   const roleLine =
     scope === "crm"
       ? "You are Lily, the ILP legal assistant, helping a staff member review a client's project. You have full access to the project context below."
       : "You are Lily, the ILP legal assistant, helping a client understand the status of their own legal project.";
 
+  const lawyerContext = lawyerProfile
+    ? `\n\nLAWYER CONTEXT (the staff member you are assisting):\nName: ${lawyerProfile.name ?? "—"}\nLegal areas: ${(lawyerProfile.legalAreas ?? []).join(", ") || "—"}\nJurisdictions: ${(lawyerProfile.jurisdictions ?? []).join(", ") || "—"}`
+    : "";
+
   return `${roleLine}
 
 PROJECT CONTEXT (ground truth — do not contradict or invent beyond this):
-${brief}
+${brief}${lawyerContext}
 
 RULES:
 1. Answer ONLY from the project context above. If the answer is not in the context, say you do not have that detail yet and that the legal team can confirm it.
@@ -141,6 +170,7 @@ export async function chatWithLily(
   message: string,
   actorEmail: string,
   actorRole: "client" | "staff",
+  lawyerProfile?: LawyerProfile,
 ): Promise<LilyChatResult> {
   const doc = await get(CLIENTS_COLLECTION, projectId);
   if (!doc) throw new Error("Project not found.");
@@ -158,7 +188,7 @@ export async function chatWithLily(
   };
 
   const brief = buildProjectBrief(doc);
-  const systemPrompt = buildSystemPrompt(scope, brief);
+  const systemPrompt = buildSystemPrompt(scope, brief, lawyerProfile);
 
   // Rolling window of the last 12 turns for context.
   const recent = thread.slice(-12).map((m) => `${m.role}: ${m.content}`).join("\n");
