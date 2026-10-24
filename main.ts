@@ -10,6 +10,7 @@ import log from "./helper/log.ts";
 import profilesRouter from "./API/profiles/profilesRouter.ts";
 import rulesRouter from "./API/rules/rulesRouter.ts";
 import alertsRouter from "./API/alerts/alertsRouter.ts";
+import countriesRouter from "./API/countries/countriesRouter.ts";
 import updatesRouter from "./API/updates/updatesRouter.ts";
 import templatesRouter from "./API/templates/templatesRouter.ts";
 import consultationsRouter from "./API/consultations/consultationsRouter.ts";
@@ -103,6 +104,7 @@ function createServer() {
     profilesRouter(app);
     rulesRouter(app);
     alertsRouter(app);
+    countriesRouter(app);
     updatesRouter(app);
     templatesRouter(app);
     consultationsRouter(app);
