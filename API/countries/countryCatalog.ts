@@ -314,3 +314,35 @@ export function prioritiesForCountry(country: string): LegalPriority[] {
 export function priorityById(id: string): LegalPriority | undefined {
   return LEGAL_PRIORITIES.find((p) => p.id === id);
 }
+
+/**
+ * Resolve a country code from a free-text jurisdiction value. Client docs
+ * store the jurisdiction as a full name ("Costa Rica", "Panama") or an ISO
+ * code ("CR", "PA"). Normalize both to the catalog's alpha-2 code.
+ */
+export function countryCodeFromName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const s = value.trim().toLowerCase();
+  if (!s) return null;
+
+  const byName: Record<string, string> = {
+    "costa rica": "CR",
+    "costa rica (cr)": "CR",
+    panama: "PA",
+    "panamá": "PA",
+    mexico: "MX",
+    "méxico": "MX",
+    colombia: "CO",
+    spain: "ES",
+    españa: "ES",
+    portugal: "PT",
+  };
+
+  if (byName[s]) return byName[s];
+
+  const upper = s.toUpperCase();
+  const known = new Set(SUPPORTED_COUNTRIES.map((c) => c.code));
+  if (known.has(upper)) return upper;
+
+  return null;
+}

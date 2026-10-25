@@ -13,6 +13,7 @@ import type {
   Quote,
   StageRating,
   StatusComment,
+  UserDeadline,
 } from "../types.ts";
 
 /** A single consultation record (the latest is the "current" intake). */
@@ -49,6 +50,8 @@ export interface ClientDoc extends Extensible {
   pendingActions: PendingAction[];
   conversations: string[];
   statusChatThread?: string;
+  /** User-recorded deadlines for this project's jurisdiction, keyed by priority id. */
+  deadlines?: Record<string, UserDeadline>;
   createdAt: IsoTimestamp;
   updatedAt: IsoTimestamp;
 }

@@ -97,3 +97,13 @@ export interface JourneyStep {
   stage: string;
   enteredAt: IsoTimestamp;
 }
+
+/** A single user-recorded deadline for a country legal priority. */
+export interface UserDeadline extends Extensible {
+  /** Stable priority id from the country catalog, e.g. "CR_RESIDENCY_DIMEX". */
+  priorityId: string;
+  /** The date the user recorded (ISO date, YYYY-MM-DD). */
+  date: string;
+  note?: string;
+  updatedAt: IsoTimestamp;
+}

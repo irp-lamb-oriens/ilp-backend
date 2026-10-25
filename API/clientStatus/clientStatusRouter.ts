@@ -44,6 +44,11 @@ import {
 import { ensureFieldConfig, getFieldConfigSync } from "../dashboard/automation/fieldConfig.ts";
 import type { FieldDef } from "../dashboard/automation/fieldDefaults.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
+import {
+  countryCodeFromName,
+  prioritiesForCountry,
+  priorityById,
+} from "../countries/countryCatalog.ts";
 
 const CLIENTS_COLLECTION = "clients";
 const OTP_COLLECTION = "client_status_otps";
@@ -119,6 +124,24 @@ function clientMayAccessProject(
 /** The set of emails permitted to score stages (the principal only). */
 function getRatingWhitelist(doc: Record<string, unknown>, projectId: string): string[] {
   return [resolvePrincipalEmail(doc, projectId)];
+}
+
+/** Resolve the project's jurisdiction from the latest consultation or root. */
+function resolvePrincipalJurisdiction(doc: Record<string, unknown>): string | null {
+  const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
+  const latest = (cons[cons.length - 1] ?? {}) as Record<string, unknown>;
+  const v = latest.jurisdiction !== undefined ? latest.jurisdiction : doc.jurisdiction;
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** Validate an ISO date (YYYY-MM-DD) and return a normalized copy or null. */
+function normalizeDeadlineDate(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return s;
 }
 
 function newCommentId(): string {
@@ -831,6 +854,106 @@ export default (app: Express) => {
 
       log(`[client-status] Project details updated for ${id} by ${userEmail}: ${changedKeys.join(", ")}`);
       res.json({ success: true, updated: changedKeys });
+    }),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  DEADLINES (project-scoped legal priorities)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Read the project's jurisdiction, its priorities, and the saved deadlines.
+  app.get(
+    "/api/client-status/project/:id/deadlines",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const email = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      if (!clientMayAccessProject(doc, id, email)) {
+        return res.status(403).json({ error: "You do not have access to this project." });
+      }
+
+      const jurisdiction = resolvePrincipalJurisdiction(doc);
+      const countryCode = countryCodeFromName(jurisdiction);
+      const priorities = countryCode ? prioritiesForCountry(countryCode) : [];
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+
+      res.json({
+        jurisdiction,
+        countryCode,
+        priorities,
+        deadlines,
+      });
+    }),
+  );
+
+  // Upsert a single deadline for a priority. Body: { date, note? }.
+  app.put(
+    "/api/client-status/project/:id/deadlines/:priorityId",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id, priorityId } = req.params;
+      const email = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      if (!clientMayAccessProject(doc, id, email)) {
+        return res.status(403).json({ error: "You do not have access to this project." });
+      }
+
+      const priority = priorityById(priorityId);
+      if (!priority) return res.status(404).json({ error: "Unknown priority." });
+
+      const date = normalizeDeadlineDate(req.body?.date);
+      if (!date) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD." });
+
+      const note = typeof req.body?.note === "string" ? req.body.note.trim() : undefined;
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+      const now = new Date().toISOString();
+
+      const nextDeadlines: Record<string, unknown> = {
+        ...deadlines,
+        [priorityId]: {
+          priorityId,
+          date,
+          ...(note ? { note } : {}),
+          updatedAt: now,
+        },
+      };
+
+      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      log(`[client-status] Deadline upserted on project ${id}: ${priorityId} by ${email}`);
+      res.json({ ok: true, deadline: nextDeadlines[priorityId] });
+    }),
+  );
+
+  // Remove a deadline for a priority.
+  app.delete(
+    "/api/client-status/project/:id/deadlines/:priorityId",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const { id, priorityId } = req.params;
+      const email = String((req as Request & { clientUser?: string }).clientUser ?? "").toLowerCase().trim();
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Project not found." });
+      if (!clientMayAccessProject(doc, id, email)) {
+        return res.status(403).json({ error: "You do not have access to this project." });
+      }
+
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+      if (!(priorityId in deadlines)) {
+        return res.status(404).json({ error: "No deadline recorded for this priority." });
+      }
+
+      const nextDeadlines: Record<string, unknown> = { ...deadlines };
+      delete nextDeadlines[priorityId];
+
+      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      log(`[client-status] Deadline removed on project ${id}: ${priorityId} by ${email}`);
+      res.json({ ok: true });
     }),
   );
 };
