@@ -54,6 +54,7 @@ import portalRouter from "./API/portal/portalRouter.ts";
 import pushRouter from "./API/push/pushRouter.ts";
 import membersRouter from "./API/members/membersRouter.ts";
 import callsRouter from "./API/calls/callsRouter.ts"; // P3
+import privacyRouter from "./API/privacy/privacyRouter.ts"; // P6
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { documentAccessRouter } from "./helper/storage.ts";
@@ -187,6 +188,7 @@ function createServer() {
     pushRouter(app);
     membersRouter(app);
     callsRouter(app); // P3: availability, Meet, no-show, transcripts
+    privacyRouter(app); // P6: consents, data rights, CSP reports
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);
