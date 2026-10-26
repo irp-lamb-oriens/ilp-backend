@@ -138,7 +138,7 @@ function applyFullNameSplitSafetyNet(
   const tokens = extractedSurname.split(/\s+/);
   const newName = tokens[0];
   const newSurname = tokens.slice(1).join(" ");
-  log(`[FIELD-EXTRACTION] Full-name safety-net split: "${extractedSurname}" → name="${newName}", surname="${newSurname}"`);
+  log(`[FIELD-EXTRACTION] Full-name safety-net split applied (${tokens.length} parts)`);
   extracted.name = newName;
   extracted.surname = newSurname;
 }

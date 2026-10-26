@@ -170,7 +170,7 @@ export default (app: Express) => {
           const slotSelectionPattern = /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|the\s*(first|second|third|fourth|fifth)\s*(one)?|option\s*\d|#?\d|let'?s?\s*(do|go|pick)|that\s*(works?|one)|yes|yeah|yep|great|ok|sure|perfect|sounds?\s*good)/i;
           if (slotSelectionPattern.test(msgLower)) {
             thinking.needsScheduling = true;
-            log(`[CHATBOT] Deterministic slot-selection detected: "${message}" after slots were presented. Forcing needsScheduling=true`);
+            log(`[CHATBOT] Deterministic slot-selection detected after slots were presented. Forcing needsScheduling=true`);
           }
         }
       }
