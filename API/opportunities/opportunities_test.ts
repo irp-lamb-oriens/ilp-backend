@@ -52,6 +52,8 @@ Deno.test("create: manual source needs no id; defaults stage identified, area ge
   assertEquals(o.title, "Will and testament");
   assertEquals(o.ownerEmail, "carla@ilp.test");
   assertEquals(o.source, { kind: "manual" });
+  const mixed = buildOpportunity({ clientId: "c1", title: "Will", source: { kind: "manual" } }, { defaultOwner: "Carla@ILP.test" });
+  assertEquals(mixed.ownerEmail, "carla@ilp.test");
   assertEquals(o.createdAt, NOW.toISOString());
 });
 

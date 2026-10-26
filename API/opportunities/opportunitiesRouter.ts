@@ -105,10 +105,10 @@ export async function syncOpportunitiesForQuote(clientId: string, quoteId: strin
 function filterFrom(req: Request): ListFilter {
   const q = (k: string) => (typeof req.query[k] === "string" ? String(req.query[k]).trim() : "");
   const me = (req as AuthedRequest).dashboardUser ?? "";
-  const owner = q("owner");
+  const owner = q("owner").toLowerCase();
   return {
     stage: q("stage") || undefined,
-    ownerEmail: owner === "me" ? me : owner && owner !== "all" ? owner : undefined,
+    ownerEmail: owner === "me" ? me.toLowerCase() : owner && owner !== "all" ? owner : undefined,
     area: q("area") || undefined,
     clientId: q("clientId") || undefined,
     matterId: q("matterId") || undefined,

@@ -118,7 +118,7 @@ export function buildOpportunity(input: CreateInput, opts: { now?: Date; default
   if (value !== undefined) opp.valueCents = value;
   const providerId = str(input.providerId);
   if (providerId) opp.providerId = providerId;
-  const owner = str(input.ownerEmail).toLowerCase() || opts.defaultOwner;
+  const owner = (str(input.ownerEmail) || opts.defaultOwner || "").trim().toLowerCase();
   if (owner) opp.ownerEmail = owner;
   const next = parseNextAction(input.nextAction);
   if (next) opp.nextAction = next;
