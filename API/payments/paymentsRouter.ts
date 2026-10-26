@@ -27,6 +27,8 @@ import { markRenewalPaid, membershipById } from "./lifecycle.ts";
 import { registerCancelRoutes } from "./cancel.ts";
 import { installLifecycleEmailHooks } from "../retention/lifecycleEmails.ts";
 import { registerRetentionRoutes } from "../retention/retentionRouter.ts";
+import { parseJoinConsents } from "../privacy/policy.ts";
+import { recordJoinConsents } from "../privacy/privacyRouter.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -114,12 +116,14 @@ export default function paymentsRouter(app: Express) {
         return res.status(400).json({ error: "Enter a valid email address." });
       }
       if (!fullName) return res.status(400).json({ error: "Enter your full name." });
-      if (body.acceptTerms !== true) {
-        return res.status(400).json({ error: "Please confirm you have read the membership terms." });
-      }
+      // P7: Terms and Privacy consents (with document versions) are part of
+      // the join itself; no consent, no join. Marketing is optional.
+      const consents = parseJoinConsents(body);
+      if ("error" in consents) return res.status(400).json({ error: consents.error });
 
       try {
         const { session, token, membership } = await startJoin({ email, fullName, phone, leadId });
+        await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
         // P2 funnel: remember the browser's anonymous id so the server can
         // attribute first_call_booked to the same visitor (no PII involved).
         const anonId = sanitizeStr(body.anonId).slice(0, 64);

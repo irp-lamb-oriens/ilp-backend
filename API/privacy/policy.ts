@@ -82,6 +82,57 @@ export function parseConsentInput(body: Record<string, unknown>): ConsentInput |
   return out;
 }
 
+/** Consents a join must carry: Terms and Privacy granted (required), marketing optional. */
+export interface JoinConsents {
+  terms: ConsentInput;
+  privacy: ConsentInput;
+  marketing?: ConsentInput;
+}
+
+const JOIN_KINDS: ConsentKind[] = ["terms", "privacy", "marketing_email"];
+export const JOIN_CONSENT_ERROR = "Please accept the Terms of Membership and the Privacy Policy.";
+
+/**
+ * Validate the consents sent with a join (P7). Accepts either
+ * `consents: [{ kind, granted, version? }]` (what /join sends) or the flat
+ * `acceptTerms` / `acceptPrivacy` / `marketing` booleans. Terms and Privacy
+ * must both be granted; stale versions and unknown kinds are refused.
+ */
+export function parseJoinConsents(body: Record<string, unknown>): JoinConsents | { error: string } {
+  let list: Record<string, unknown>[];
+  if (Array.isArray(body.consents)) {
+    list = (body.consents as unknown[]).filter((c): c is Record<string, unknown> => !!c && typeof c === "object");
+  } else {
+    list = [
+      { kind: "terms", granted: body.acceptTerms === true },
+      { kind: "privacy", granted: body.acceptPrivacy === true },
+      ...(typeof body.marketing === "boolean" ? [{ kind: "marketing_email", granted: body.marketing }] : []),
+    ];
+  }
+  const out: Partial<Record<ConsentKind, ConsentInput>> = {};
+  for (const raw of list) {
+    const c = parseConsentInput({ ...raw, source: "join" });
+    if ("error" in c) return c;
+    if (!JOIN_KINDS.includes(c.kind)) return { error: "Unknown consent." };
+    out[c.kind] = c;
+  }
+  if (!out.terms?.granted || !out.privacy?.granted) return { error: JOIN_CONSENT_ERROR };
+  return { terms: out.terms, privacy: out.privacy, ...(out.marketing_email ? { marketing: out.marketing_email } : {}) };
+}
+
+/**
+ * Join consents still to write: skips a kind whose newest record already has
+ * the same answer and version from a join (so a retried join, or the legacy
+ * browser call after the join, does not duplicate rows).
+ */
+export function joinConsentsToWrite(want: JoinConsents, existing: ConsentRecord[]): ConsentInput[] {
+  const latest = latestConsents(existing);
+  return [want.terms, want.privacy, ...(want.marketing ? [want.marketing] : [])].filter((c) => {
+    const have = latest[c.kind];
+    return !(have && have.source === "join" && have.granted === c.granted && have.version === c.version);
+  });
+}
+
 /** Current state per kind: the newest record wins. History stays append-only. */
 export function latestConsents(records: ConsentRecord[]): Partial<Record<ConsentKind, ConsentRecord>> {
   const out: Partial<Record<ConsentKind, ConsentRecord>> = {};

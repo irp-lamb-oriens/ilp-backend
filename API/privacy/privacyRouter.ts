@@ -6,8 +6,8 @@
  *   POST /api/csp-report                         CSP violation reports (cspReport.ts)
  *   GET  /api/privacy/versions                   current legal document versions
  *   POST /api/privacy/consents/join              { joinToken, consents:[{kind, granted}] }
- *                                                terms + privacy required, marketing_email optional;
- *                                                checked against the join session (no session, no write)
+ *                                                legacy: POST /api/payments/join now records these itself
+ *                                                (P7); idempotent, so a second call writes nothing
  * Member (client session; a staff session may read but never decide for a member)
  *   GET  /api/privacy/me                         current consents, requests, versions
  *   POST /api/privacy/me/consents                { kind, granted, source, version?, consultationId? }
@@ -44,7 +44,6 @@ import { apiUrl, siteUrl } from "../retention/mailer.ts";
 import { readJoinSession } from "../payments/membership.ts";
 import {
   COLLECTIONS,
-  type ConsentKind,
   type ConsentRecord,
   type CsmTask,
   type PrivacyRequest,
@@ -54,9 +53,12 @@ import {
   businessDaysFrom,
   consentId,
   ERASURE_MANUAL_STEPS,
+  type JoinConsents,
+  joinConsentsToWrite,
   LEGAL_VERSIONS,
   latestConsents,
   parseConsentInput,
+  parseJoinConsents,
   privacyRequestId,
   REQUEST_LABEL,
   responseDays,
@@ -84,6 +86,35 @@ export async function writeConsent(c: Omit<ConsentRecord, "id" | "at"> & { consu
 async function consentsOf(clientId: string): Promise<ConsentRecord[]> {
   const rows = await query(COLLECTIONS.consents, [{ field: "clientId", op: "EQUAL", value: clientId }]).catch(() => []);
   return rows as unknown as ConsentRecord[];
+}
+
+/**
+ * Write the join consents (Terms, Privacy, optional marketing) for a new
+ * member, skipping any already recorded with the same answer and version, and
+ * mirror the marketing choice on the client. Called inside POST
+ * /api/payments/join (P7) and by the legacy /api/privacy/consents/join route.
+ */
+export async function recordJoinConsents(
+  who: { clientId: string; email: string },
+  want: JoinConsents,
+): Promise<ConsentRecord[]> {
+  const todo = joinConsentsToWrite(want, await consentsOf(who.clientId));
+  const written: ConsentRecord[] = [];
+  for (const c of todo) {
+    written.push(await writeConsent({ clientId: who.clientId, email: who.email, kind: c.kind, granted: c.granted, version: c.version, source: "join" }));
+  }
+  if (!written.length) return written;
+  const mk = written.find((w) => w.kind === "marketing_email");
+  if (mk) {
+    await patch(COLLECTIONS.clients, who.clientId, { marketingEmailConsent: mk.granted, marketingEmailConsentAt: mk.at }).catch(() => undefined);
+  }
+  await auditLog({
+    actor: memberActor(who.clientId, who.email),
+    action: "privacy.consents_recorded",
+    target: `clients/${who.clientId}`,
+    meta: { source: "join", kinds: written.map((w) => `${w.kind}:${w.granted ? "yes" : "no"}`), versions: written.map((w) => w.version) },
+  });
+  return written;
 }
 
 async function requestsOf(clientId: string): Promise<PrivacyRequest[]> {
@@ -198,28 +229,9 @@ export default function privacyRouter(app: Express): void {
       const token = typeof req.body?.joinToken === "string" ? req.body.joinToken : "";
       const session = await readJoinSession(token);
       if (!session) return res.status(404).json({ error: "This sign-up link has expired. Start again from /join." });
-      const list = Array.isArray(req.body?.consents) ? req.body.consents as Doc[] : [];
-      const allowed: ConsentKind[] = ["terms", "privacy", "marketing_email"];
-      const parsed = list.map((c) => parseConsentInput({ ...c, source: "join" }));
-      const bad = parsed.find((p) => "error" in p);
-      if (bad && "error" in bad) return res.status(400).json({ error: bad.error });
-      const ok = parsed as Exclude<ReturnType<typeof parseConsentInput>, { error: string }>[];
-      if (ok.some((c) => !allowed.includes(c.kind))) return res.status(400).json({ error: "Unknown consent." });
-      const terms = ok.find((c) => c.kind === "terms");
-      const privacy = ok.find((c) => c.kind === "privacy");
-      if (!terms?.granted || !privacy?.granted) {
-        return res.status(400).json({ error: "Please accept the Terms of Membership and the Privacy Policy." });
-      }
-      const written: ConsentRecord[] = [];
-      for (const c of ok) {
-        written.push(await writeConsent({ clientId: session.clientId, email: session.email, kind: c.kind, granted: c.granted, version: c.version, source: "join" }));
-      }
-      await auditLog({
-        actor: memberActor(session.clientId, session.email),
-        action: "privacy.consents_recorded",
-        target: `clients/${session.clientId}`,
-        meta: { source: "join", kinds: written.map((w) => `${w.kind}:${w.granted ? "yes" : "no"}`), versions: written.map((w) => w.version) },
-      });
+      const want = parseJoinConsents({ consents: Array.isArray(req.body?.consents) ? req.body.consents : [] });
+      if ("error" in want) return res.status(400).json({ error: want.error });
+      const written = await recordJoinConsents({ clientId: session.clientId, email: session.email }, want);
       res.status(201).json({ recorded: written.length });
     }),
   );
