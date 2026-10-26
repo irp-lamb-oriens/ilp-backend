@@ -46,6 +46,7 @@ import {
   handleDismissEmailSuggestion,
 } from "./emailSuggestions.ts";
 import { getActionsForStage, getActionByKey } from "./actions/registry.ts";
+import staffHomeRouter from "./staffHome/staffHomeRouter.ts";
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -88,6 +89,7 @@ export { requireDashboardAuth };
 
 export default (app: Express) => {
   log("Dashboard router initialized.");
+  staffHomeRouter(app);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  AUTH ROUTES (kept from ILP)
