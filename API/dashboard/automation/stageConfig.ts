@@ -129,6 +129,22 @@ export function getClientVisibleStageLabels(): Array<{ id: string; label: string
     .map((s) => ({ id: s.id, label: s.clientLabel ?? s.label }));
 }
 
+/** Ordered `{ id, label, description }` rows for every client-visible stage. */
+export function getClientVisibleStageDetails(): Array<{
+  id: string;
+  label: string;
+  description: string;
+}> {
+  return getStageConfigSync()
+    .filter((s) => s.active !== false && s.hiddenFromClient !== true)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((s) => ({
+      id: s.id,
+      label: s.clientLabel ?? s.label,
+      description: s.description ?? "",
+    }));
+}
+
 /**
  * Map any stage to the stage the CLIENT should see as their current position.
  * If the real stage is already client-visible it is returned unchanged;

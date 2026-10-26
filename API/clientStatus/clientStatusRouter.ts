@@ -39,6 +39,7 @@ import {
   getStageLabel,
   getClientVisibleStageIds,
   getClientVisibleStageLabels,
+  getClientVisibleStageDetails,
   resolveClientDisplayStage,
 } from "../dashboard/automation/stageConfig.ts";
 import { ensureFieldConfig, getFieldConfigSync } from "../dashboard/automation/fieldConfig.ts";
@@ -373,6 +374,7 @@ export default (app: Express) => {
       await ensureStageConfig();
       const stages = getClientVisibleStageIds();
       const stageLabels = getClientVisibleStageLabels();
+      const stageDetails = getClientVisibleStageDetails();
 
       await ensureFieldConfig();
       const clientFields = buildClientFields(doc);
@@ -386,6 +388,7 @@ export default (app: Express) => {
         project: { ...safeSummary, viewerIsPrincipal },
         stages,
         stageLabels,
+        stageDetails,
         clientFields,
       });
     }),
