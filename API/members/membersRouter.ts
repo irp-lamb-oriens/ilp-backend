@@ -23,7 +23,7 @@
  *   GET    /api/lawyer/matters
  *   GET    /api/lawyer/handoffs
  *   GET    /api/lawyer/members/:clientId         brief data for a member the lawyer works with
- *   PATCH  /api/lawyer/consultations/:id         consent, status, minutesUsed, transcript, summary, endedAt
+ *   PATCH  /api/lawyer/consultations/:id         consent, status (in_progress | completed only), minutesUsed, transcript, summary, endedAt
  *   POST   /api/lawyer/handoffs                  { consultationId, legalNextSteps[], commercialNotes? }
  */
 
@@ -55,6 +55,7 @@ import {
   getRecord,
   isSlug,
   lawyerCanSee,
+  lawyerStatusError,
   memberBundle,
   missingFields,
   nowIso,
@@ -371,6 +372,8 @@ export default function membersRouter(app: Express) {
       if (!pid) return;
       const before = await getRecord<Consultation>(COLLECTIONS.consultations, req.params.id);
       if (!before || before.providerId !== pid) return res.status(404).json({ error: "Not found." });
+      const statusError = lawyerStatusError(req.body?.status, before.status);
+      if (statusError) return res.status(400).json({ error: statusError });
       const fields: Record<string, unknown> = {};
       for (const k of LAWYER_CONSULTATION_FIELDS) if (req.body?.[k] !== undefined) fields[k] = req.body[k];
       if (fields.consent && typeof fields.consent === "object") {

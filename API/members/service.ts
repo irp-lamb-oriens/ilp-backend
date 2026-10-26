@@ -144,6 +144,22 @@ export function callsLeft(m: Membership | null): number {
 }
 
 /**
+ * Status a lawyer may set through PATCH /api/lawyer/consultations/:id: only
+ * in_progress or completed, and never on a call that is already closed.
+ * No-show and cancel have their own routes in API/calls/ (10-minute rule,
+ * charge, Calendar clean-up). Returns the refusal message, or null. Pure.
+ */
+export function lawyerStatusError(next: unknown, current: string): string | null {
+  if (next === undefined || next === current) return null;
+  if (next === "no_show") return "Use “Member didn't join” on the call page to record a no-show.";
+  if (next === "cancelled") return "Ask the ILP team to cancel or reschedule this call.";
+  if (next !== "in_progress" && next !== "completed") return "Status can only be set to in progress or completed.";
+  if (current === "cancelled" || current === "no_show") return "This call is closed and can no longer change.";
+  if (current === "completed" && next === "in_progress") return "This call is already completed.";
+  return null;
+}
+
+/**
  * Charge a completed consultation against the member's membership once.
  * Idempotent: the consultation carries `chargedAt` after the first charge.
  */
