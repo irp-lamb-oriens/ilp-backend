@@ -28,7 +28,11 @@ export const LOW_MONTHLY = 6;
 
 // ─── Pure (exported for tests) ────────────────────────────────────────────
 
-/** The call the member should rate: latest completed, unrated, ended ≤ 30 days ago. */
+/**
+ * The call the member should rate: latest completed, unrated, ended ≤ 30 days
+ * ago. no_show and cancelled calls are never asked about (status filter here
+ * and the 409 in POST /me/feedback/call).
+ */
 export function pendingRating(cons: Consultation[], now: Date): Consultation | null {
   return cons
     .filter((c) => c.status === "completed" && !c.rating)

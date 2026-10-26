@@ -36,3 +36,13 @@ Deno.test("month keys", () => {
   assertEquals(isMonthKey("2026-13"), false);
   assertEquals(isMonthKey("../x"), false);
 });
+
+Deno.test("pending rating skips no_show and cancelled calls (P4)", () => {
+  const list = [
+    con("done", { endedAt: ago(5) }),
+    con("noshow", { status: "no_show", endedAt: ago(1) }),
+    con("cancelled", { status: "cancelled", scheduledAt: ago(1) }),
+  ];
+  assertEquals(pendingRating(list, NOW)?.id, "done");
+  assertEquals(pendingRating([list[1], list[2]], NOW), null);
+});
