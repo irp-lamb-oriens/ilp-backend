@@ -70,6 +70,9 @@ export function memberEmailLayout(opts: {
   paragraphs: string[]; // plain text; escaped here
   cta?: { label: string; url: string };
   links?: Array<{ label: string; url: string }>;
+  /** Trusted extra HTML/text after the button (built by the templates below). */
+  afterHtml?: string;
+  afterText?: string;
   unsubscribeUrl?: string;
 }): MemberEmail {
   const hello = opts.firstName ? `Hi ${opts.firstName},` : "Hello,";
@@ -84,7 +87,7 @@ export function memberEmailLayout(opts: {
     ? `<p style="margin:24px 0 0;font-size:13px;color:#7a8a96">You get these reminders as an ILP member. <a href="${escHtml(opts.unsubscribeUrl)}" style="color:#7a8a96">Stop reminder emails</a>. Payment and account emails still arrive.</p>`
     : "";
   const html = `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#202a33;line-height:1.55;font-size:16px;max-width:560px;margin:0 auto;padding:16px">
-    <p style="margin:0 0 14px">${escHtml(hello)}</p>${ps}${cta}${links ? `<p style="margin:0 0 14px">${links}</p>` : ""}
+    <p style="margin:0 0 14px">${escHtml(hello)}</p>${ps}${cta}${links ? `<p style="margin:0 0 14px">${links}</p>` : ""}${opts.afterHtml ?? ""}
     <p style="margin:18px 0 0">Your ILP team</p>${unsub}
   </body></html>`;
   const text = [
@@ -93,6 +96,7 @@ export function memberEmailLayout(opts: {
     ...opts.paragraphs.flatMap((p) => [p, ""]),
     ...(opts.cta ? [`${opts.cta.label}: ${opts.cta.url}`, ""] : []),
     ...(opts.links ?? []).map((l) => `${l.label}: ${l.url}`),
+    ...(opts.afterText ? [opts.afterText, ""] : []),
     "Your ILP team",
     ...(opts.unsubscribeUrl ? ["", `Stop reminder emails: ${opts.unsubscribeUrl}`] : []),
   ].join("\n");
@@ -292,4 +296,91 @@ export function callChangedEmail(o: {
       ${o.meetUrl ? `<p>Same Google Meet link: <a href="${callEsc(o.meetUrl)}">${callEsc(o.meetUrl)}</a></p>` : ""}
       ${callButton(o.link, o.linkLabel)}`),
   };
+
+/** Obligations reaching 30 or 7 days out. Worded "may require review". */
+export function obligationsDueEmail(o: {
+  firstName?: string;
+  items: Array<{ title: string; dueLabel: string; daysLeft: number }>;
+  askUrl: string;
+  unsubscribeUrl: string;
+}): MemberEmail {
+  const soon = o.items.some((i) => i.daysLeft <= 7);
+  const list = o.items.map((i) => `${i.title}, by ${i.dueLabel} (${i.daysLeft === 0 ? "today" : i.daysLeft === 1 ? "tomorrow" : `in ${i.daysLeft} days`})`);
+  return memberEmailLayout({
+    subject: soon ? "A date that may require review this week" : "Coming up: dates that may require review",
+    firstName: o.firstName,
+    paragraphs: [
+      o.items.length === 1 ? "A date on your ILP profile is coming up and may require review:" : "Some dates on your ILP profile are coming up and may require review:",
+      ...list,
+      "Not every date applies to everyone. If you are not sure whether this one applies to you, ask your lawyer. It is part of your membership.",
+    ],
+    cta: { label: "Ask my lawyer", url: o.askUrl },
+    unsubscribeUrl: o.unsubscribeUrl,
+  });
+}
+
+/** Monthly check-in on the membership anniversary, with a 0-10 question. */
+export function monthlyCheckInEmail(o: {
+  firstName?: string;
+  minutesLeft: number;
+  minutesIncluded: number;
+  callsLeft: number;
+  renewsOn: string;
+  bookUrl: string;
+  scoreUrl: (n: number) => string;
+  feedbackUrl: string;
+  unsubscribeUrl: string;
+}): MemberEmail {
+  const cells = Array.from({ length: 11 }, (_, n) =>
+    `<a href="${escHtml(o.scoreUrl(n))}" style="display:inline-block;min-width:28px;padding:8px 0;margin:0 2px 4px 0;text-align:center;border:1px solid #d9e1e6;border-radius:6px;color:${P2_NAVY};text-decoration:none">${n}</a>`
+  ).join("");
+  return memberEmailLayout({
+    subject: "Your month with ILP",
+    firstName: o.firstName,
+    paragraphs: [
+      `You have ${o.minutesLeft} of ${o.minutesIncluded} minutes and ${o.callsLeft} ${o.callsLeft === 1 ? "call" : "calls"} left until ${o.renewsOn}.`,
+      "If anything has changed (a move, a property, a visa date), a short call is the easiest way to check what applies.",
+    ],
+    cta: { label: "Book a call", url: o.bookUrl },
+    afterHtml: `<p style="margin:18px 0 8px">One question: how likely are you to recommend ILP to a friend living abroad? (0 = not at all, 10 = very likely)</p><p style="margin:0 0 14px">${cells}</p>`,
+    afterText: `One question: how likely are you to recommend ILP to a friend living abroad (0-10)? Answer here: ${o.feedbackUrl}`,
+    unsubscribeUrl: o.unsubscribeUrl,
+  });
+}
+
+/** Five days after joining with no call booked. */
+export function bookingNudgeEmail(o: { firstName?: string; minutes: number; calls: number; bookUrl: string; unsubscribeUrl: string }): MemberEmail {
+  return memberEmailLayout({
+    subject: "Your first ILP call is ready when you are",
+    firstName: o.firstName,
+    paragraphs: [
+      `Your membership includes ${o.minutes} minutes and up to ${o.calls} calls this month. Most members start with one 20-minute call to go over what may apply to them.`,
+      "Pick a time that suits you and tell us what you would like to ask. Your lawyer reads your profile before the call.",
+    ],
+    cta: { label: "Book a call", url: o.bookUrl },
+    unsubscribeUrl: o.unsubscribeUrl,
+  });
+}
+
+/** A matter's next step changed. */
+export function nextStepChangedEmail(o: {
+  firstName?: string;
+  matterTitle?: string;
+  what: string;
+  whoLabel: string;
+  dueLabel?: string;
+  homeUrl: string;
+  unsubscribeUrl: string;
+}): MemberEmail {
+  return memberEmailLayout({
+    subject: o.matterTitle ? `Next step on ${o.matterTitle}` : "Your next step with ILP",
+    firstName: o.firstName,
+    paragraphs: [
+      o.matterTitle ? `There is a new next step on ${o.matterTitle}:` : "There is a new next step on your ILP account:",
+      o.what,
+      `Who: ${o.whoLabel}.${o.dueLabel ? ` By: ${o.dueLabel}.` : ""}`,
+    ],
+    cta: { label: "See it in your ILP home", url: o.homeUrl },
+    unsubscribeUrl: o.unsubscribeUrl,
+  });
 }

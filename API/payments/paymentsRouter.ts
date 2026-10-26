@@ -24,6 +24,7 @@ import {
 import { markRenewalPaid, membershipById } from "./lifecycle.ts";
 import { registerCancelRoutes } from "./cancel.ts";
 import { installLifecycleEmailHooks } from "../retention/lifecycleEmails.ts";
+import { registerRetentionRoutes } from "../retention/retentionRouter.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -65,6 +66,7 @@ export default function paymentsRouter(app: Express) {
   log("Payments router initialized.");
   installLifecycleEmailHooks(); // receipts, payment-failed and cancel emails
   registerCancelRoutes(app);
+  registerRetentionRoutes(app); // /api/retention/* (unsubscribe, feedback)
 
   app.post(
     "/api/payments/checkout",
