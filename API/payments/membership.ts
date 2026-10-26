@@ -18,7 +18,7 @@ import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import { auditAuth } from "../../helper/auth/audit.ts";
-import { emitEvent } from "../members/events.ts";
+import { emitEvent, seedObligationsFromLead } from "../members/events.ts";
 import {
   COLLECTIONS,
   type CountryCode,
@@ -211,6 +211,7 @@ export async function activateMembership(
     .catch(() => {});
   // Creates the onboarding CSM task (TASK_RULES); idempotent per membership.
   await emitEvent("membership.activated", { clientId: m.clientId, sourceId: membershipId });
+  await seedObligationsFromLead(m as unknown as Record<string, unknown>);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   return { ...m, ...update } as Membership;

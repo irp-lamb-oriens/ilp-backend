@@ -18,7 +18,9 @@ import {
   COLLECTIONS,
   type CsmTask,
   type Handoff,
+  type Lead,
   type Membership,
+  type Obligation,
   TASK_RULES,
 } from "../../schemas/contracts.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../db/records.ts";
@@ -123,6 +125,55 @@ export async function emitEvent(name: string, payload: EventPayload): Promise<st
   }
 }
 
+// ─── Check findings → obligations ──────────────────────────────────────────
+
+/** Pure: obligations a converted lead's findings produce. Exported for tests. */
+export function obligationsFromLead(clientId: string, lead: Pick<Lead, "country" | "findings">): Obligation[] {
+  return (lead.findings ?? []).map((f) => {
+    const o: Obligation = {
+      id: `obl_${clientId}_${f.ruleId}`.replace(/[^A-Za-z0-9_-]/g, "_"),
+      clientId,
+      country: lead.country,
+      ruleId: f.ruleId,
+      title: f.title,
+      status: "upcoming",
+    };
+    if (f.dueAt) o.dueAt = f.dueAt;
+    return o;
+  });
+}
+
+/**
+ * When a membership activates, copy its source lead's check findings into
+ * obligations so the member home shows them from day one. Idempotent
+ * (deterministic ids, existing obligations are left alone). Never throws.
+ */
+export async function seedObligationsFromLead(membership: Doc): Promise<number> {
+  try {
+    const clientId = str(membership.clientId);
+    if (!clientId) return 0;
+    let lead: Lead | null = null;
+    const leadId = str(membership.sourceLeadId);
+    if (leadId) lead = await getRecord<Lead>(COLLECTIONS.leads, leadId);
+    if (!lead) {
+      const leads = await findRecords<Lead>(COLLECTIONS.leads, { convertedClientId: clientId });
+      lead = leads[0] ?? null;
+    }
+    if (!lead) return 0;
+    let n = 0;
+    for (const o of obligationsFromLead(clientId, lead)) {
+      if (await getRecord<Obligation>(COLLECTIONS.obligations, o.id)) continue;
+      await createRecord(COLLECTIONS.obligations, o);
+      n++;
+    }
+    if (n) log(`[events] ${n} obligations seeded from lead ${lead.id} for ${clientId}`);
+    return n;
+  } catch (err) {
+    log(`[events] obligations from lead failed: ${err instanceof Error ? err.message : err}`, "error");
+    return 0;
+  }
+}
+
 // ─── Record hooks (called by membersRouter) ───────────────────────────────
 
 export type HookCtx = { actor?: string };
@@ -161,6 +212,9 @@ async function run(slug: string, before: Doc | null, after: Doc): Promise<string
   const ids: string[] = [];
   for (const [name, payload] of eventsFor(slug, before, after)) ids.push(...(await emitEvent(name, payload)));
   // Side effects that keep records consistent with the events.
+  if (slug === "memberships" && after.status === "active" && before?.status !== "active") {
+    await seedObligationsFromLead(after);
+  }
   if (slug === "memberships" && after.status === "active" && !after.activatedAt && after.id) {
     await updateRecord(COLLECTIONS.memberships, String(after.id), { activatedAt: new Date().toISOString() });
   }

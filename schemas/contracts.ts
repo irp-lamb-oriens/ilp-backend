@@ -84,6 +84,7 @@ export interface Membership {
   callsUsed: number;
   csmEmail?: string;
   paymentRef?: string; // Stripe id or "manual"
+  sourceLeadId?: string; // lead that converted into this membership (free check)
   cancelledAt?: Iso;
   createdAt: Iso;
   updatedAt: Iso;
