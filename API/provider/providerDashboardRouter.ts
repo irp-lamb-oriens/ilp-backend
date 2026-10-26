@@ -383,7 +383,7 @@ export default function providerDashboardRouter(app: Express) {
         void addPendingAction(id, {
           type: "note_mention",
           tab: "notes",
-          title: `📝 ${actor} addressed a note to you — ${clientName}`,
+          title: `${actor} addressed a note to you — ${clientName}`,
           priority: "normal",
           assignedTo: cleanRecipients,
           triggeredBy: actor,
