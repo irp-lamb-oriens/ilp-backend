@@ -17,6 +17,8 @@ import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
+import { auditAuth } from "../../helper/auth/audit.ts";
+import { emitEvent } from "../members/events.ts";
 import {
   COLLECTIONS,
   type CountryCode,
@@ -177,27 +179,6 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
   return { session, token, membership };
 }
 
-/**
- * Emit `membership.activated` through W1's TASK_RULES engine (creates the
- * onboarding CSM task). The module is loaded at runtime so this file builds
- * before W1's API/members/events.ts lands on main; once it does, this call
- * goes live with no change. emitEvent is idempotent per membership id.
- */
-async function emitMembershipActivated(clientId: string, membershipId: string): Promise<void> {
-  const eventsModule = "../members/events.ts";
-  try {
-    const mod = await import(eventsModule) as {
-      emitEvent?: (name: string, payload: { clientId: string; sourceId?: string }) => Promise<string[]>;
-    };
-    if (typeof mod.emitEvent !== "function") throw new Error("emitEvent missing");
-    await mod.emitEvent("membership.activated", { clientId, sourceId: membershipId });
-  } catch (err) {
-    // TODO(W1): remove the fallback once API/members/events.ts is on main:
-    //   await emitEvent("membership.activated", { clientId, sourceId: membershipId });
-    log(`[payments] membership.activated not emitted (${err instanceof Error ? err.message : err})`, "payments");
-  }
-}
-
 /** Mark a membership paid and active. Idempotent; returns null when missing. */
 export async function activateMembership(
   membershipId: string,
@@ -228,7 +209,8 @@ export async function activateMembership(
   }
   await patch(COLLECTIONS.clients, m.clientId, { membershipStatus: "active", memberSince: update.activatedAt, updatedAt: now })
     .catch(() => {});
-  await emitMembershipActivated(m.clientId, membershipId);
+  // Creates the onboarding CSM task (TASK_RULES); idempotent per membership.
+  await emitEvent("membership.activated", { clientId: m.clientId, sourceId: membershipId });
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   return { ...m, ...update } as Membership;
@@ -265,19 +247,24 @@ export async function getMembership(id: string): Promise<Membership | null> {
  * typing someone's email here never opens their portal), only once the
  * membership is active, and only once per join.
  */
-export async function issuePortalSession(token: string, s: JoinSession): Promise<string | null> {
+export async function issuePortalSession(
+  token: string,
+  s: JoinSession,
+): Promise<{ token: string; expiresAt: string } | null> {
   if (!s.newClient || s.sessionIssuedAt) return null;
   const portalToken = generateSessionToken();
   const now = nowIso();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   await put(CLIENT_SESSION_COLLECTION, portalToken, {
     email: s.email,
     projectId: s.clientId,
     createdAt: now,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    expiresAt,
     source: "join",
   });
   await patch(JOIN_COLLECTION, token, { sessionIssuedAt: now });
-  return portalToken;
+  auditAuth("auth.login", { email: s.email, role: "client" }, `client:${s.email}`, { portal: "client", via: "join" });
+  return { token: portalToken, expiresAt };
 }
 
 // ─── Stripe (test mode) ────────────────────────────────────────────────────

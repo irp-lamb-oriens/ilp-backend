@@ -6,6 +6,7 @@ import { createCheckoutSession } from "../../config/integrations.ts";
 import type { SessionUser } from "../../helper/auth/types.ts";
 import rateLimit from "express-rate-limit";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { setSessionCookie } from "../../helper/auth/cookies.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
 import { PLAN_STANDARD } from "../../schemas/contracts.ts";
 import {
@@ -154,10 +155,11 @@ export default function paymentsRouter(app: Express) {
       if (!s) return res.status(404).json({ error: "This join link has expired. Sign in with your email instead." });
       const m = await getMembership(s.membershipId);
       if (m?.status !== "active") return res.status(409).json({ error: "Your membership is not active yet." });
-      const token = await issuePortalSession(req.params.token, s);
-      res.status(200).json(token
-        ? { token, projectId: s.clientId, email: s.email }
-        : { loginRequired: true, projectId: s.clientId, email: s.email });
+      const issued = await issuePortalSession(req.params.token, s);
+      if (!issued) return res.status(200).json({ loginRequired: true, projectId: s.clientId, email: s.email });
+      // HttpOnly cookie (W1 sessions); the token is also returned for header-token clients.
+      setSessionCookie(res, "client", issued.token, issued.expiresAt);
+      res.status(200).json({ token: issued.token, projectId: s.clientId, email: s.email });
     }),
   );
 
