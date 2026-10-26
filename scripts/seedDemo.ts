@@ -9,7 +9,8 @@
  * Every id starts with `demo_`, every doc carries `seed: true`, and re-running
  * overwrites the same ids (a reset), so it is safe to run before each demo.
  * Sessions are printed at the end so each portal can be opened with a header
- * token without waiting for an OTP email.
+ * token without waiting for an OTP email (header tokens are accepted only
+ * when the API runs with AUTH_HEADER_TOKENS=true; otherwise sign in by code).
  *
  * Env (optional):
  *   DEMO_CSM_EMAIL     owner of seeded CSM tasks (default csm@internationallegalpartner.com)
@@ -35,6 +36,7 @@ import {
   type CsmTask,
   type Handoff,
   type Lead,
+  type LawyerAvailability,
   type Matter,
   type Membership,
   type Obligation,
@@ -87,6 +89,51 @@ const LAWYERS = [
     bio: "Corporate and tax counsel in Escazú. S.A./S.R.L. maintenance, dissolutions, RTBF filings.",
   },
 ];
+
+/** Weekly hours (Costa Rica time) for the demo lawyers; specialties route new members. */
+const weekdays = (start: string, end: string, days: Array<1 | 2 | 3 | 4 | 5> = [1, 2, 3, 4, 5]) =>
+  days.map((day) => ({ day, start, end }));
+
+function availability(): LawyerAvailability[] {
+  const base = { timezone: "America/Costa_Rica" as const, blackoutDates: [nextDate(12, 24).slice(0, 10), nextDate(12, 25).slice(0, 10)], updatedAt: ago(30) };
+  return [
+    {
+      ...base,
+      id: "demo_prov_mora",
+      providerId: "demo_prov_mora",
+      weekly: [...weekdays("08:30", "12:00"), ...weekdays("13:30", "16:30")].sort((a, b) => a.day - b.day),
+      minLeadHours: 18,
+      maxCallsPerDay: 6,
+      specialties: ["real_estate", "corporate"],
+    },
+    {
+      ...base,
+      id: "demo_prov_solis",
+      providerId: "demo_prov_solis",
+      weekly: [...weekdays("09:00", "12:00"), ...weekdays("14:00", "17:00", [1, 3, 5])].sort((a, b) => a.day - b.day),
+      minLeadHours: 24,
+      maxCallsPerDay: 5,
+      specialties: ["immigration"],
+    },
+    {
+      ...base,
+      id: "demo_prov_vargas",
+      providerId: "demo_prov_vargas",
+      weekly: weekdays("08:00", "13:00", [1, 2, 3, 4]),
+      minLeadHours: 18,
+      maxCallsPerDay: 4,
+      specialties: ["corporate", "tax", "vehicle"],
+    },
+  ];
+}
+
+/** Placeholder Meet link in Google's xxx-xxxx-xxx shape, stable per consultation id. */
+export function demoMeetUrl(id: string): string {
+  let h = 2166136261;
+  for (const ch of id) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const letters = Array.from({ length: 10 }, (_, i) => String.fromCharCode(97 + ((h >>> (i % 4) * 8) + i * 7) % 26)).join("");
+  return `https://meet.google.com/${letters.slice(0, 3)}-${letters.slice(3, 7)}-${letters.slice(7)}`;
+}
 
 // ─── Members ───────────────────────────────────────────────────────────────
 
@@ -361,6 +408,10 @@ function consultations(): Consultation[] {
         text: "S.A. is active. Annual corporation tax may require filing by January 31 and the RTBF beneficial-owner filing by April 30. Member to send the legal books; lawyer to review the shareholder register.",
         status: "suggested",
       },
+      suggestedNextSteps: [
+        { what: "Send the S.A. legal books (shareholder register and minutes) to Adriana", who: "client", dueAt: at(5) },
+        { what: "Review the shareholder register and confirm the corporation tax filing", who: "lawyer", dueAt: at(10) },
+      ],
     }),
     c("brooks", 2, { scheduledAt: at(0, 14), question: "What did the title study find on the boundary?" }),
     c("raman", 2, { scheduledAt: at(0, 11, 30), question: "Which documents do I need to register the imported car?" }),
@@ -575,6 +626,8 @@ function build() {
     m.callsUsed = used.length;
   }
   for (const c of cons) if (c.status === "completed") (c as Consultation & { chargedAt?: string }).chargedAt = c.endedAt;
+  // Booked calls carry a Meet link so Today and the member home show "Join call".
+  for (const c of cons) if (c.status === "booked") c.meetUrl = demoMeetUrl(c.id);
   const hofs = handoffs();
   const csm = tasks(hofs);
   // Link handoffs back onto their consultations.
@@ -624,7 +677,7 @@ function build() {
     },
   ];
 
-  return { clients, memberships, matters, obligations, consultations: cons, handoffs: hofs, tasks: csm, leads };
+  return { clients, memberships, matters, obligations, consultations: cons, handoffs: hofs, tasks: csm, leads, availability: availability() };
 }
 
 async function main() {
@@ -646,6 +699,7 @@ async function main() {
 
   const writes: Array<[string, string, Record<string, unknown>]> = [];
   for (const p of providers) writes.push(["providers", p.id, p]);
+  for (const a of data.availability) writes.push([COLLECTIONS.availability, a.id, { ...a, seed: true }]);
   for (const c of data.clients) writes.push([COLLECTIONS.clients, String(c.id), c]);
   const recs: Array<[RecordCollection, Array<{ id: string }>]> = [
     [COLLECTIONS.memberships, data.memberships],
@@ -661,7 +715,8 @@ async function main() {
   console.log(
     `  ${providers.length} lawyers, ${data.clients.length} members, ${data.memberships.length} memberships, ` +
       `${data.matters.length} matters, ${data.consultations.length} consultations, ${data.handoffs.length} handoffs, ` +
-      `${data.tasks.filter((t) => t.status === "open").length} open CSM tasks, ${data.obligations.length} obligations, ${data.leads.length} leads`,
+      `${data.tasks.filter((t) => t.status === "open").length} open CSM tasks, ${data.obligations.length} obligations, ${data.leads.length} leads, ` +
+      `${data.availability.length} lawyer hours`,
   );
   if (DRY) return;
 
@@ -678,7 +733,7 @@ async function main() {
   const staffToken = generateSessionToken();
   await put("dashboard_sessions", staffToken, { email: CSM, role: "csm", createdAt: NOW.toISOString(), expiresAt: exp, seed: true });
 
-  console.log("\nDone. Header tokens (7 days):");
+  console.log("\nDone. Header tokens (7 days; only work when the API runs with AUTH_HEADER_TOKENS=true, otherwise sign in by email code):");
   console.log(`  staff  (${CSM})  x-dashboard-token: ${staffToken}`);
   console.log(`  lawyer (${providers[0].email})  x-provider-token: ${lawyerToken}`);
   console.log(`  member (${hayes.email}, clientId ${hayes.id})  x-client-token: ${memberToken}`);

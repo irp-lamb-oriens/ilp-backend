@@ -140,6 +140,7 @@ export interface Consultation {
   consent: { recording: ConsentState; at?: Iso };
   transcript?: string;
   summary?: { text: string; status: "suggested" | "confirmed"; confirmedAt?: Iso };
+  suggestedNextSteps?: LegalNextStep[]; // AI draft with the suggested summary; lawyer confirms
   handoffId?: string;
   endedAt?: Iso;
   meetUrl?: string; // Google Meet link from the calendar event
