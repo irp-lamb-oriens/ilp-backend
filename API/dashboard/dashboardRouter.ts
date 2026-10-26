@@ -16,7 +16,7 @@ import {
 } from "../../helper/auth/otp.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
 import { transcribeAudio } from "../chatbot/intelligence/transcription.ts";
-import { createCalendarEvent, getCalendarEvent } from "../../helper/calendar.ts";
+import { createCalendarEvent, fetchMeetNotes } from "../../helper/calendar.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import { resolveEmailCc, resolveEmailBcc } from "./automation/recipientRules.ts";
 import { renderLegalEmail, legalEmailTypes } from "./automation/renderLegalEmail.ts";
@@ -1312,19 +1312,21 @@ export default (app: Express) => {
       log(`[dashboard] ${actor} requested sync-meet-notes for ${id} (event ${eventId})`);
 
       try {
-        const event = await getCalendarEvent(eventId);
-        const description = (event?.description ?? "").trim();
-        if (!description) {
+        // P3: prefer the Meet transcript / Gemini notes Doc attached to the
+        // event (read through Drive), then the event description as before.
+        const fetched = await fetchMeetNotes(eventId, { allowDescription: true });
+        if (fetched.status !== "fetched") {
           return res.json({
             success: false,
             status: "not_ready",
-            message: "The calendar event has no description/notes yet.",
+            message: fetched.message,
           });
         }
+        const description = fetched.text;
 
         const fields = await extractClientFieldsServer(description);
         const nowIso = new Date().toISOString();
-        const notes = { fetched: true, fetchedAt: nowIso, eventId, text: description, fields };
+        const notes = { fetched: true, fetchedAt: nowIso, eventId, text: description, fields, source: fetched.source };
 
         await put(CLIENTS_COLLECTION, id, {
           lastCalendarEvent: { ...cal, notes },
@@ -1340,6 +1342,7 @@ export default (app: Express) => {
           success: true,
           status: "fetched",
           eventId,
+          source: fetched.source,
           textLength: description.length,
           fields,
         });
