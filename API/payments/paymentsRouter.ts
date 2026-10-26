@@ -23,6 +23,7 @@ import {
 } from "./membership.ts";
 import { markRenewalPaid, membershipById } from "./lifecycle.ts";
 import { registerCancelRoutes } from "./cancel.ts";
+import { installLifecycleEmailHooks } from "../retention/lifecycleEmails.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -62,6 +63,7 @@ const joinLimiter = rateLimit({
  */
 export default function paymentsRouter(app: Express) {
   log("Payments router initialized.");
+  installLifecycleEmailHooks(); // receipts, payment-failed and cancel emails
   registerCancelRoutes(app);
 
   app.post(

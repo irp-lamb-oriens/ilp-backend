@@ -6,6 +6,8 @@ import { deadlineFollowupSweep } from "./deadlineFollowup.ts";
 import { deadlineReminderSweep } from "./deadlineReminderSweep.ts";
 import { taskRuleSweep } from "./taskRuleSweep.ts";
 import { membershipRenewalSweep } from "../API/payments/lifecycle.ts"; // P2
+import { retentionSweep } from "./retentionSweep.ts"; // P2
+import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"; // P2
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -63,7 +65,16 @@ export const jobs: JobDef[] = [
     name: "membershipRenewalSweep",
     cron: "20 * * * *",
     handler: async () => {
+      installLifecycleEmailHooks();
       await membershipRenewalSweep();
+    },
+  },
+  // P2: dunning + retention messages, daily 08:00 Costa Rica (UTC-6, no DST; server runs UTC).
+  {
+    name: "retentionSweep",
+    cron: "0 14 * * *",
+    handler: async () => {
+      await retentionSweep();
     },
   },
 ];
