@@ -37,6 +37,11 @@ import {
 } from "../chatbot/services/lilyChatEngine.ts";
 import { extractClientFieldsServer } from "../dashboard/extractClientFieldsServer.ts";
 import { addPendingAction, resolvePendingAction } from "../dashboard/pendingActions.ts";
+import {
+  countryCodeFromName,
+  prioritiesForCountry,
+  priorityById,
+} from "../countries/countryCatalog.ts";
 
 const CLIENTS_COLLECTION = "clients";
 const SETTLEMENTS = "quoteSettlements";
@@ -49,6 +54,24 @@ function providerIdOf(req: Request): string {
 /** The authenticated provider email, attached by requireProviderAuth. */
 function providerEmailOf(req: Request): string {
   return (req as Request & { providerUser?: string }).providerUser ?? "";
+}
+
+/** Resolve a client's jurisdiction from the latest consultation or root. */
+function resolveClientJurisdiction(doc: Record<string, unknown>): string | null {
+  const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
+  const latest = (cons[cons.length - 1] ?? {}) as Record<string, unknown>;
+  const v = latest.jurisdiction !== undefined ? latest.jurisdiction : doc.jurisdiction;
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** Validate an ISO date (YYYY-MM-DD) and return a normalized copy or null. */
+function normalizeDeadlineDate(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  return s;
 }
 
 export default function providerDashboardRouter(app: Express) {
@@ -521,6 +544,98 @@ export default function providerDashboardRouter(app: Express) {
       });
       log(`[provider] ${actor} undid last activity on ${id}`);
       res.json({ success: true, undone: last });
+    })
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  DEADLINES (lawyer-managed legal priorities per client)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  app.get(
+    "/api/provider/clients/:id/deadlines",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id } = req.params;
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      const jurisdiction = resolveClientJurisdiction(doc);
+      const countryCode = countryCodeFromName(jurisdiction);
+      const priorities = countryCode ? prioritiesForCountry(countryCode) : [];
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+
+      res.json({ jurisdiction, countryCode, priorities, deadlines });
+    })
+  );
+
+  app.put(
+    "/api/provider/clients/:id/deadlines/:priorityId",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id, priorityId } = req.params;
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      const priority = priorityById(priorityId);
+      if (!priority) return res.status(404).json({ error: "Unknown priority." });
+
+      const date = normalizeDeadlineDate(req.body?.date);
+      if (!date) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD." });
+
+      const note = typeof req.body?.note === "string" ? req.body.note.trim() : undefined;
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+      const now = new Date().toISOString();
+
+      const nextDeadlines: Record<string, unknown> = {
+        ...deadlines,
+        [priorityId]: {
+          priorityId,
+          date,
+          ...(note ? { note } : {}),
+          updatedAt: now,
+        },
+      };
+
+      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      log(`[provider] Deadline upserted on client ${id}: ${priorityId} by ${providerEmailOf(req)}`);
+      res.json({ ok: true, deadline: nextDeadlines[priorityId] });
+    })
+  );
+
+  app.delete(
+    "/api/provider/clients/:id/deadlines/:priorityId",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const providerId = providerIdOf(req);
+      const { id, priorityId } = req.params;
+
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (doc.assignedProviderId !== providerId) {
+        return res.status(403).json({ error: "This client is not assigned to you." });
+      }
+
+      const deadlines = (doc.deadlines ?? {}) as Record<string, unknown>;
+      if (!(priorityId in deadlines)) {
+        return res.status(404).json({ error: "No deadline recorded for this priority." });
+      }
+
+      const nextDeadlines: Record<string, unknown> = { ...deadlines };
+      delete nextDeadlines[priorityId];
+
+      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      log(`[provider] Deadline removed on client ${id}: ${priorityId} by ${providerEmailOf(req)}`);
+      res.json({ ok: true });
     })
   );
 
