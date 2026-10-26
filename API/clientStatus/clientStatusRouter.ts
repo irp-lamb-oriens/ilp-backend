@@ -26,6 +26,11 @@ import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
+import patch from "../../db/patch.ts";
+import { stripFields } from "../../db/records.ts";
+import { CLIENT_HIDDEN_FIELDS } from "../../schemas/contracts.ts";
+import { registerMemberHomeRoutes } from "./memberHome.ts";
+import { normalizeQuote } from "./memberLogic.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import {
@@ -251,6 +256,31 @@ function buildSafeSummary(doc: Record<string, unknown>, projectId: string) {
 
 export default (app: Express) => {
   log("Client Status router initialized.");
+
+  // Every client-portal response drops CLIENT_HIDDEN_FIELDS (costs, margins,
+  // earnings, commercial notes, priority rank) at any depth, whatever the route.
+  app.use("/api/client-status", (_req: Request, res: Response, next: () => void) => {
+    const json = res.json.bind(res);
+    res.json = ((body?: unknown) => json(stripFields(body, CLIENT_HIDDEN_FIELDS))) as typeof res.json;
+    next();
+  });
+
+  // A member may only open their own project: the session's clientId, or an
+  // address the project lists. Staff (org domain) pass through, audited by W1.
+  app.use(
+    "/api/client-status/project/:id",
+    requireClientAuth,
+    asyncHandler(async (req: Request, res: Response, next: () => void) => {
+      const r = req as Request & { isIrpStaff?: boolean; clientId?: string; clientUser?: string };
+      const id = req.params.id;
+      if (r.isIrpStaff || r.clientId === id) return next();
+      const doc = await get(CLIENTS_COLLECTION, id);
+      if (doc && clientMayAccessProject(doc, id, String(r.clientUser ?? ""))) return next();
+      res.status(doc ? 403 : 404).json({ error: doc ? "You do not have access to this project." : "Project not found." });
+    }),
+  );
+
+  registerMemberHomeRoutes(app);
 
   // ══════════════════════════════════════════════════════════════════════════
   //  AUTH ROUTES
@@ -529,7 +559,7 @@ export default (app: Express) => {
         createdAt: new Date().toISOString(),
       };
 
-      await put(CLIENTS_COLLECTION, id, { statusComments: [...existing, comment] });
+      await patch(CLIENTS_COLLECTION, id, { statusComments: [...existing, comment] });
       log(`[client-status] Comment added to project ${id} by ${userEmail}`);
       res.json({ success: true, comment });
     }),
@@ -571,7 +601,7 @@ export default (app: Express) => {
         };
       });
 
-      await put(CLIENTS_COLLECTION, id, { statusComments: updated });
+      await patch(CLIENTS_COLLECTION, id, { statusComments: updated });
       res.json({ success: true, comment: updated.find((c) => c.id === commentId) });
     }),
   );
@@ -599,7 +629,7 @@ export default (app: Express) => {
       const updated = existing.map((c) =>
         c.id === commentId ? { ...c, deleted: true, deletedAt: now, deletedBy: userEmail } : c,
       );
-      await put(CLIENTS_COLLECTION, id, { statusComments: updated });
+      await patch(CLIENTS_COLLECTION, id, { statusComments: updated });
       res.json({ success: true, comment: updated.find((c) => c.id === commentId) });
     }),
   );
@@ -640,7 +670,7 @@ export default (app: Express) => {
         ratedBy: userEmail,
       };
 
-      await put(CLIENTS_COLLECTION, id, {
+      await patch(CLIENTS_COLLECTION, id, {
         stageRatings: { ...existing, [stageKey]: stageRating },
       });
 
@@ -663,7 +693,7 @@ export default (app: Express) => {
 
       const allQuotes = Array.isArray(doc.quotes) ? doc.quotes : [];
       const clientQuotes = allQuotes
-        .filter((q) => ["received", "accepted", "rejected"].includes((q as Record<string, unknown>).status as string))
+        .filter((q) => ["sent", "received", "accepted", "rejected"].includes((q as Record<string, unknown>).status as string))
         .sort((a, b) => {
           const rank: Record<string, number> = { accepted: 0, received: 1, rejected: 2 };
           const ra = rank[(a as Record<string, unknown>).status as string] ?? 9;
@@ -672,7 +702,8 @@ export default (app: Express) => {
           return String((b as Record<string, unknown>).createdAt ?? "").localeCompare(String((a as Record<string, unknown>).createdAt ?? ""));
         });
 
-      res.json({ quotes: clientQuotes });
+      // Client-safe shape only: title, total, plain scope. Line amounts can be cost.
+      res.json({ quotes: clientQuotes.map(normalizeQuote).filter(Boolean) });
     }),
   );
 
@@ -752,7 +783,7 @@ export default (app: Express) => {
           : q,
       );
 
-      await put(CLIENTS_COLLECTION, id, {
+      await patch(CLIENTS_COLLECTION, id, {
         stage: newStage,
         quotes: updatedQuotes,
         quoteAcceptance: {
@@ -846,9 +877,9 @@ export default (app: Express) => {
         return res.status(400).json({ error: "No valid (client-editable) fields provided." });
       }
 
-      const patch: Record<string, unknown> = { ...rootUpdates };
-      if (consultationTouched) patch.consultations = consultations;
-      await put(CLIENTS_COLLECTION, id, patch);
+      const updates: Record<string, unknown> = { ...rootUpdates };
+      if (consultationTouched) updates.consultations = consultations;
+      await patch(CLIENTS_COLLECTION, id, updates);
 
       log(`[client-status] Project details updated for ${id} by ${userEmail}: ${changedKeys.join(", ")}`);
       res.json({ success: true, updated: changedKeys });
@@ -921,7 +952,7 @@ export default (app: Express) => {
         },
       };
 
-      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      await patch(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
       log(`[client-status] Deadline upserted on project ${id}: ${priorityId} by ${email}`);
       res.json({ ok: true, deadline: nextDeadlines[priorityId] });
     }),
@@ -949,7 +980,7 @@ export default (app: Express) => {
       const nextDeadlines: Record<string, unknown> = { ...deadlines };
       delete nextDeadlines[priorityId];
 
-      await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
+      await patch(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
       log(`[client-status] Deadline removed on project ${id}: ${priorityId} by ${email}`);
       res.json({ ok: true });
     }),
