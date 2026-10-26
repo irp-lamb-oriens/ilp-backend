@@ -203,6 +203,10 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "document.missing_3d": { type: "missing_document", dueInHours: 48, title: "Chase missing document" },
   "quote.unanswered_5d": { type: "proposal", dueInHours: 48, title: "Follow up on open proposal" },
   "membership.renewal_7d": { type: "renewal", dueInHours: 72, title: "Renewal check-in" },
+  "membership.past_due": { type: "escalation", dueInHours: 24, title: "Payment failed: contact member" }, // P2 lifecycle
+  "membership.cancel_requested": { type: "renewal", dueInHours: 24, title: "Cancellation requested: save call" }, // P2 cancel
+  "feedback.low_score": { type: "follow_up", dueInHours: 24, title: "Low rating: follow up" }, // P2 post-call ≤ 2 or monthly ≤ 6
+  "call.link_failed": { type: "follow_up", dueInHours: 4, title: "Meet link failed: send link" }, // P3 calendar failure
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────

@@ -27,6 +27,7 @@ import { updateRecord } from "../../db/records.ts";
 import { COLLECTIONS, type MemberFeedback, type Membership } from "../../schemas/contracts.ts";
 import { paymentsMode, stripeApi } from "./membership.ts";
 import { accessFor, currentMembership, lifecycleTask, type MembershipDoc, runHook } from "./lifecycle.ts";
+import { taskIdFor } from "../members/events.ts";
 
 type Doc = Record<string, unknown>;
 
@@ -51,7 +52,7 @@ const isStripeSub = (m: Pick<Membership, "paymentRef">) => /^sub_[A-Za-z0-9]+$/.
 
 /** Deterministic id of the save-call task for one cancel request. */
 export const saveTaskKey = (m: Pick<Membership, "id" | "periodEnd">) => `${m.id}_${String(m.periodEnd).slice(0, 10)}`;
-const SAVE_EVENT = "membership.cancel_requested";
+const SAVE_EVENT = "membership.cancel_requested" as const;
 
 function actorOf(req: Request) {
   const r = req as AuthedRequest;
@@ -146,11 +147,13 @@ export function registerCancelRoutes(app: Express) {
       await put(COLLECTIONS.feedback, fb.id, { ...fb, reasonKey: reasonKey || null, membershipId: m.id });
       const actor = actorOf(req);
       await auditLog({ actor, action: "membership.cancel_requested", target: `memberships/${m.id}`, meta: { reason, periodEnd: m.periodEnd } });
-      await lifecycleTask(
-        SAVE_EVENT,
-        { clientId: id, key: saveTaskKey(m), csmEmail: m.csmEmail, detail: reason.length > 80 ? `${reason.slice(0, 77)}…` : reason },
-        { type: "renewal", title: "Member asked to cancel: call within 24 h", dueInHours: 24, sourceId: m.id },
-      );
+      await lifecycleTask(SAVE_EVENT, {
+        clientId: id,
+        key: saveTaskKey(m),
+        csmEmail: m.csmEmail,
+        detail: reason.length > 80 ? `${reason.slice(0, 77)}…` : reason,
+        sourceId: m.id,
+      });
       const after = { ...m, cancelAtPeriodEnd: true, cancelReason: reason, cancelRequestedAt: now } as MembershipDoc;
       await runHook("onCancelRequested", after);
       res.json(membershipView(after));
@@ -181,7 +184,7 @@ export function registerCancelRoutes(app: Express) {
       await patch(COLLECTIONS.memberships, m.id, { cancelAtPeriodEnd: false, cancelReason: null, cancelRequestedAt: null, updatedAt: now });
       await auditLog({ actor: actorOf(req), action: "membership.cancel_undone", target: `memberships/${m.id}` });
       // The save call is no longer needed.
-      const taskId = `task_${SAVE_EVENT.replace(/[^a-z0-9]+/gi, "_")}__${saveTaskKey(m).replace(/[^A-Za-z0-9_-]/g, "_")}`;
+      const taskId = taskIdFor(SAVE_EVENT, { clientId: id, dedupeKey: saveTaskKey(m) });
       await updateRecord(COLLECTIONS.csmTasks, taskId, { status: "cancelled", outcome: "Member kept the membership", closedAt: now })
         .catch(() => null);
       res.json(membershipView({ ...m, cancelAtPeriodEnd: false } as MembershipDoc));

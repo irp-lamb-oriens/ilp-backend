@@ -25,9 +25,8 @@ import patch from "../../db/patch.ts";
 import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
-import { createRecord, getRecord } from "../../db/records.ts";
-import { emitEvent, isTaskEvent } from "../members/events.ts";
-import { COLLECTIONS, type CsmTask, type CsmTaskType, type Membership } from "../../schemas/contracts.ts";
+import { emitEvent } from "../members/events.ts";
+import { COLLECTIONS, type CsmTask, type Membership } from "../../schemas/contracts.ts";
 
 type Doc = Record<string, unknown>;
 const DAY_MS = 86_400_000;
@@ -221,48 +220,30 @@ export async function currentMembership(clientId: string): Promise<MembershipDoc
 // ─── CSM tasks for lifecycle moments ──────────────────────────────────────
 
 /**
- * Create a CSM task for a lifecycle moment. When TASK_RULES has `event`, the
- * shared engine creates it (emitEvent); until then a task of `fallback.type`
- * is written directly with a deterministic id (idempotent per key).
+ * Create the CSM task for a lifecycle moment through the shared TASK_RULES
+ * engine (emitEvent). `key` makes it idempotent per episode (task id =
+ * taskIdFor(event, key)); `sourceId` is the record the task points at.
  */
 export async function lifecycleTask(
-  event: string,
-  p: { clientId: string; key: string; csmEmail?: string; detail?: string },
-  fallback: { type: CsmTaskType; title: string; dueInHours: number; sourceKind?: CsmTask["source"]["kind"]; sourceId?: string },
+  event: "membership.past_due" | "membership.cancel_requested" | "feedback.low_score",
+  p: {
+    clientId: string;
+    key: string;
+    csmEmail?: string;
+    detail?: string;
+    sourceId?: string;
+    sourceKind?: CsmTask["source"]["kind"];
+  },
 ): Promise<string | null> {
-  const name: string = event; // TASK_RULES keys are typed as string, so narrowing would make this `never`
-  if (isTaskEvent(event)) {
-    const ids = await emitEvent(event, {
-      clientId: p.clientId,
-      sourceId: p.key,
-      ownerEmail: p.csmEmail,
-      detail: p.detail,
-    });
-    return ids[0] ?? null;
-  }
-  try {
-    const id = `task_${name.replace(/[^a-z0-9]+/gi, "_")}__${p.key.replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 1400);
-    if (await getRecord<CsmTask>(COLLECTIONS.csmTasks, id)) return id;
-    const now = new Date();
-    const owner = p.csmEmail || Deno.env.get("DEFAULT_CSM_EMAIL") || undefined;
-    const task: CsmTask = {
-      id,
-      clientId: p.clientId,
-      type: fallback.type,
-      title: p.detail ? `${fallback.title}: ${p.detail}` : fallback.title,
-      dueAt: new Date(now.getTime() + fallback.dueInHours * 3600_000).toISOString(),
-      status: "open",
-      source: { kind: fallback.sourceKind ?? "membership", ...(fallback.sourceId ? { id: fallback.sourceId } : {}) },
-      createdAt: now.toISOString(),
-      ...(owner ? { ownerEmail: owner } : {}),
-    };
-    await createRecord(COLLECTIONS.csmTasks, task);
-    log(`[lifecycle] ${name} → csm_task ${id} (${owner ?? "unassigned"})`, "payments");
-    return id;
-  } catch (err) {
-    log(`[lifecycle] task for ${name} failed: ${err instanceof Error ? err.message : err}`, "error");
-    return null;
-  }
+  const ids = await emitEvent(event, {
+    clientId: p.clientId,
+    dedupeKey: p.key,
+    sourceId: p.sourceId,
+    sourceKind: p.sourceKind,
+    ownerEmail: p.csmEmail,
+    detail: p.detail,
+  });
+  return ids[0] ?? null;
 }
 
 // ─── Transitions ──────────────────────────────────────────────────────────
@@ -321,11 +302,12 @@ export async function markPastDue(m: MembershipDoc, actor: Actor, since?: string
   if (!already) {
     await auditLog({ actor, action: "membership.past_due", target: `memberships/${m.id}`, meta: { since: fields.pastDueSince } });
     // One task per past-due episode.
-    await lifecycleTask(
-      "membership.past_due",
-      { clientId: m.clientId, key: `${m.id}_${String(fields.pastDueSince).slice(0, 10)}`, csmEmail: m.csmEmail, detail: "payment did not go through" },
-      { type: "escalation", title: "Call the member about their membership payment", dueInHours: 24, sourceId: m.id },
-    );
+    await lifecycleTask("membership.past_due", {
+      clientId: m.clientId,
+      key: `${m.id}_${String(fields.pastDueSince).slice(0, 10)}`,
+      csmEmail: m.csmEmail,
+      sourceId: m.id,
+    });
   }
   await runHook("onPastDue", after);
   return after;

@@ -39,6 +39,14 @@ export interface EventPayload {
   detail?: string;
   /** Override the computed due date (ISO). */
   dueAt?: string;
+  /**
+   * Idempotency key when one source can raise the event more than once
+   * (e.g. one past-due task per episode of the same membership). Defaults to
+   * sourceId; source.id on the task stays the real record id.
+   */
+  dedupeKey?: string;
+  /** Override the source kind derived from the event prefix. */
+  sourceKind?: CsmTask["source"]["kind"];
 }
 
 const SOURCE_KIND: Record<string, CsmTask["source"]["kind"]> = {
@@ -47,6 +55,7 @@ const SOURCE_KIND: Record<string, CsmTask["source"]["kind"]> = {
   handoff: "handoff",
   document: "document",
   quote: "quote",
+  call: "consultation",
 };
 
 export function isTaskEvent(name: string): name is EventName {
@@ -54,8 +63,8 @@ export function isTaskEvent(name: string): name is EventName {
 }
 
 /** Deterministic task id: one task per (event, source). */
-export function taskIdFor(name: string, payload: Pick<EventPayload, "clientId" | "sourceId">): string {
-  const src = (payload.sourceId || payload.clientId).replace(/[^A-Za-z0-9_-]/g, "_");
+export function taskIdFor(name: string, payload: Pick<EventPayload, "clientId" | "sourceId" | "dedupeKey">): string {
+  const src = (payload.dedupeKey || payload.sourceId || payload.clientId).replace(/[^A-Za-z0-9_-]/g, "_");
   return `task_${name.replace(/[^a-z0-9]+/gi, "_")}__${src}`.slice(0, 1400);
 }
 
@@ -71,7 +80,7 @@ export function buildTask(
 ): CsmTask | null {
   if (!isTaskEvent(name) || !payload.clientId) return null;
   const rule = TASK_RULES[name];
-  const kind = SOURCE_KIND[name.split(".")[0]] ?? "manual";
+  const kind = payload.sourceKind ?? SOURCE_KIND[name.split(".")[0]] ?? "manual";
   const dueAt = payload.dueAt ?? new Date(now.getTime() + rule.dueInHours * 3600_000).toISOString();
   const task: CsmTask = {
     id: taskIdFor(name, payload),

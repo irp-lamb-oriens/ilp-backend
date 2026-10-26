@@ -35,8 +35,8 @@ import {
   type Membership,
   PLAN_STANDARD,
 } from "../../schemas/contracts.ts";
+import { emitEvent, taskIdFor } from "../members/events.ts";
 import {
-  createRecord,
   currentMembership,
   findRecords,
   getRecord,
@@ -227,28 +227,29 @@ async function csmOwner(clientId: string): Promise<string | undefined> {
   return m?.csmEmail || Deno.env.get("DEFAULT_CSM_EMAIL") || undefined;
 }
 
-/** One open task per consultation: "send the Meet link by email". Idempotent. */
+/**
+ * One open task per consultation and time: "Meet link failed: send link"
+ * (TASK_RULES "call.link_failed" through emitEvent). Idempotent while open; a
+ * new failure after the task was closed opens a fresh one.
+ */
 export async function flagCalendarProblem(c: CallRecord, memberName: string, problem: string): Promise<void> {
-  const id = `task_calendar_link__${c.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
-  const existing = await getRecord<CsmTask>(COLLECTIONS.csmTasks, id).catch(() => null);
-  if (existing && existing.status === "open") return;
+  let dedupeKey = `${c.id}_${c.scheduledAt}`;
+  const existing = await getRecord<CsmTask>(COLLECTIONS.csmTasks, taskIdFor("call.link_failed", { clientId: c.clientId, dedupeKey }))
+    .catch(() => null);
+  if (existing && existing.status !== "open") dedupeKey += `_${Date.now()}`;
   const start = Date.parse(c.scheduledAt);
-  const due = new Date(Math.min(Date.now() + 2 * 60 * MIN, Math.max(Date.now(), start - 60 * MIN))).toISOString();
-  const task: CsmTask = {
-    id,
+  // Due within 2 h, and at least an hour before the call when there is time.
+  const dueAt = new Date(Math.min(Date.now() + 2 * 60 * MIN, Math.max(Date.now(), start - 60 * MIN))).toISOString();
+  const ids = await emitEvent("call.link_failed", {
     clientId: c.clientId,
-    type: "follow_up",
-    title: `Send the Google Meet link by email: ${memberName}, ${whenLabel(c.scheduledAt)} (${problem})`,
-    dueAt: due,
-    status: "open",
-    source: { kind: "consultation", id: c.id },
-    createdAt: nowIso(),
-  };
-  if (c.matterId) task.matterId = c.matterId;
-  const owner = await csmOwner(c.clientId);
-  if (owner) task.ownerEmail = owner;
-  await createRecord(COLLECTIONS.csmTasks, task);
-  log(`[calls] calendar problem on ${c.id}: csm_task ${id}`);
+    matterId: c.matterId,
+    sourceId: c.id,
+    dedupeKey,
+    dueAt,
+    ownerEmail: await csmOwner(c.clientId),
+    detail: `${memberName}, ${whenLabel(c.scheduledAt)} (${problem})`,
+  });
+  log(`[calls] calendar problem on ${c.id}: csm_task ${ids[0] ?? "not created"}`);
 }
 
 // ─── Google Meet on booking ────────────────────────────────────────────────

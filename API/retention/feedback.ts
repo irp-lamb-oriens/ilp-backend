@@ -91,11 +91,13 @@ export function registerFeedbackRoutes(app: Express) {
       await put(COLLECTIONS.feedback, fb.id, { ...fb, providerId: c.providerId });
       await auditLog({ actor: { uid: clientId, email, role: "client" }, action: "feedback.post_call", target: `consultations/${c.id}`, meta: { score } });
       if (score <= LOW_POST_CALL) {
-        await lifecycleTask(
-          "feedback.low_score",
-          { clientId, key: `post_call_${c.id}`, detail: `rated a call ${score}/5${comment ? `: ${comment.slice(0, 60)}` : ""}` },
-          { type: "follow_up", title: "Low feedback: call the member", dueInHours: 24, sourceKind: "consultation", sourceId: c.id },
-        );
+        await lifecycleTask("feedback.low_score", {
+          clientId,
+          key: `post_call_${c.id}`,
+          detail: `rated a call ${score}/5${comment ? `: ${comment.slice(0, 60)}` : ""}`,
+          sourceKind: "consultation",
+          sourceId: c.id,
+        });
       }
       res.json({ ok: true });
     }),
@@ -130,11 +132,13 @@ export function registerFeedbackRoutes(app: Express) {
       await put(COLLECTIONS.feedback, id, { ...fb, month });
       await auditLog({ actor: { uid: clientId, email, role: "client" }, action: "feedback.monthly", target: `member_feedback/${id}`, meta: { score } });
       if (score <= LOW_MONTHLY) {
-        await lifecycleTask(
-          "feedback.low_score",
-          { clientId, key: `monthly_${clientId}_${month}`, detail: `would recommend ${score}/10${comment ? `: ${comment.slice(0, 60)}` : ""}` },
-          { type: "follow_up", title: "Low feedback: call the member", dueInHours: 24, sourceKind: "manual", sourceId: id },
-        );
+        await lifecycleTask("feedback.low_score", {
+          clientId,
+          key: `monthly_${clientId}_${month}`,
+          detail: `would recommend ${score}/10${comment ? `: ${comment.slice(0, 60)}` : ""}`,
+          sourceKind: "manual",
+          sourceId: id,
+        });
       }
       res.json({ ok: true, month, score });
     }),

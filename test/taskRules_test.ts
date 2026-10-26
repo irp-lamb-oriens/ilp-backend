@@ -128,3 +128,38 @@ Deno.test("document sweep picks document actions overdue by 3+ days", () => {
   assertEquals(ev.map((e) => e[1].sourceId), ["p1"]);
   assertEquals(ev[0][0], "document.missing_3d");
 });
+
+// ─── P4: lifecycle, feedback and call rules (emitted by P2/P3 code) ────────
+
+Deno.test("membership.past_due: escalation per episode, pointing at the membership", () => {
+  const t = buildTask("membership.past_due", { clientId: "c1", sourceId: "mem_1", dedupeKey: "mem_1_2026-10-20" }, NOW);
+  assertEquals([t?.type, t?.title, t?.dueAt], ["escalation", "Payment failed: contact member", hours(24)]);
+  assertEquals(t?.source, { kind: "membership", id: "mem_1" });
+  assertEquals(t?.id, "task_membership_past_due__mem_1_2026-10-20");
+  // A later episode of the same membership is a different task.
+  const next = buildTask("membership.past_due", { clientId: "c1", sourceId: "mem_1", dedupeKey: "mem_1_2026-11-20" }, NOW);
+  assertEquals(next?.id === t?.id, false);
+});
+
+Deno.test("membership.cancel_requested: renewal save call, id stable for the undo route", () => {
+  const t = buildTask("membership.cancel_requested", { clientId: "c1", sourceId: "mem_1", dedupeKey: "mem_1_2026-11-01", detail: "Moving back" }, NOW);
+  assertEquals([t?.type, t?.title, t?.dueAt], ["renewal", "Cancellation requested: save call: Moving back", hours(24)]);
+  assertEquals(t?.id, "task_membership_cancel_requested__mem_1_2026-11-01");
+  assertEquals(t?.id, taskIdFor("membership.cancel_requested", { clientId: "c1", dedupeKey: "mem_1_2026-11-01" }));
+});
+
+Deno.test("feedback.low_score: follow_up, source kind from the caller", () => {
+  const t = buildTask("feedback.low_score", { clientId: "c1", sourceId: "con_1", sourceKind: "consultation", dedupeKey: "post_call_con_1" }, NOW);
+  assertEquals([t?.type, t?.title, t?.dueAt], ["follow_up", "Low rating: follow up", hours(24)]);
+  assertEquals(t?.source, { kind: "consultation", id: "con_1" });
+  const monthly = buildTask("feedback.low_score", { clientId: "c1", sourceId: "fb_1" }, NOW);
+  assertEquals(monthly?.source.kind, "manual");
+});
+
+Deno.test("call.link_failed: follow_up due in 4 h (or the caller's due date), source is the consultation", () => {
+  const t = buildTask("call.link_failed", { clientId: "c1", sourceId: "con_1", dedupeKey: "con_1_2026-10-27T16:00:00Z" }, NOW);
+  assertEquals([t?.type, t?.title, t?.dueAt], ["follow_up", "Meet link failed: send link", hours(4)]);
+  assertEquals(t?.source, { kind: "consultation", id: "con_1" });
+  const early = buildTask("call.link_failed", { clientId: "c1", sourceId: "con_1", dueAt: hours(1) }, NOW);
+  assertEquals(early?.dueAt, hours(1));
+});
