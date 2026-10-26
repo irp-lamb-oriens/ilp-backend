@@ -9,6 +9,7 @@ import { requireDashboardAuth } from "../../helper/auth/session.ts";
 import { setSessionCookie } from "../../helper/auth/cookies.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
 import { PLAN_STANDARD } from "../../schemas/contracts.ts";
+import patch from "../../db/patch.ts";
 import {
   activateMembership,
   autopayInManualMode,
@@ -118,6 +119,16 @@ export default function paymentsRouter(app: Express) {
 
       try {
         const { session, token, membership } = await startJoin({ email, fullName, phone, leadId });
+        // P2 funnel: remember the browser's anonymous id so the server can
+        // attribute first_call_booked to the same visitor (no PII involved).
+        const anonId = sanitizeStr(body.anonId).slice(0, 64);
+        const source = sanitizeStr(body.source).toLowerCase().slice(0, 60);
+        if (/^[A-Za-z0-9_-]{8,64}$/.test(anonId)) {
+          await patch("clients", session.clientId, {
+            funnelAnonId: anonId,
+            ...(/^[a-z0-9][a-z0-9._-]{0,59}$/.test(source) ? { funnelSource: source } : {}),
+          }).catch(() => {});
+        }
         const mode = paymentsMode();
         if (mode === "stripe") {
           const checkoutUrl = await createStripeCheckout(session, token);

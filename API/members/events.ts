@@ -24,6 +24,7 @@ import {
   TASK_RULES,
 } from "../../schemas/contracts.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../db/records.ts";
+import { recordFirstCallBooked } from "../analytics/funnel.ts"; // P2
 
 export type EventName = keyof typeof TASK_RULES;
 
@@ -106,6 +107,8 @@ async function resolveOwner(payload: EventPayload): Promise<string | undefined> 
  * Never throws: task creation must not break the request that caused it.
  */
 export async function emitEvent(name: string, payload: EventPayload): Promise<string[]> {
+  // P2 funnel: first booked call per member (never throws, idempotent).
+  if (name === "consultation.booked") await recordFirstCallBooked(payload.clientId);
   try {
     if (!isTaskEvent(name)) {
       log(`[events] ${name} has no task rule`);
