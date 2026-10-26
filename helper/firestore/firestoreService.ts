@@ -147,6 +147,39 @@ export async function replaceDocument(
 }
 
 /**
+ * Quote one top-level key as a Firestore field path. Simple identifiers pass
+ * through; anything else is wrapped in backticks with `\` and `` ` `` escaped.
+ */
+export function fieldPathFor(key: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+    ? key
+    : "`" + key.replace(/\\/g, "\\\\").replace(/`/g, "\\`") + "`";
+}
+
+/**
+ * Merge write: only the top-level keys in `data` are written (updateMask);
+ * every other field on the document is kept. Creates the doc if missing.
+ * This is what `db/put` uses, because every caller in the codebase passes
+ * partial payloads and expects the rest of the record to survive.
+ */
+export async function mergeDocument(
+  collection: string,
+  id: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const keys = Object.keys(data);
+  if (!keys.length) return;
+  const url = getFirestoreDocumentUrl(collection, id);
+  const query = keys
+    .map((k) => `updateMask.fieldPaths=${encodeURIComponent(fieldPathFor(k))}`)
+    .join("&");
+  await firestoreRequest("merge", `${collection}/${id}`, `${url}?${query}`, {
+    method: "PATCH",
+    body: JSON.stringify(toFirestoreDocument(data)),
+  });
+}
+
+/**
  * Upsert a document at a fixed id using PATCH. Only the provided fields are
  * written. When `overwrite` is false, existing fields are preserved
  * (field-level merge via updateMask); when true, the whole doc is replaced.
