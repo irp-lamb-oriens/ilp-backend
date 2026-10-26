@@ -29,6 +29,9 @@ export const COLLECTIONS = {
   availability: "lawyer_availability", // one doc per providerId
   funnelEvents: "funnel_events",
   feedback: "member_feedback",
+  opportunities: "opportunities",
+  privacyRequests: "privacy_requests",
+  consents: "consents",
 } as const;
 
 export type Iso = string;
@@ -333,4 +336,55 @@ export interface MemberFeedback {
   score?: number; // 1-5 post_call; 0-10 monthly (likelihood to recommend)
   comment?: string;
   at: Iso;
+}
+
+
+// ─── Opportunity (paid legal work beyond the membership; plan sections 15, 17.1) ─
+export type OpportunityStage = "identified" | "quoted" | "negotiating" | "won" | "lost";
+
+export interface Opportunity {
+  id: string;
+  clientId: string;
+  matterId?: string;
+  source: { kind: "handoff" | "consultation" | "obligation" | "manual"; id?: string }; // no orphan opportunities
+  title: string; // e.g. "S.A. clean-up"
+  area: string;
+  stage: OpportunityStage;
+  valueCents?: number; // estimated legal fees (GMV, not platform revenue)
+  providerId?: string;
+  ownerEmail?: string; // CSM
+  nextAction?: { what: string; dueAt?: Iso };
+  quoteId?: string;
+  outcome?: string; // required when won or lost
+  createdAt: Iso;
+  updatedAt: Iso;
+  closedAt?: Iso;
+}
+
+// ─── Privacy (Costa Rica Ley 8968; US-resident members) ───────────────────
+export type ConsentKind = "terms" | "privacy" | "recording" | "marketing_email" | "ai_assistant";
+
+export interface ConsentRecord {
+  id: string;
+  clientId?: string;
+  email: string;
+  kind: ConsentKind;
+  granted: boolean;
+  version: string; // document version accepted, e.g. "privacy-2026-10-26"
+  source: string; // "join", "booking", "settings", ...
+  at: Iso;
+}
+
+export type PrivacyRequestKind = "access" | "export" | "rectify" | "delete" | "restrict";
+
+export interface PrivacyRequest {
+  id: string;
+  clientId: string;
+  email: string;
+  kind: PrivacyRequestKind;
+  status: "received" | "in_review" | "completed" | "refused";
+  note?: string;
+  dueAt: Iso; // legal response deadline
+  createdAt: Iso;
+  completedAt?: Iso;
 }
