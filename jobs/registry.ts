@@ -6,6 +6,7 @@ import { deadlineFollowupSweep } from "./deadlineFollowup.ts";
 import { deadlineReminderSweep } from "./deadlineReminderSweep.ts";
 import { taskRuleSweep } from "./taskRuleSweep.ts";
 import { membershipRenewalSweep } from "../API/payments/lifecycle.ts"; // P2
+import { firestoreBackup } from "./firestoreBackup.ts"; // P1
 import { retentionSweep } from "./retentionSweep.ts"; // P2
 import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"; // P2
 import { callReminders } from "./callReminders.ts"; // P3
@@ -84,6 +85,14 @@ export const jobs: JobDef[] = [
     cron: "*/15 * * * *",
     handler: async () => {
       await callReminders();
+    },
+  },
+  // P1: daily Firestore export to gs://$BACKUP_BUCKET/<date>, 03:00 Costa Rica (UTC-6) = 09:00 UTC.
+  {
+    name: "firestoreBackup",
+    cron: "0 9 * * *",
+    handler: async () => {
+      await firestoreBackup();
     },
   },
 ];
