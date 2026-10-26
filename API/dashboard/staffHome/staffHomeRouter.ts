@@ -5,6 +5,7 @@
  * cross-member views the Today page and member page need.
  *
  *   GET  /api/dashboard/staff/summary                         KPI strip + "Needs attention" rail
+ *   GET  /api/dashboard/staff/queue                           ?owner=me|all|<email>: open csm_tasks by due date, with member names
  *   GET  /api/dashboard/staff/members                         ?status&csm&ready&country&q&sort&dir&page&pageSize
  *   GET  /api/dashboard/staff/members/:clientId/timeline      consultations, handoffs, tasks, quotes, notes, audit
  *   POST /api/dashboard/staff/members/:clientId/assign-lawyer { providerId, matterId? }
@@ -37,6 +38,7 @@ import {
 } from "../../../schemas/contracts.ts";
 import {
   buildTimeline,
+  displayName,
   computeAttention,
   computeKpis,
   DAY_MS,
@@ -109,6 +111,42 @@ export default function staffHomeRouter(app: Express): void {
       });
       const attention = computeAttention({ memberships, clients, matters, obligations: [...upcoming, ...asked] });
       res.json({ me, role: (req as AuthedRequest).dashboardRole ?? "staff", kpis, attention });
+    }),
+  );
+
+  // ── My queue: W1's /api/staff/today plus member names and membership state ─
+  app.get(
+    "/api/dashboard/staff/queue",
+    requireDashboardAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const me = (req as AuthedRequest).dashboardUser ?? "";
+      const ownerQ = qs(req, "owner");
+      const owner = ownerQ === "all" ? undefined : ownerQ && ownerQ !== "me" ? ownerQ : me;
+      const tasks = await findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open", ownerEmail: owner }, { sortBy: "dueAt" });
+      const ids = [...new Set(tasks.map((t) => t.clientId))];
+      const [clients, memberships] = await Promise.all([
+        clientsById(ids),
+        Promise.all(ids.map((id) => findRecords<Membership>(COLLECTIONS.memberships, { clientId: id }, { sortBy: "createdAt", desc: true }))),
+      ]);
+      const status = new Map(ids.map((id, i) => {
+        const list = memberships[i];
+        return [id, (list.find((m) => m.status === "active") ?? list[0])?.status ?? null];
+      }));
+      const now = new Date().toISOString();
+      res.json({
+        owner: owner ?? "all",
+        tasks: tasks.map((t) => ({
+          ...t,
+          overdue: t.dueAt < now,
+          memberName: displayName(clients.get(t.clientId), t.clientId),
+          membershipStatus: status.get(t.clientId) ?? null,
+        })),
+        counts: {
+          open: tasks.length,
+          overdue: tasks.filter((t) => t.dueAt < now).length,
+          dueToday: tasks.filter((t) => t.dueAt.slice(0, 10) === now.slice(0, 10)).length,
+        },
+      });
     }),
   );
 
