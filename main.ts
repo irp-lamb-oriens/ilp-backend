@@ -52,6 +52,7 @@ import crmLilyRouter from "./API/dashboard/crmLilyRouter.ts";
 import clientsBulkImportRouter from "./API/dashboard/clientsBulkImportRouter.ts";
 import portalRouter from "./API/portal/portalRouter.ts";
 import pushRouter from "./API/push/pushRouter.ts";
+import membersRouter from "./API/members/membersRouter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -79,7 +80,7 @@ function createServer() {
       .split(",").map((o) => o.trim()).filter(Boolean);
     if (!isProduction) allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
     app.use(cors({
-      origin: (origin, cb) => {
+      origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
         // Non-browser clients (curl, server-to-server, health checks) send no Origin.
         if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
         cb(null, false);
@@ -165,6 +166,7 @@ function createServer() {
     clientsBulkImportRouter(app);
     portalRouter(app);
     pushRouter(app);
+    membersRouter(app);
 
     app.get("/health", (_req: Request, res: Response) => {
       res.status(200).json({ ok: true });

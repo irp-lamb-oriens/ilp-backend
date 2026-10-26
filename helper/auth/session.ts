@@ -28,7 +28,30 @@ function resolveToken(req: Request): string | undefined {
 interface ResolvedSession {
   email: string;
   providerId?: string;
+  /** Client portal: the `clients` doc id this session may read (projectId). */
+  projectId?: string;
+  /** Dashboard sessions: staff | csm | admin (missing → staff). */
+  role?: StaffRole;
 }
+
+/** Staff sub-roles on dashboard sessions. Missing on old sessions → "staff". */
+export type StaffRole = "staff" | "csm" | "admin";
+export const STAFF_ROLES: readonly StaffRole[] = ["staff", "csm", "admin"];
+
+export function normalizeStaffRole(v: unknown): StaffRole {
+  return STAFF_ROLES.includes(v as StaffRole) ? (v as StaffRole) : "staff";
+}
+
+/** Request fields attached by the middleware below. */
+export type AuthedRequest = Request & {
+  dashboardUser?: string;
+  dashboardRole?: StaffRole;
+  providerUser?: string;
+  providerId?: string;
+  clientUser?: string;
+  clientId?: string;
+  isIrpStaff?: boolean;
+};
 
 async function resolveSession(
   collection: string,
@@ -42,6 +65,8 @@ async function resolveSession(
   return {
     email: session.email as string,
     providerId: typeof session.providerId === "string" ? session.providerId : undefined,
+    projectId: typeof session.projectId === "string" ? session.projectId : undefined,
+    role: normalizeStaffRole(session.role),
   };
 }
 
@@ -86,7 +111,8 @@ export async function requireDashboardAuth(
       res.status(401).json({ error: "Invalid or expired session." });
       return;
     }
-    (req as Request & { dashboardUser?: string }).dashboardUser = session.email;
+    (req as AuthedRequest).dashboardUser = session.email;
+    (req as AuthedRequest).dashboardRole = session.role ?? "staff";
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });
@@ -202,8 +228,12 @@ export async function requireClientAuth(
       if (session) {
         const domain = session.email.toLowerCase().split("@")[1];
         if (domain === (Deno.env.get("DASHBOARD_ALLOWED_DOMAIN") ?? "internationallegalpartner.com")) {
-          (req as Request & { clientUser?: string; isIrpStaff?: boolean }).clientUser = session.email;
-          (req as Request & { clientUser?: string; isIrpStaff?: boolean }).isIrpStaff = true;
+          const r = req as AuthedRequest;
+          r.clientUser = session.email;
+          r.isIrpStaff = true;
+          // Staff acting on a member's portal name the member explicitly.
+          const target = (req.query.clientId as string) || (req.headers["x-client-id"] as string);
+          if (target) r.clientId = String(target);
           next();
           return;
         }
@@ -224,8 +254,10 @@ export async function requireClientAuth(
       res.status(401).json({ error: "Invalid or expired session." });
       return;
     }
-    (req as Request & { clientUser?: string; isIrpStaff?: boolean }).clientUser = session.email;
-    (req as Request & { clientUser?: string; isIrpStaff?: boolean }).isIrpStaff = false;
+    const r = req as AuthedRequest;
+    r.clientUser = session.email;
+    r.isIrpStaff = false;
+    r.clientId = session.projectId;
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });
