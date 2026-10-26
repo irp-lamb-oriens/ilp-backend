@@ -30,7 +30,7 @@ import getAll from "../../db/getAll.ts";
 import put from "../../db/put.ts";
 import remove from "../../db/delete.ts";
 import auditLog from "../../helper/auditLog.ts";
-import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { FINANCE_ADMIN } from "./financeAuth.ts";
 import { fetchAcceptedQuotes, invalidateFinanceCache } from "./financeQuoteSource.ts";
 import {
   buildLedgerReport,
@@ -232,7 +232,7 @@ export default function financeLedgerRouter(app: Application) {
    */
   app.get(
     "/api/dashboard/finance/ledger",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       try {
         const baseCurrency =
@@ -303,7 +303,7 @@ export default function financeLedgerRouter(app: Application) {
   /** Replace the payment rows of one accepted quote. */
   app.put(
     "/api/dashboard/finance/settlements/:quoteId",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       const quoteId = String(req.params.quoteId ?? "").trim();
       if (!quoteId) {
@@ -356,7 +356,7 @@ export default function financeLedgerRouter(app: Application) {
 
   app.post(
     "/api/dashboard/finance/ledger/entries",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       const id = `le-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const actor = actorOf(req);
@@ -388,7 +388,7 @@ export default function financeLedgerRouter(app: Application) {
 
   app.put(
     "/api/dashboard/finance/ledger/entries/:id",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
       if (!id) return res.status(400).json({ error: "An entry id is required" });
@@ -422,7 +422,7 @@ export default function financeLedgerRouter(app: Application) {
 
   app.delete(
     "/api/dashboard/finance/ledger/entries/:id",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
       if (!id) return res.status(400).json({ error: "An entry id is required" });

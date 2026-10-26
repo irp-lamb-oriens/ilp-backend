@@ -1,7 +1,7 @@
 /**
  * salesReportRouter.ts — read-only monthly sales / payment-funnel report.
  *
- *   GET /api/dashboard/sales-report   (requireDashboardAuth)
+ *   GET /api/dashboard/sales-report   (admin only: FINANCE_ADMIN)
  *
  * Reads the sources of payment truth in parallel and delegates all arithmetic
  * to the pure module in salesReport.ts:
@@ -24,7 +24,7 @@ import type { Application, Request, Response } from "express";
 import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
 import get from "../../db/get.ts";
-import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { FINANCE_ADMIN } from "./financeAuth.ts";
 import { fetchAllClientsWithIds } from "../dashboard/clientHelpers.ts";
 import { fetchAllQuotes } from "./financeQuoteSource.ts";
 import {
@@ -74,7 +74,7 @@ function deriveStatus(invoice: Record<string, unknown>): string {
 export default function salesReportRouter(app: Application) {
   app.get(
     "/api/dashboard/sales-report",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (_req: Request, res: Response) => {
       try {
         const [invoiceDocs, clientDocs, quoteDocs, countersDoc] =

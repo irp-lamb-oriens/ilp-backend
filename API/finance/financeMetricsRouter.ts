@@ -1,7 +1,7 @@
 /**
  * financeMetricsRouter.ts — read-only financial metrics for the CRM.
  *
- * GET /api/dashboard/finance/metrics   (requireDashboardAuth)
+ * GET /api/dashboard/finance/metrics   (admin only: FINANCE_ADMIN)
  *
  * Every quote lives inside a client document's `quotes` array, so there is no
  * single collection to list. financeQuoteSource.ts reads them all and joins
@@ -13,7 +13,7 @@
 
 import type { Application, Request, Response } from "express";
 import log from "../../helper/log.ts";
-import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { FINANCE_ADMIN } from "./financeAuth.ts";
 import { fetchQuotesWithFacts } from "./financeQuoteSource.ts";
 import { getStageLabels } from "../dashboard/clientHelpers.ts";
 import {
@@ -24,7 +24,7 @@ import {
 export default function financeMetricsRouter(app: Application) {
   app.get(
     "/api/dashboard/finance/metrics",
-    requireDashboardAuth,
+    ...FINANCE_ADMIN,
     async (req: Request, res: Response) => {
       try {
         const baseCurrency =

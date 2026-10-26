@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
+import { FINANCE_ADMIN } from "./financeAuth.ts";
 import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
 import put from "../../db/put.ts";
@@ -18,7 +19,7 @@ import type { SessionUser } from "../../helper/auth/types.ts";
  * - Quote/relocation coupling (quoteBillableLines, moveTaxonomy, pdfmake PDF
  *   generation) is dropped. ILP invoices are quote-agnostic legal billing
  *   against a client.
- * - Auth uses ILP's validateUser("staff") instead of IRP's requireDashboardAuth.
+ * - Auth: admin dashboard sessions only (FINANCE_ADMIN), then validateUser("staff").
  * - Audit uses ILP's auditLog instead of IRP's recordStaffAction.
  * - Email uses ILP's enqueueEmail (Firestore queue) instead of IRP's
  *   sendAndLogEmail + getMailConfigPack.
@@ -201,6 +202,7 @@ export default function invoicesRouter(app: Express) {
   /** List all invoices, newest first. */
   app.get(
     "/api/finance/invoices",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (_req: Request, res: Response) => {
       const docs = await getAll(INVOICES);
@@ -215,6 +217,7 @@ export default function invoicesRouter(app: Express) {
   /** Fetch one invoice. */
   app.get(
     "/api/finance/invoices/:id",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
@@ -235,6 +238,7 @@ export default function invoicesRouter(app: Express) {
    */
   app.post(
     "/api/finance/invoices",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = actorOf(req);
@@ -304,6 +308,7 @@ export default function invoicesRouter(app: Express) {
   /** Edit an invoice (line items, dates, terms, notes). */
   app.put(
     "/api/finance/invoices/:id",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
@@ -354,6 +359,7 @@ export default function invoicesRouter(app: Express) {
   /** Record payments against an invoice. */
   app.post(
     "/api/finance/invoices/:id/payment",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
@@ -394,6 +400,7 @@ export default function invoicesRouter(app: Express) {
   /** Mark an invoice paid in full, or reopen it. */
   app.post(
     "/api/finance/invoices/:id/paid",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
@@ -467,6 +474,7 @@ export default function invoicesRouter(app: Express) {
   /** Email the invoice to the client. */
   app.post(
     "/api/finance/invoices/:id/send",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
@@ -539,6 +547,7 @@ export default function invoicesRouter(app: Express) {
   /** Delete a draft invoice. */
   app.delete(
     "/api/finance/invoices/:id",
+    ...FINANCE_ADMIN,
     validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const id = String(req.params.id ?? "").trim();
