@@ -49,6 +49,7 @@ import {
 import {
   LAWYER_EDITABLE_CLIENT_FIELDS,
   stripProviderResponses,
+  stripProviderWrites,
 } from "./lawyerView.ts";
 import lawyerHomeRoutes from "./lawyerHomeRoutes.ts";
 
@@ -89,6 +90,8 @@ export default function providerDashboardRouter(app: Express) {
   // router before providerQuotesRouter and membersRouter).
   app.use("/api/provider", stripProviderResponses);
   app.use("/api/lawyer", stripProviderResponses);
+  // Lawyer writes: hidden fields (commercialNotes, margins, rank) are staff-only.
+  app.use("/api/lawyer", stripProviderWrites);
 
   lawyerHomeRoutes(app);
 

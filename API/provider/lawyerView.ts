@@ -112,6 +112,16 @@ export function findHiddenKeys(value: unknown, path = "$"): string[] {
   return found;
 }
 
+/**
+ * Express middleware: drop hidden fields from lawyer request bodies, so a
+ * lawyer can never write commercialNotes, margins or ILP ranking through any
+ * provider/lawyer route (e.g. W1's POST /api/lawyer/handoffs).
+ */
+export function stripProviderWrites(req: Request, _res: Response, next: NextFunction) {
+  if (req.body && typeof req.body === "object") req.body = toLawyerPayload(req.body);
+  next();
+}
+
 /** Express middleware: filter every res.json body through toLawyerPayload. */
 export function stripProviderResponses(req: Request, res: Response, next: NextFunction) {
   const original = res.json.bind(res);

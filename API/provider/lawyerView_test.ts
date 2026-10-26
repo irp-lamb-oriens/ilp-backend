@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
 import {
   findHiddenKeys,
+  stripProviderWrites,
   mergeLawyerLineItems,
   PROVIDER_HIDDEN_FIELDS,
   stripProviderResponses,
@@ -106,4 +107,13 @@ Deno.test("lawyer line edits keep stored margins and cannot set new ones", () =>
   assertEquals(merged[0].marginMode, "pct");
   assertEquals(merged[1].marginPct, 20);
   assertEquals(merged[1].marginFlat, null);
+});
+
+Deno.test("lawyer request bodies cannot carry commercialNotes or margins", () => {
+  const req = { body: { consultationId: "c1", legalNextSteps: [{ what: "Send books", who: "client" }], commercialNotes: "Upsell", marginPct: 40 } } as unknown as Parameters<typeof stripProviderWrites>[0];
+  stripProviderWrites(req, {} as Parameters<typeof stripProviderWrites>[1], () => {});
+  const body = (req as unknown as { body: Record<string, unknown> }).body;
+  assertEquals(body.commercialNotes, undefined);
+  assertEquals(body.marginPct, undefined);
+  assertEquals((body.legalNextSteps as unknown[]).length, 1);
 });
