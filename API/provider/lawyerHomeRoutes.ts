@@ -31,6 +31,7 @@ import {
   type LegalNextStep,
   type Matter,
   type Obligation,
+  profileCompleteness,
 } from "../../schemas/contracts.ts";
 import {
   findRecords,
@@ -121,6 +122,8 @@ export function buildBrief(i: BriefInput) {
       suggestedNextSteps: Array.isArray(c.suggestedNextSteps) ? c.suggestedNextSteps : [],
       minutesUsed: c.minutesUsed ?? null,
       handoffId: c.handoffId ?? null,
+      meetUrl: c.meetUrl ?? null,
+      transcriptSource: str(c.transcriptSource),
     },
     who: {
       name: clientName(i.client, c.clientId),
@@ -218,6 +221,37 @@ export function parseSuggestion(raw: string): { summary: string; nextSteps: Lega
   return { summary, nextSteps: steps };
 }
 
+/**
+ * Draft a summary + up to 5 legal next steps from a transcript and store them
+ * as `summary.status: "suggested"` (never confirmed here). Shared by the
+ * suggest route, the Meet transcript fetch and the audio upload (P3).
+ * Returns null when the model gives nothing usable.
+ */
+export async function draftSuggestion(
+  consultationId: string,
+  transcript: string,
+  opts: { saveTranscript?: boolean; transcriptSource?: string } = {},
+): Promise<{ summary: { text: string; status: "suggested" }; suggestedNextSteps: LegalNextStep[] } | null> {
+  let parsed: ReturnType<typeof parseSuggestion> = null;
+  try {
+    const out = await callLLMWithFallback({ systemInstruction: SUGGEST_PROMPT, prompt: transcript.slice(0, 60_000), temperature: 0.2, maxTokens: 900 });
+    parsed = parseSuggestion(out.content);
+  } catch (err) {
+    log(`[provider] suggest failed for ${consultationId}: ${err instanceof Error ? err.message : err}`);
+  }
+  const fields: Obj = {};
+  if (opts.saveTranscript) {
+    fields.transcript = transcript.slice(0, 200_000);
+    if (opts.transcriptSource) fields.transcriptSource = opts.transcriptSource;
+  }
+  if (parsed) {
+    fields.summary = { text: parsed.summary, status: "suggested" };
+    fields.suggestedNextSteps = parsed.nextSteps;
+  }
+  if (Object.keys(fields).length) await updateRecord(COLLECTIONS.consultations, consultationId, fields);
+  return parsed ? { summary: { text: parsed.summary, status: "suggested" }, suggestedNextSteps: parsed.nextSteps } : null;
+}
+
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 export default function lawyerHomeRoutes(app: Express) {
@@ -263,6 +297,11 @@ export default function lawyerHomeRoutes(app: Express) {
           consent: c.consent ?? { recording: "pending" },
           summaryStatus: c.summary?.status ?? null,
           handoffId: c.handoffId ?? null,
+          // P3: the call itself
+          meetUrl: str(c.meetUrl),
+          linkPending: !c.meetUrl && c.status === "booked",
+          completeness: Math.round(profileCompleteness(profileRecord(clients.get(c.clientId) ?? null)).score * 100),
+          hasTranscript: !!str(c.transcript),
         })),
       });
     }),
@@ -306,18 +345,9 @@ export default function lawyerHomeRoutes(app: Express) {
       if (str(req.body?.transcript) && c.consent?.recording !== "granted") {
         return res.status(409).json({ error: "Recording consent is not granted." });
       }
-      let parsed: ReturnType<typeof parseSuggestion> = null;
-      try {
-        const out = await callLLMWithFallback({ systemInstruction: SUGGEST_PROMPT, prompt: transcript, temperature: 0.2, maxTokens: 900 });
-        parsed = parseSuggestion(out.content);
-      } catch (err) {
-        log(`[provider] suggest failed for ${c.id}: ${err instanceof Error ? err.message : err}`);
-      }
-      if (!parsed) return res.status(502).json({ error: "Could not draft a summary. Write it yourself or try again." });
-      const fields: Obj = { summary: { text: parsed.summary, status: "suggested" }, suggestedNextSteps: parsed.nextSteps };
-      if (str(req.body?.transcript)) fields.transcript = transcript;
-      await updateRecord(COLLECTIONS.consultations, c.id, fields);
-      res.json({ summary: fields.summary, suggestedNextSteps: parsed.nextSteps });
+      const out = await draftSuggestion(c.id, transcript, { saveTranscript: !!str(req.body?.transcript) });
+      if (!out) return res.status(502).json({ error: "Could not draft a summary. Write it yourself or try again." });
+      res.json(out);
     }),
   );
 

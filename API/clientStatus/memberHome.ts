@@ -7,7 +7,8 @@
  *
  *   GET   /api/client-status/me/home                    overview bundle
  *   GET   /api/client-status/me/slots?matterId=         bookable 20-min slots
- *   POST  /api/client-status/me/consultations           { scheduledAt, question, matterId? }
+ *   POST  /api/client-status/me/consultations           { scheduledAt, question, matterId?, recordingConsent? } (P3: Meet link, emails)
+ *   (P3 cancel / reschedule / consent / join routes live in API/calls/callsRouter.ts)
  *   POST  /api/client-status/me/obligations/:id/ask     "Ask my lawyer" → question for the next call
  *   PATCH /api/client-status/me/profile                 { values: { field: value } } (PROFILE_FIELDS only)
  *   GET   /api/client-status/me/documents               metadata list
@@ -68,10 +69,11 @@ import {
   storeMemberDocument,
   uploadBytes,
 } from "../../helper/storage.ts";
+import { attachMeeting, type CallRecord, peopleFor, routeLawyer, sendBookingEmails, slotsFor } from "../calls/callService.ts";
+import { canChange } from "../calls/callLogic.ts";
 import {
   bookingCapacity,
   coerceProfileValue,
-  generateSlots,
   mergeThread,
   moneyView,
   nextStepFor,
@@ -201,6 +203,12 @@ export function registerMemberHomeRoutes(app: Express) {
             durationMin: c.durationMin,
             question: c.question,
             lawyerName: lawyers.get(c.providerId) ?? null,
+            // P3: the call itself
+            status: c.status,
+            meetUrl: c.meetUrl ?? null,
+            linkPending: !c.meetUrl,
+            consent: c.consent ?? { recording: "pending" },
+            canChange: canChange(c, new Date(), "member").ok,
           })),
         pastCalls: view.consultations
           .filter((c) => c.status === "completed")
@@ -216,15 +224,10 @@ export function registerMemberHomeRoutes(app: Express) {
     }),
   );
 
-  // ── Booking ──────────────────────────────────────────────────────────────
-  const lawyerFor = async (clientId: string, matterId?: string): Promise<string | null> => {
-    const matters = await findRecords<Matter>(COLLECTIONS.matters, { clientId }, { sortBy: "openedAt", desc: true });
-    const m = (matterId ? matters.find((x) => x.id === matterId) : null) ?? matters.find((x) => !x.closedAt && x.assignedProviderId);
-    if (m?.assignedProviderId) return m.assignedProviderId;
-    const client = (await get(CLIENTS, clientId)) as Doc | null;
-    if (typeof client?.assignedProviderId === "string" && client.assignedProviderId) return client.assignedProviderId;
-    return Deno.env.get("DEFAULT_PROVIDER_ID") || null;
-  };
+  // ── Booking (P3: availability, routing, Google Meet) ─────────────────────
+  // Slots = the lawyer's weekly windows − blackout dates − booked calls −
+  // Google Calendar busy times, with lead time and a daily cap (calls/callLogic.ts).
+  // Lawyer = matter's, else client's, else specialty match, else DEFAULT_PROVIDER_ID.
 
   app.get(
     "/api/client-status/me/slots",
@@ -232,10 +235,9 @@ export function registerMemberHomeRoutes(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
-      const providerId = await lawyerFor(id, req.query.matterId as string | undefined);
+      const providerId = await routeLawyer(id, req.query.matterId as string | undefined);
       if (!providerId) return res.json({ slots: [], lawyerName: null, reason: "No lawyer is assigned yet. Your ILP team will set one up and contact you." });
-      const booked = await findRecords<Consultation>(COLLECTIONS.consultations, { providerId, status: "booked" });
-      const slots = generateSlots({ now: new Date(), taken: booked.map((c) => c.scheduledAt) });
+      const slots = await slotsFor(providerId);
       res.json({ slots, lawyerName: await providerName(providerId), lengthMin: PLAN_STANDARD.callLengthMin });
     }),
   );
@@ -246,24 +248,24 @@ export function registerMemberHomeRoutes(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
-      const { scheduledAt, question, matterId } = (req.body ?? {}) as Record<string, unknown>;
+      const { scheduledAt, question, matterId, recordingConsent } = (req.body ?? {}) as Record<string, unknown>;
       const when = typeof scheduledAt === "string" ? new Date(scheduledAt) : null;
       if (!when || Number.isNaN(when.getTime())) return res.status(400).json({ error: "Pick a time for the call." });
       const q = typeof question === "string" ? question.trim().slice(0, 1000) : "";
       if (!q) return res.status(400).json({ error: "Tell us what you would like to ask." });
+      const consent = recordingConsent === "granted" || recordingConsent === "declined" ? recordingConsent : "pending";
 
       const bundle = await memberBundle(id);
       const cap = bookingCapacity(bundle.membership, bundle.consultations);
       if (!cap.canBook) return res.status(409).json({ error: cap.reason, capacity: cap });
 
       const mId = typeof matterId === "string" && bundle.matters.some((m) => m.id === matterId) ? matterId : undefined;
-      const providerId = await lawyerFor(id, mId);
+      const providerId = await routeLawyer(id, mId);
       if (!providerId) return res.status(409).json({ error: "No lawyer is assigned yet. Your ILP team will contact you to set one up." });
 
       // The slot must be one we offer and still free.
-      const booked = await findRecords<Consultation>(COLLECTIONS.consultations, { providerId, status: "booked" });
       const iso = when.toISOString();
-      const offered = generateSlots({ now: new Date(), taken: booked.map((c) => c.scheduledAt) });
+      const offered = await slotsFor(providerId);
       if (!offered.includes(iso)) return res.status(409).json({ error: "That time was just taken. Please pick another." });
 
       const pending = Array.isArray(bundle.client?.pendingQuestions) ? bundle.client!.pendingQuestions as string[] : [];
@@ -276,13 +278,28 @@ export function registerMemberHomeRoutes(app: Express) {
         durationMin: PLAN_STANDARD.callLengthMin,
         question: fullQuestion,
         bookedBy: actor(req),
+        consent: consent === "pending" ? { recording: "pending" } : { recording: consent, at: nowIso(), by: "client", where: "booking" },
       });
       const created = await createRecord(COLLECTIONS.consultations, record);
       if (pending.length) await patch(CLIENTS, id, { pendingQuestions: [] });
       await emitEvent("consultation.booked", { clientId: id, matterId: mId, sourceId: created.id, detail: memberName(bundle.client) });
       log(`[member-home] consultation ${created.id} booked for ${id} at ${iso}`);
+      // Google Meet: never fails the booking. On error the CSM gets a task and the member sees "link coming by email".
+      const people = await peopleFor(created as unknown as CallRecord);
+      const withMeet = await attachMeeting(created as unknown as CallRecord, people);
+      await sendBookingEmails(withMeet, people);
       const after = bookingCapacity(bundle.membership, [...bundle.consultations, created as unknown as Consultation]);
-      res.status(201).json(forClient({ consultation: { ...created, transcript: undefined }, capacity: after }));
+      res.status(201).json(forClient({
+        consultation: {
+          ...created,
+          transcript: undefined,
+          meetUrl: withMeet.meetUrl ?? null,
+          calendarEventId: undefined,
+          calendarError: undefined,
+          linkPending: !withMeet.meetUrl,
+        },
+        capacity: after,
+      }));
     }),
   );
 

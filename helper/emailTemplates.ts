@@ -168,3 +168,128 @@ export function renewalReceiptEmail(o: {
     links: [{ label: "See your payments", url: o.moneyUrl }],
   });
 }
+
+// ─── P3: the call (booking, reminders, changes) ───────────────────────────
+
+const callEsc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+function callShell(title: string, body: string): string {
+  return `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#202a33;line-height:1.6;max-width:560px">
+    <h2 style="color:#123b5d;margin:0 0 12px">${callEsc(title)}</h2>${body}
+    <p style="color:#7a8a96;font-size:13px;margin-top:24px">ILP International Legal Partner · times are Costa Rica time (GMT-6)</p>
+  </body></html>`;
+}
+
+const callButton = (href: string, label: string) =>
+  `<p><a href="${callEsc(href)}" style="background:#5cccf7;color:#123b5d;padding:10px 18px;text-decoration:none;border-radius:999px;font-weight:600">${callEsc(label)}</a></p>`;
+
+const quoted = (q?: string | null) =>
+  q ? `<p style="border-left:2px solid #d9e1e6;padding-left:12px;margin:12px 0">${callEsc(q).replace(/\n/g, "<br>")}</p>` : "";
+
+/** Member: call booked. Without a Meet link, says the link follows by email. */
+export function callBookedMemberEmail(o: {
+  firstName: string;
+  lawyerName: string;
+  whenLabel: string;
+  meetUrl?: string | null;
+  portalUrl: string;
+}): { subject: string; html: string } {
+  const link = o.meetUrl
+    ? `${callButton(o.meetUrl, "Join with Google Meet")}<p>The button works from 10 minutes before the call.</p>`
+    : `<p>Your video link is coming by email shortly. Your ILP team is setting it up.</p>`;
+  return {
+    subject: `Your ILP call is booked: ${o.whenLabel}`,
+    html: callShell("Your call is booked", `
+      <p>Hi ${callEsc(o.firstName)},</p>
+      <p>Your 20-minute call with <strong>${callEsc(o.lawyerName)}</strong> is on <strong>${callEsc(o.whenLabel)}</strong>.</p>
+      ${link}
+      <p>You can change or cancel it up to 24 hours before, from <a href="${callEsc(o.portalUrl)}">your ILP home</a>.</p>`),
+  };
+}
+
+/** Lawyer: a member booked a call with you. */
+export function callBookedLawyerEmail(o: {
+  lawyerName: string;
+  memberName: string;
+  whenLabel: string;
+  question?: string | null;
+  briefUrl: string;
+}): { subject: string; html: string } {
+  return {
+    subject: `New ILP call: ${o.memberName}, ${o.whenLabel}`,
+    html: callShell("New call booked", `
+      <p>Hi ${callEsc(o.lawyerName)},</p>
+      <p><strong>${callEsc(o.memberName)}</strong> booked a 20-minute call for <strong>${callEsc(o.whenLabel)}</strong>. Their question:</p>
+      ${quoted(o.question)}
+      ${callButton(o.briefUrl, "Open the brief")}`),
+  };
+}
+
+/** 24-hour and 1-hour reminders, for the member or the lawyer. */
+export function callReminderEmail(o: {
+  to: "member" | "lawyer";
+  kind: "24h" | "1h";
+  greetingName: string;
+  otherName: string;
+  whenLabel: string;
+  meetUrl?: string | null;
+  question?: string | null;
+  briefUrl?: string;
+  portalUrl?: string;
+}): { subject: string; html: string } {
+  const lead = o.kind === "1h" ? "in one hour" : "tomorrow";
+  const join = o.meetUrl
+    ? callButton(o.meetUrl, "Join with Google Meet")
+    : `<p>The video link is on its way from your ILP team.</p>`;
+  if (o.to === "lawyer") {
+    return {
+      subject: `Reminder: ${o.otherName} ${lead} (${o.whenLabel})`,
+      html: callShell(`Your call with ${o.otherName} is ${lead}`, `
+        <p>Hi ${callEsc(o.greetingName)},</p>
+        <p>${callEsc(o.whenLabel)}, 20 minutes. The member asked:</p>
+        ${quoted(o.question)}
+        ${o.briefUrl ? callButton(o.briefUrl, "Read the brief") : ""}
+        ${o.meetUrl ? `<p>Meet link: <a href="${callEsc(o.meetUrl)}">${callEsc(o.meetUrl)}</a></p>` : ""}`),
+    };
+  }
+  return {
+    subject: `Reminder: your ILP call is ${lead} (${o.whenLabel})`,
+    html: callShell(`Your call is ${lead}`, `
+      <p>Hi ${callEsc(o.greetingName)},</p>
+      <p>Your 20-minute call with <strong>${callEsc(o.otherName)}</strong> is on <strong>${callEsc(o.whenLabel)}</strong>.</p>
+      ${o.question ? `<p>Your question:</p>${quoted(o.question)}` : ""}
+      ${join}
+      <p>Have any documents you mentioned nearby. ${o.portalUrl ? `Your <a href="${callEsc(o.portalUrl)}">ILP home</a> has the details.` : ""}</p>`),
+  };
+}
+
+/** Call moved or cancelled (sent to the member and the lawyer). */
+export function callChangedEmail(o: {
+  change: "rescheduled" | "cancelled";
+  greetingName: string;
+  otherName: string;
+  oldWhenLabel: string;
+  newWhenLabel?: string;
+  meetUrl?: string | null;
+  link: string;
+  linkLabel: string;
+}): { subject: string; html: string } {
+  if (o.change === "cancelled") {
+    return {
+      subject: `ILP call cancelled: ${o.oldWhenLabel}`,
+      html: callShell("Call cancelled", `
+        <p>Hi ${callEsc(o.greetingName)},</p>
+        <p>The call with <strong>${callEsc(o.otherName)}</strong> on ${callEsc(o.oldWhenLabel)} is cancelled. It does not count against the monthly calls.</p>
+        ${callButton(o.link, o.linkLabel)}`),
+    };
+  }
+  return {
+    subject: `ILP call moved to ${o.newWhenLabel}`,
+    html: callShell("Call moved", `
+      <p>Hi ${callEsc(o.greetingName)},</p>
+      <p>The call with <strong>${callEsc(o.otherName)}</strong> moved from ${callEsc(o.oldWhenLabel)} to <strong>${callEsc(o.newWhenLabel ?? "")}</strong>.</p>
+      ${o.meetUrl ? `<p>Same Google Meet link: <a href="${callEsc(o.meetUrl)}">${callEsc(o.meetUrl)}</a></p>` : ""}
+      ${callButton(o.link, o.linkLabel)}`),
+  };
+}
