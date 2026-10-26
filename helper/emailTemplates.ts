@@ -170,6 +170,41 @@ export function cancellationConfirmedEmail(o: { firstName?: string; endsOn: stri
   });
 }
 
+/**
+ * Join confirmation (P6/P7): restates the automatic-renewal terms for US
+ * auto-renewal laws: the monthly amount, that it renews every month until
+ * cancelled, how to cancel online, and that access runs to the end of the
+ * paid month. Wording pending counsel (docs/PRIVACY_AND_COMPLIANCE.md, q. 10).
+ */
+export function joinConfirmedEmail(o: {
+  firstName?: string;
+  activationLabel: string; // "US$100.00"
+  monthlyLabel: string; // "US$79.99"
+  renewsOn: string; // date label of the first renewal
+  minutes: number;
+  calls: number;
+  callLengthMin: number;
+  bookUrl: string;
+  cancelUrl: string;
+  termsUrl: string;
+}): MemberEmail {
+  return memberEmailLayout({
+    subject: "Welcome to ILP: your membership is active",
+    firstName: o.firstName,
+    paragraphs: [
+      `Your ILP membership is active. The one-time activation fee is ${o.activationLabel} and the membership is ${o.monthlyLabel} a month.`,
+      `Your membership renews automatically every month at ${o.monthlyLabel} until you cancel. The next renewal is on ${o.renewsOn}.`,
+      `You can cancel online at any time from Money in your ILP home (${o.cancelUrl}). When you cancel, you keep access until the end of the month you already paid for and you are not charged again.`,
+      `Each month includes ${o.minutes} minutes with a lawyer, up to ${o.calls} calls of ${o.callLengthMin} minutes.`,
+    ],
+    cta: { label: "Book your first call", url: o.bookUrl },
+    links: [
+      { label: "Cancel or manage membership", url: o.cancelUrl },
+      { label: "Terms of Membership", url: o.termsUrl },
+    ],
+  });
+}
+
 /** Renewal receipt: a new period started. */
 export function renewalReceiptEmail(o: {
   firstName?: string;

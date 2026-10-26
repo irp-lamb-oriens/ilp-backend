@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
-import { dunningStage } from "../API/retention/lifecycleEmails.ts";
+import { dunningStage, joinConfirmation } from "../API/retention/lifecycleEmails.ts";
 import { queueKey } from "../API/retention/mailer.ts";
 import {
   accessPausedEmail,
@@ -46,4 +46,15 @@ Deno.test("layout escapes member-provided names", () => {
 Deno.test("unsubscribe link only when given", () => {
   assertEquals(memberEmailLayout({ subject: "s", paragraphs: [] }).html.includes("Stop reminder"), false);
   assertEquals(memberEmailLayout({ subject: "s", paragraphs: [], unsubscribeUrl: "u" }).text.includes("Stop reminder emails: u"), true);
+});
+
+Deno.test("join confirmation restates the renewal terms and how to cancel online (P7)", () => {
+  const e = joinConfirmation({ periodEnd: "2026-11-26T15:00:00.000Z", minutesIncluded: 60, callsIncluded: 3 }, "Robert");
+  assertEquals(e.subject, "Welcome to ILP: your membership is active");
+  for (const part of [e.html, e.text]) {
+    for (const needle of ["US$79.99 a month", "US$100.00", "renews automatically every month at US$79.99 until you cancel", "November 26, 2026", "/status/money/cancel", "until the end of the month you already paid for", "/terms", "not a law firm"]) {
+      assertEquals(part.includes(needle), true, `missing: ${needle}`);
+    }
+  }
+  assertEquals(e.text.startsWith("Hi Robert,"), true);
 });

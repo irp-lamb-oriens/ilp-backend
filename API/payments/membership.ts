@@ -22,7 +22,7 @@ import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import { auditAuth } from "../../helper/auth/audit.ts";
 import { SESSION_TTL_MS } from "../../helper/auth/cookies.ts";
 import { emitEvent, seedObligationsFromLead } from "../members/events.ts";
-import { onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated } from "./lifecycle.ts";
+import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
   COLLECTIONS,
   type CountryCode,
@@ -218,6 +218,8 @@ export async function activateMembership(
   await seedObligationsFromLead(m as unknown as Record<string, unknown>);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
+  // Join confirmation email with the renewal terms (never throws; once per membership).
+  await runHook("onActivated", { ...m, ...update } as MembershipDoc);
   return { ...m, ...update } as Membership;
 }
 

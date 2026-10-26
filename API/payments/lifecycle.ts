@@ -252,6 +252,7 @@ export type Actor = { uid: string; email: string; role: string };
 
 /** Hooks other P2 modules attach (emails). Kept here so lifecycle has no email imports. */
 export const lifecycleHooks: {
+  onActivated?: (m: MembershipDoc) => Promise<void>; // P7: join confirmation email
   onRenewed?: (m: MembershipDoc, ref: string) => Promise<void>;
   onPastDue?: (m: MembershipDoc) => Promise<void>;
   onCancelled?: (m: MembershipDoc) => Promise<void>;

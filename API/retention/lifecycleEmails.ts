@@ -8,6 +8,7 @@
  *   access paused    day 7 (end of the grace window)
  *   cancellation confirmed (member asked to cancel)
  *   renewal receipt  (a new paid period started)
+ *   join confirmed   (membership activated: renewal terms and how to cancel, P7)
  *
  * `installLifecycleEmailHooks()` attaches the immediate ones to
  * payments/lifecycle.ts; `dunningSweep()` (daily, from jobs/retentionSweep.ts)
@@ -19,6 +20,7 @@ import log from "../../helper/log.ts";
 import {
   accessPausedEmail,
   cancellationConfirmedEmail,
+  joinConfirmedEmail,
   paymentFailedEmail,
   renewalReceiptEmail,
 } from "../../helper/emailTemplates.ts";
@@ -105,11 +107,38 @@ export async function sendRenewalReceipt(m: MembershipDoc): Promise<boolean> {
   );
 }
 
+const usd = (cents: number) => `US$${(cents / 100).toFixed(2)}`;
+
+/** Pure: the join confirmation for a just-activated membership. Exported for tests. */
+export function joinConfirmation(m: Pick<MembershipDoc, "periodEnd" | "minutesIncluded" | "callsIncluded">, firstName?: string) {
+  return joinConfirmedEmail({
+    firstName,
+    activationLabel: usd(PLAN_STANDARD.activationCents),
+    monthlyLabel: usd(PLAN_STANDARD.monthlyCents),
+    renewsOn: dateLabel(m.periodEnd),
+    minutes: m.minutesIncluded ?? PLAN_STANDARD.minutesIncluded,
+    calls: m.callsIncluded ?? PLAN_STANDARD.callsIncluded,
+    callLengthMin: PLAN_STANDARD.callLengthMin,
+    bookUrl: `${siteUrl()}/status/book`,
+    cancelUrl: `${siteUrl()}/status/money/cancel`,
+    termsUrl: `${siteUrl()}/terms`,
+  });
+}
+
+export async function sendJoinConfirmed(m: MembershipDoc): Promise<boolean> {
+  const to = await memberContact(m.clientId);
+  if (!to) return false;
+  return sendOnce(`join_confirmed_${m.id}`, to, joinConfirmation(m, to.firstName), { transactional: true });
+}
+
 let installed = false;
 /** Attach the immediate emails to the lifecycle transitions. Idempotent. */
 export function installLifecycleEmailHooks(): void {
   if (installed) return;
   installed = true;
+  lifecycleHooks.onActivated = async (m) => {
+    await sendJoinConfirmed(m);
+  };
   lifecycleHooks.onPastDue = async (m) => {
     const stage = dunningStage(daysPastDue(m, new Date())) ?? 0;
     await sendDunning(m, stage);
