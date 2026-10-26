@@ -8,6 +8,7 @@ import { taskRuleSweep } from "./taskRuleSweep.ts";
 import { membershipRenewalSweep } from "../API/payments/lifecycle.ts"; // P2
 import { retentionSweep } from "./retentionSweep.ts"; // P2
 import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"; // P2
+import { callReminders } from "./callReminders.ts"; // P3
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -75,6 +76,14 @@ export const jobs: JobDef[] = [
     cron: "0 14 * * *",
     handler: async () => {
       await retentionSweep();
+    },
+  },
+  // P3: call reminders (24 h, 1 h) and Meet transcript pickup.
+  {
+    name: "callReminders",
+    cron: "*/15 * * * *",
+    handler: async () => {
+      await callReminders();
     },
   },
 ];
