@@ -18,6 +18,7 @@
 import type { Request, Response, NextFunction } from "express";
 import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
+import { auditStaffBypass } from "./audit.ts";
 
 /** Shared token resolution: header first, then `?token=` query param. */
 function resolveToken(req: Request): string | undefined {
@@ -196,6 +197,7 @@ export async function requireProviderAuth(
             session.email;
           (req as Request & { providerUser?: string; providerId?: string }).providerId =
             provider?.id ? String(provider.id) : "";
+          auditStaffBypass(session.email, "lawyer", `provider:${provider?.id ?? "none"}`, { path: req.path });
           next();
           return;
         }
@@ -234,6 +236,7 @@ export async function requireClientAuth(
           // Staff acting on a member's portal name the member explicitly.
           const target = (req.query.clientId as string) || (req.headers["x-client-id"] as string);
           if (target) r.clientId = String(target);
+          auditStaffBypass(session.email, "client", `client:${target || "none"}`, { path: req.path });
           next();
           return;
         }

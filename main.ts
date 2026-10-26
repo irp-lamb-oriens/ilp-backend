@@ -53,6 +53,7 @@ import clientsBulkImportRouter from "./API/dashboard/clientsBulkImportRouter.ts"
 import portalRouter from "./API/portal/portalRouter.ts";
 import pushRouter from "./API/push/pushRouter.ts";
 import membersRouter from "./API/members/membersRouter.ts";
+import { loginHooks } from "./helper/auth/loginHooks.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -120,6 +121,9 @@ function createServer() {
       const big = /\/(import|bulk-import|voice-transcribe|upload|chat|chatbot|attachment|documents?)(\/|$|-)/.test(req.path);
       (big ? bigJson : smallJson)(req, res, next);
     });
+
+    // Audit + session hooks around the three OTP verify routes (before routers).
+    app.use(loginHooks);
 
     profilesRouter(app);
     rulesRouter(app);
