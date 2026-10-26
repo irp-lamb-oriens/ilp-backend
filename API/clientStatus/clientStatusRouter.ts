@@ -51,6 +51,8 @@ import {
 import { ensureFieldConfig, getFieldConfigSync } from "../dashboard/automation/fieldConfig.ts";
 import type { FieldDef } from "../dashboard/automation/fieldDefaults.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
+import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
+import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
 import {
   countryCodeFromName,
   prioritiesForCountry,
@@ -493,6 +495,12 @@ export default (app: Express) => {
 
       if (!message || typeof message !== "string" || !message.trim()) {
         return res.status(400).json({ error: "message is required." });
+      }
+
+      // P7: members need a granted, not withdrawn, ai_assistant consent.
+      const sessionClientId = (req as Request & { clientId?: string }).clientId || id;
+      if (!isStaff && !(await aiAssistantAllowed(sessionClientId))) {
+        return res.status(403).json(AI_CONSENT_REQUIRED);
       }
 
       const doc = await get(CLIENTS_COLLECTION, id);

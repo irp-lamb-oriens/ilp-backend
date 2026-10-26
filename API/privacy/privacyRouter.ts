@@ -56,6 +56,7 @@ import {
   type JoinConsents,
   joinConsentsToWrite,
   LEGAL_VERSIONS,
+  aiAssistantGranted,
   latestConsents,
   parseConsentInput,
   parseJoinConsents,
@@ -115,6 +116,17 @@ export async function recordJoinConsents(
     meta: { source: "join", kinds: written.map((w) => `${w.kind}:${w.granted ? "yes" : "no"}`), versions: written.map((w) => w.version) },
   });
   return written;
+}
+
+/** True when the member's newest ai_assistant consent is granted (fails closed on a read error). */
+export async function aiAssistantAllowed(clientId: string): Promise<boolean> {
+  if (!clientId) return false;
+  try {
+    const rows = await query(COLLECTIONS.consents, [{ field: "clientId", op: "EQUAL", value: clientId }]);
+    return aiAssistantGranted(rows as unknown as ConsentRecord[]);
+  } catch {
+    return false;
+  }
 }
 
 async function requestsOf(clientId: string): Promise<PrivacyRequest[]> {

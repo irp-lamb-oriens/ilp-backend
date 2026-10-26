@@ -57,6 +57,8 @@ import {
   resolveClientDisplayStage,
 } from "../dashboard/automation/stageConfig.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
+import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
+import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
 import auditLog from "../../helper/auditLog.ts";
 import {
   auditDocumentDownload,
@@ -544,6 +546,8 @@ export function registerMemberHomeRoutes(app: Express) {
       if (!id) return;
       const message = String(req.body?.message ?? "").trim().slice(0, 2000);
       if (!message) return res.status(400).json({ error: "Write a question first." });
+      // P7: members need a granted, not withdrawn, ai_assistant consent.
+      if (!isStaff(req) && !(await aiAssistantAllowed(id))) return res.status(403).json(AI_CONSENT_REQUIRED);
       await chatPreservingDoc(id, message, actor(req), isStaff(req));
       const doc = (await get(CLIENTS, id)) as Doc | null;
       res.json({ items: mergeThread(doc ?? {}, memberName(doc)) });

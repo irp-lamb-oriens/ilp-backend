@@ -140,6 +140,17 @@ export function latestConsents(records: ConsentRecord[]): Partial<Record<Consent
   return out;
 }
 
+/** The AI assistant may answer only after the member accepted the notice and has not withdrawn it (P7). */
+export function aiAssistantGranted(records: ConsentRecord[]): boolean {
+  return latestConsents(records).ai_assistant?.granted === true;
+}
+
+export const AI_CONSENT_REQUIRED = {
+  error: "Read and accept the AI assistant notice in Messages before asking the assistant.",
+  code: "ai_consent_required",
+  where: "/status/messages",
+} as const;
+
 export function consentId(): string {
   return `cns_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
