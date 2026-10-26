@@ -62,14 +62,8 @@ const DAY = 86_400_000;
 const LOOKAHEAD_DAYS = 14;
 
 /** Consultation plus the P3 bookkeeping fields stored on the same record. */
-export type CallRecord = Consultation & {
-  calendarError?: string | null;
-  chargedAt?: string;
-  restoredAt?: string;
-  transcriptFetchAttempts?: number;
-  transcriptSource?: string;
-  bookedBy?: string;
-};
+/** A consultation as API/calls reads it (P3 fields now live in contracts.ts). */
+export type CallRecord = Consultation;
 
 export const frontendUrl = () => (Deno.env.get("FRONTEND_URL") ?? "http://localhost:3000").replace(/\/$/, "");
 export const lawyerBriefUrl = (consultationId: string) => `${frontendUrl()}/lawyer/calls/${encodeURIComponent(consultationId)}`;

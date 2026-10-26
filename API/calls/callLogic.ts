@@ -66,7 +66,7 @@ export const toMinutes = (hhmm: string) => {
 };
 
 /** Settings as saved: the contract fields plus an optional calendar to read busy times from. */
-export type AvailabilityDoc = LawyerAvailability & { calendarId?: string | null };
+export type AvailabilityDoc = LawyerAvailability;
 
 /**
  * Validate and normalise an availability body. Returns the record to store,
@@ -392,7 +392,7 @@ export function pickMeetDocument(attachments: CalendarAttachment[] | undefined):
 
 /** Should the sweep try to fetch the Meet transcript for this call now? */
 export function transcriptFetchDue(
-  c: Pick<Consultation, "scheduledAt" | "durationMin" | "status" | "consent" | "transcript" | "calendarEventId"> & { transcriptFetchAttempts?: number },
+  c: Pick<Consultation, "scheduledAt" | "durationMin" | "status" | "consent" | "transcript" | "calendarEventId" | "transcriptFetchAttempts">,
   now: Date,
   maxAttempts = 8,
 ): boolean {

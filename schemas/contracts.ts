@@ -140,8 +140,11 @@ export interface Consultation {
   minutesUsed?: number; // actual, charged against membership
   status: ConsultationStatus;
   question?: string; // what the member wants to ask
-  consent: { recording: ConsentState; at?: Iso };
+  consent: { recording: ConsentState; at?: Iso; by?: string; where?: string }; // by: role that answered; where: booking | join | privacy_page | …
   transcript?: string;
+  transcriptSource?: string; // e.g. "meet_transcript", "upload", "pasted"
+  transcriptFetchedAt?: Iso;
+  transcriptFetchAttempts?: number; // Meet transcript sweep, gives up after a few
   summary?: { text: string; status: "suggested" | "confirmed"; confirmedAt?: Iso };
   suggestedNextSteps?: LegalNextStep[]; // AI draft with the suggested summary; lawyer confirms
   handoffId?: string;
@@ -150,6 +153,18 @@ export interface Consultation {
   calendarEventId?: string;
   remindersSent?: string[]; // e.g. ["24h", "1h"]
   rating?: { score: 1 | 2 | 3 | 4 | 5; comment?: string; at: Iso }; // member, after the call
+  // Call lifecycle (P3, API/calls)
+  bookedBy?: string;
+  calendarError?: string | null; // last Calendar/Meet failure; null once retried OK
+  chargedAt?: Iso; // minutes charged to the membership
+  restoredAt?: Iso; // staff gave the call back (e.g. no-show forgiven)
+  noShowAt?: Iso;
+  noShowMarkedBy?: string;
+  cancelledAt?: Iso;
+  cancelledBy?: string;
+  rescheduledAt?: Iso;
+  rescheduledBy?: string;
+  previousScheduledAt?: Iso;
   createdAt: Iso;
 }
 
@@ -308,6 +323,7 @@ export interface LawyerAvailability {
   minLeadHours: number; // default 18
   maxCallsPerDay: number; // default 6
   specialties: string[]; // legal areas, used for routing
+  calendarId?: string | null; // lawyer's Google Calendar for busy times; null = ILP calendar only
   updatedAt: Iso;
 }
 

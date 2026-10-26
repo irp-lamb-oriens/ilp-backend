@@ -163,7 +163,7 @@ export function lawyerStatusError(next: unknown, current: string): string | null
  * Charge a completed consultation against the member's membership once.
  * Idempotent: the consultation carries `chargedAt` after the first charge.
  */
-export async function chargeConsultation(c: Consultation & { chargedAt?: string }): Promise<Membership | null> {
+export async function chargeConsultation(c: Consultation): Promise<Membership | null> {
   if (c.status !== "completed" || c.chargedAt) return null;
   const m = await currentMembership(c.clientId);
   if (!m) return null;
