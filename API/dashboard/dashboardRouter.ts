@@ -8,7 +8,8 @@ import query from "../../db/query.ts";
 import getAll from "../../db/getAll.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import {
-  generateOtp,
+  issueOtp,
+  verifyOtp,
   generateSessionToken,
   isAllowedDomain,
   emailToDocId,
@@ -103,17 +104,10 @@ export default (app: Express) => {
         return res.status(403).json({ error: "Access restricted to ILP team members." });
       }
 
-      const code = generateOtp();
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
-      const otpDocId = emailToDocId(email);
-
-      await put("dashboard_otps", otpDocId, {
-        code,
-        email,
-        createdAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      });
+      const normalizedEmail = email.trim().toLowerCase();
+      const issued = await issueOtp("dashboard_otps", emailToDocId(normalizedEmail), normalizedEmail);
+      if (!issued.ok) return res.status(issued.status).json({ error: issued.error });
+      const code = issued.code;
 
       try {
         await sendEmailTransport({
@@ -145,22 +139,23 @@ export default (app: Express) => {
       const { email, code } = req.body;
       if (!email || !code) return res.status(400).json({ error: "Email and code are required." });
 
-      const otpDocId = emailToDocId(email);
-      const otpDoc = await get("dashboard_otps", otpDocId);
-      if (!otpDoc) return res.status(401).json({ error: "No verification code found. Please request a new one." });
-      if (String(otpDoc.code).trim() !== String(code).trim()) return res.status(401).json({ error: "Invalid verification code." });
-      if (new Date(otpDoc.expiresAt as string) < new Date()) return res.status(401).json({ error: "Verification code expired." });
+      const normalizedEmail = String(email).trim().toLowerCase();
+      if (!isAllowedDomain(normalizedEmail)) {
+        return res.status(403).json({ error: "Access restricted to ILP team members." });
+      }
+      const check = await verifyOtp("dashboard_otps", emailToDocId(normalizedEmail), code);
+      if (!check.ok) return res.status(check.status).json({ error: check.error });
 
       const token = generateSessionToken();
       const sessionExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
       await put("dashboard_sessions", token, {
-        email,
+        email: normalizedEmail,
         createdAt: new Date().toISOString(),
         expiresAt: sessionExpiry.toISOString(),
       });
 
       log(`[dashboard] Session created for ${email}`);
-      res.json({ success: true, token, email, expiresAt: sessionExpiry.toISOString() });
+      res.json({ success: true, token, email: normalizedEmail, expiresAt: sessionExpiry.toISOString() });
     })
   );
 

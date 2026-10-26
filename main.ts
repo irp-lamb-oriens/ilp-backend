@@ -73,7 +73,19 @@ function createServer() {
     const server = http.createServer(app);
 
     app.set("trust proxy", true);
-    app.use(cors({ origin: "*" }));
+    // Allow only known front-end origins (comma-separated ALLOWED_ORIGINS).
+    // Localhost dev origins are permitted when not in production.
+    const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
+      .split(",").map((o) => o.trim()).filter(Boolean);
+    if (!isProduction) allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
+    app.use(cors({
+      origin: (origin, cb) => {
+        // Non-browser clients (curl, server-to-server, health checks) send no Origin.
+        if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+        cb(null, false);
+      },
+      allowedHeaders: ["Content-Type", "x-dashboard-token", "x-provider-token", "x-client-token", "Authorization"],
+    }));
 
     app.use((req: Request, _res: Response, next: NextFunction) => {
       log(`${req.method} ${req.originalUrl}`, "request");
@@ -100,7 +112,13 @@ function createServer() {
 
     app.use(globalLimiter);
     app.use("/api/", apiLimiter);
-    app.use(express.json({ limit: "10mb" }));
+    // Small default body limit; import/upload-style routes keep the large one.
+    const bigJson = express.json({ limit: "10mb" });
+    const smallJson = express.json({ limit: "1mb" });
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      const big = /\/(import|bulk-import|voice-transcribe|upload|chat|chatbot|attachment|documents?)(\/|$|-)/.test(req.path);
+      (big ? bigJson : smallJson)(req, res, next);
+    });
 
     profilesRouter(app);
     rulesRouter(app);

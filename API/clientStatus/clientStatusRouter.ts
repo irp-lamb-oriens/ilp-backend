@@ -29,7 +29,8 @@ import put from "../../db/put.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import {
-  generateOtp,
+  issueOtp,
+  verifyOtp,
   generateSessionToken,
   emailToDocId,
 } from "../../helper/auth/otp.ts";
@@ -273,18 +274,10 @@ export default (app: Express) => {
         return res.status(403).json({ error: "Email not authorized for this project." });
       }
 
-      const code = generateOtp();
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
       const otpDocId = `${projectId}__${emailToDocId(normalizedEmail)}`;
-
-      await put(OTP_COLLECTION, otpDocId, {
-        code,
-        email: normalizedEmail,
-        projectId,
-        createdAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      });
+      const issued = await issueOtp(OTP_COLLECTION, otpDocId, normalizedEmail, { projectId });
+      if (!issued.ok) return res.status(issued.status).json({ error: issued.error });
+      const code = issued.code;
 
       try {
         await sendEmailTransport({
@@ -325,10 +318,8 @@ export default (app: Express) => {
       const normalizedEmail = String(email).toLowerCase().trim();
       const otpDocId = `${projectId}__${emailToDocId(normalizedEmail)}`;
 
-      const otpDoc = await get(OTP_COLLECTION, otpDocId);
-      if (!otpDoc) return res.status(401).json({ error: "No verification code found. Please request a new one." });
-      if (String(otpDoc.code).trim() !== String(code).trim()) return res.status(401).json({ error: "Invalid verification code." });
-      if (new Date(otpDoc.expiresAt as string) < new Date()) return res.status(401).json({ error: "Verification code expired." });
+      const check = await verifyOtp(OTP_COLLECTION, otpDocId, code);
+      if (!check.ok) return res.status(check.status).json({ error: check.error });
 
       const token = generateSessionToken();
       const sessionExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);

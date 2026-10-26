@@ -21,12 +21,12 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
-import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
 import put from "../../db/put.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import {
-  generateOtp,
+  issueOtp,
+  verifyOtp,
   generateSessionToken,
   emailToDocId,
 } from "../../helper/auth/otp.ts";
@@ -60,17 +60,10 @@ export default function providerAuthRouter(app: Express) {
         return res.status(404).json({ error: "No lawyer account found for this email." });
       }
 
-      const code = generateOtp();
-      const now = new Date();
-      const expiresAt = new Date(now.getTime() + 10 * 60 * 1000);
-      const otpDocId = emailToDocId(email);
-
-      await put("provider_otps", otpDocId, {
-        code,
-        email: email.trim().toLowerCase(),
-        createdAt: now.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-      });
+      const normalizedEmail = email.trim().toLowerCase();
+      const issued = await issueOtp("provider_otps", emailToDocId(normalizedEmail), normalizedEmail);
+      if (!issued.ok) return res.status(issued.status).json({ error: issued.error });
+      const code = issued.code;
 
       try {
         await sendEmailTransport({
@@ -104,17 +97,9 @@ export default function providerAuthRouter(app: Express) {
         return res.status(400).json({ error: "Email and code are required." });
       }
 
-      const otpDocId = emailToDocId(email);
-      const otpDoc = await get("provider_otps", otpDocId);
-      if (!otpDoc) {
-        return res.status(401).json({ error: "No verification code found. Please request a new one." });
-      }
-      if (String(otpDoc.code).trim() !== String(code).trim()) {
-        return res.status(401).json({ error: "Invalid verification code." });
-      }
-      if (new Date(otpDoc.expiresAt as string) < new Date()) {
-        return res.status(401).json({ error: "Verification code expired." });
-      }
+      const normalizedEmail = String(email).trim().toLowerCase();
+      const check = await verifyOtp("provider_otps", emailToDocId(normalizedEmail), code);
+      if (!check.ok) return res.status(check.status).json({ error: check.error });
 
       const provider = await findProviderByEmail(email);
       if (!provider) {
