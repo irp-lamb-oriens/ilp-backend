@@ -11,7 +11,7 @@ import {
   nextPeriod,
   renewalFields,
 } from "../API/payments/lifecycle.ts";
-import { stripeKeyAllowed } from "../API/payments/membership.ts";
+import { portalSessionBody, stripeKeyAllowed } from "../API/payments/membership.ts";
 
 /**
  * P2 payments lifecycle: pure rules only (no Firestore, no Stripe).
@@ -100,4 +100,11 @@ Deno.test("live Stripe keys need STRIPE_ALLOW_LIVE", () => {
   assertEquals(stripeKeyAllowed("sk_live_abc", false), false);
   assertEquals(stripeKeyAllowed("sk_live_abc", true), true);
   assertEquals(stripeKeyAllowed("pk_live_abc", true), false);
+});
+
+Deno.test("join portal session: no token in the body unless header tokens are on", () => {
+  const issued = { token: "secret", expiresAt: "2026-11-02T12:00:00.000Z" };
+  const s = { clientId: "c1", email: "a@b.co" };
+  assertEquals(portalSessionBody(issued, s, false), { projectId: "c1", email: "a@b.co", expiresAt: issued.expiresAt });
+  assertEquals(portalSessionBody(issued, s, true).token, "secret");
 });

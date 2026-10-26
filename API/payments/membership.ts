@@ -20,6 +20,7 @@ import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import { auditAuth } from "../../helper/auth/audit.ts";
+import { SESSION_TTL_MS } from "../../helper/auth/cookies.ts";
 import { emitEvent, seedObligationsFromLead } from "../members/events.ts";
 import { onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated } from "./lifecycle.ts";
 import {
@@ -244,7 +245,8 @@ export async function issuePortalSession(
   if (!s.newClient || s.sessionIssuedAt) return null;
   const portalToken = generateSessionToken();
   const now = nowIso();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  // Same lifetime as an email-code login: 7 days, sliding (session.ts).
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS.client).toISOString();
   await put(CLIENT_SESSION_COLLECTION, portalToken, {
     email: s.email,
     projectId: s.clientId,
@@ -255,6 +257,21 @@ export async function issuePortalSession(
   await patch(JOIN_COLLECTION, token, { sessionIssuedAt: now });
   auditAuth("auth.login", { email: s.email, role: "client" }, `client:${s.email}`, { portal: "client", via: "join" });
   return { token: portalToken, expiresAt };
+}
+
+/**
+ * JSON body for the join portal-session route. The session secret lives only
+ * in the HttpOnly cookie; `token` is added only when legacy header tokens are
+ * on (AUTH_HEADER_TOKENS=true). Pure; exported for tests.
+ */
+export function portalSessionBody(
+  issued: { token: string; expiresAt: string },
+  s: { clientId: string; email: string },
+  includeToken: boolean,
+): Record<string, string> {
+  const body: Record<string, string> = { projectId: s.clientId, email: s.email, expiresAt: issued.expiresAt };
+  if (includeToken) body.token = issued.token;
+  return body;
 }
 
 // ─── Stripe (test mode) ────────────────────────────────────────────────────
