@@ -3,10 +3,13 @@ import { verifyToken } from "./verifyToken.ts";
 import type { Role, SessionUser } from "./types.ts";
 import get from "../../db/get.ts";
 import log from "../log.ts";
+import { cookieToken, headerTokensEnabled } from "./cookies.ts";
 
 /**
  * Express middleware that resolves the current user from EITHER:
- *   1. `x-dashboard-token` (dashboard OTP session) — treated as staff, OR
+ *   1. the staff session cookie `ilp_staff_session` (or, only when
+ *      AUTH_HEADER_TOKENS=true, the legacy `x-dashboard-token` header) —
+ *      treated as staff, OR
  *   2. `Authorization: Bearer <JWT>` (customer / provider / staff JWT)
  * and applies optional role checks.
  *
@@ -30,7 +33,9 @@ export default function validateUser(allowed?: Role | Role[]) {
     //    OTP and stores a session doc keyed by a random token; it never mints a
     //    JWT. Resolve that session here so staff routes work with the same
     //    token the rest of the dashboard uses.
-    const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
+    const dashboardToken =
+      (headerTokensEnabled() ? (req.headers["x-dashboard-token"] as string | undefined) : undefined) ||
+      cookieToken(req, "staff");
     if (dashboardToken) {
       try {
         const session = await get("dashboard_sessions", dashboardToken);

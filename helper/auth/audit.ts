@@ -5,6 +5,7 @@
  *   auth.login         successful OTP verification, all three portals
  *   auth.login_failed  rejected OTP verification (wrong / expired / locked)
  *   auth.logout        explicit logout
+ *   auth.logout_all    "sign out everywhere": every session of that email ended
  *   auth.staff_bypass  a staff session acting inside the lawyer or client portal
  *
  * Writes are fire-and-forget: an audit failure is logged, never surfaced to
@@ -18,7 +19,7 @@ import log from "../log.ts";
 export type PortalRole = "staff" | "lawyer" | "client";
 
 export function auditAuth(
-  action: "auth.login" | "auth.login_failed" | "auth.logout" | "auth.staff_bypass",
+  action: "auth.login" | "auth.login_failed" | "auth.logout" | "auth.logout_all" | "auth.staff_bypass",
   actor: { email: string; role: string; uid?: string },
   target: string,
   meta: Record<string, unknown> = {},

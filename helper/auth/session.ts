@@ -3,9 +3,11 @@
  * ──────────────────────────────────────────────────────────────────────────
  * Session middleware for the ILP platform.
  *
- * `requireDashboardAuth` resolves a staff session from `x-dashboard-token`
- * (or `?token=` for plain GET navigations) against the `dashboard_sessions`
- * collection and attaches the staff email to the request.
+ * `requireDashboardAuth` resolves a staff session from the HttpOnly
+ * `ilp_staff_session` cookie against the `dashboard_sessions` collection and
+ * attaches the staff email to the request. The legacy `x-dashboard-token`
+ * header and `?token=` query param are honoured only when
+ * AUTH_HEADER_TOKENS=true (seed scripts, local tools); see cookies.ts.
  *
  * `requireClientStatusAuth` is the client-portal variant (Phase 1): it reads
  * the same token shape but validates against `client_status_sessions` and
@@ -19,18 +21,37 @@ import type { Request, Response, NextFunction } from "express";
 import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
 import { auditStaffBypass } from "./audit.ts";
-import { cookieToken } from "./cookies.ts";
+import patch from "../../db/patch.ts";
+import log from "../log.ts";
+import {
+  CLIENT_SESSION_MAX_AGE_MS,
+  cookieToken,
+  headerTokensEnabled,
+  nextClientExpiry,
+  setSessionCookie,
+} from "./cookies.ts";
 
-/** Shared token resolution: header first, then `?token=` query param. */
-function resolveToken(req: Request): string | undefined {
-  return (req.headers["x-dashboard-token"] as string) || cookieToken(req, "staff") ||
-    (req.query.token as string);
+/** A legacy header token, only when AUTH_HEADER_TOKENS=true (P1: cookie-only by default). */
+function headerToken(req: Request, name: string): string | undefined {
+  if (!headerTokensEnabled()) return undefined;
+  return (req.headers[name] as string | undefined) || undefined;
 }
 
-/** Client-status token: legacy header first, then the client cookie. */
+/** `?token=` query param, same flag as the header tokens. */
+function queryToken(req: Request): string | undefined {
+  if (!headerTokensEnabled()) return undefined;
+  return typeof req.query.token === "string" && req.query.token ? req.query.token : undefined;
+}
+
+/** Shared token resolution: header first (if enabled), then the cookie, then `?token=`. */
+function resolveToken(req: Request): string | undefined {
+  return headerToken(req, "x-dashboard-token") || cookieToken(req, "staff") || queryToken(req);
+}
+
+/** Client-status token: legacy headers (if enabled), then the client cookie. */
 function resolveClientStatusToken(req: Request): string | undefined {
-  return (req.headers["x-dashboard-token"] as string) || (req.headers["x-client-token"] as string) ||
-    cookieToken(req, "client") || (req.query.token as string);
+  return headerToken(req, "x-dashboard-token") || headerToken(req, "x-client-token") ||
+    cookieToken(req, "client") || queryToken(req);
 }
 
 /** Shared session validation against a given collection. */
@@ -41,6 +62,8 @@ interface ResolvedSession {
   projectId?: string;
   /** Dashboard sessions: staff | csm | admin (missing → staff). */
   role?: StaffRole;
+  createdAt?: string;
+  expiresAt?: string;
 }
 
 /** Staff sub-roles on dashboard sessions. Missing on old sessions → "staff". */
@@ -71,12 +94,34 @@ async function resolveSession(
   if (session.expiresAt && new Date(session.expiresAt as string) < new Date()) {
     return null;
   }
+  // Sliding client sessions never outlive CLIENT_SESSION_MAX_AGE_MS from login.
+  if (
+    collection === "client_status_sessions" && typeof session.createdAt === "string" &&
+    Date.now() - new Date(session.createdAt).getTime() > CLIENT_SESSION_MAX_AGE_MS
+  ) {
+    return null;
+  }
   return {
     email: session.email as string,
     providerId: typeof session.providerId === "string" ? session.providerId : undefined,
     projectId: typeof session.projectId === "string" ? session.projectId : undefined,
     role: normalizeStaffRole(session.role),
+    createdAt: typeof session.createdAt === "string" ? session.createdAt : undefined,
+    expiresAt: typeof session.expiresAt === "string" ? session.expiresAt : undefined,
   };
+}
+
+/**
+ * Client sessions slide: push expiresAt to now + 7 d (at most once an hour,
+ * capped at 30 d from login) and re-set the cookie. Fire-and-forget.
+ */
+function slideClientSession(res: Response, token: string, session: ResolvedSession): void {
+  const next = nextClientExpiry(session);
+  if (!next) return;
+  setSessionCookie(res, "client", token, next);
+  patch("client_status_sessions", token, { expiresAt: next }).catch((err) =>
+    log(`[session] could not slide client session: ${err instanceof Error ? err.message : err}`, "error")
+  );
 }
 
 /** Resolve a provider doc for a staff member (dashboard bypass). */
@@ -149,6 +194,7 @@ export async function requireClientStatusAuth(
       return;
     }
     (req as Request & { clientUser?: string }).clientUser = session.email;
+    slideClientSession(res, token, session);
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });
@@ -170,8 +216,7 @@ export async function requireProviderAuth(
   // 1. Provider session via x-provider-token (the lawyer's own login). This
   //    takes precedence so a lawyer who also holds a staff dashboard session
   //    is still resolved as the lawyer, not the staff member.
-  const token = (req.headers["x-provider-token"] as string) || cookieToken(req, "lawyer") ||
-    (req.query.token as string);
+  const token = headerToken(req, "x-provider-token") || cookieToken(req, "lawyer") || queryToken(req);
   if (token) {
     try {
       const session = await resolveSession("provider_sessions", token);
@@ -190,7 +235,7 @@ export async function requireProviderAuth(
 
   // 2. Staff bypass via dashboard session (mirrors requireClientAuth). Only
   //    reached when there is no valid provider token.
-  const dashboardToken = (req.headers["x-dashboard-token"] as string | undefined) || cookieToken(req, "staff");
+  const dashboardToken = headerToken(req, "x-dashboard-token") || cookieToken(req, "staff");
   if (dashboardToken) {
     try {
       const session = await resolveSession("dashboard_sessions", dashboardToken);
@@ -231,8 +276,8 @@ export async function requireClientAuth(
   // Explicit headers keep their old precedence (staff, then client). Cookies
   // come after: the member's own cookie wins over a staff cookie in the same
   // browser, so a staff tester logged in as a member sees the member view.
-  const clientToken = (req.headers["x-client-token"] as string | undefined) || cookieToken(req, "client");
-  const dashboardToken = (req.headers["x-dashboard-token"] as string | undefined) ||
+  const clientToken = headerToken(req, "x-client-token") || cookieToken(req, "client");
+  const dashboardToken = headerToken(req, "x-dashboard-token") ||
     (clientToken ? undefined : cookieToken(req, "staff"));
 
   // 1. Staff bypass via dashboard session (org domain only).
@@ -273,6 +318,7 @@ export async function requireClientAuth(
     r.clientUser = session.email;
     r.isIrpStaff = false;
     r.clientId = session.projectId;
+    slideClientSession(res, clientToken, session);
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });

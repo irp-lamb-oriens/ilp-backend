@@ -15,6 +15,13 @@
  *   COOKIE_SAMESITE   Lax (default) | Strict | None (None when the API and
  *                     the front end are on different sites)
  *   COOKIE_INSECURE   "true" drops the Secure flag (plain-http dev only)
+ *   AUTH_HEADER_TOKENS "true" re-enables the legacy header / ?token= session
+ *                     tokens and returns `token` in verify-otp bodies (seed
+ *                     scripts, local tools). Default off: cookies only.
+ *
+ * Session lifetimes (P1): staff and lawyers 12 h from login; clients 7 days,
+ * sliding (each authenticated request at least an hour after the last refresh
+ * pushes expiry to now + 7 d), capped at 30 days from login.
  */
 
 import type { Request, Response } from "express";
@@ -25,6 +32,39 @@ export const SESSION_COOKIES: Record<PortalRole, string> = {
   lawyer: "ilp_lawyer_session",
   client: "ilp_client_session",
 };
+
+/** Legacy header / query tokens: only when AUTH_HEADER_TOKENS === "true". */
+export function headerTokensEnabled(): boolean {
+  return Deno.env.get("AUTH_HEADER_TOKENS") === "true";
+}
+
+const HOUR_MS = 3600_000;
+export const SESSION_TTL_MS: Record<PortalRole, number> = {
+  staff: 12 * HOUR_MS,
+  lawyer: 12 * HOUR_MS,
+  client: 7 * 24 * HOUR_MS,
+};
+/** Client sessions slide, but never past this age (from createdAt). */
+export const CLIENT_SESSION_MAX_AGE_MS = 30 * 24 * HOUR_MS;
+/** Refresh a sliding client session at most this often. */
+export const CLIENT_SLIDE_EVERY_MS = HOUR_MS;
+
+/**
+ * Sliding client expiry: the new expiresAt to store, or null when no refresh
+ * is due yet. Pure; exported for tests.
+ */
+export function nextClientExpiry(
+  session: { createdAt?: unknown; expiresAt?: unknown },
+  now = Date.now(),
+): string | null {
+  const exp = session.expiresAt ? new Date(String(session.expiresAt)).getTime() : NaN;
+  const created = session.createdAt ? new Date(String(session.createdAt)).getTime() : NaN;
+  const cap = Number.isFinite(created) ? created + CLIENT_SESSION_MAX_AGE_MS : Infinity;
+  const target = Math.min(now + SESSION_TTL_MS.client, cap);
+  if (Number.isFinite(exp) && target - exp < CLIENT_SLIDE_EVERY_MS) return null;
+  if (target <= now) return null;
+  return new Date(target).toISOString();
+}
 
 export function parseCookies(header: string | string[] | undefined): Record<string, string> {
   const raw = Array.isArray(header) ? header.join(";") : header ?? "";

@@ -4,8 +4,9 @@ import { registerSessionHooks } from "../helper/auth/sessionHooks.ts";
 
 /**
  * loginHooks + session hooks against a fake Express req/res: a successful
- * lawyer verify-otp keeps the JSON body (token included, for header clients)
- * and sets the HttpOnly lawyer cookie; a failure sets nothing.
+ * lawyer verify-otp sets the HttpOnly lawyer cookie (12 h) and, unless
+ * AUTH_HEADER_TOKENS=true, drops `token` from the JSON body; a failure sets
+ * nothing.
  * Audit writes are fire-and-forget (they fail quietly without Firestore).
  *
  * Run: deno test --allow-env test/loginHooks_test.ts
@@ -30,21 +31,47 @@ function fakeRes() {
 }
 
 Deno.test({
-  name: "lawyer login sets the HttpOnly cookie and keeps the token in the body",
+  name: "lawyer login sets a 12 h HttpOnly cookie and drops the token from the body (cookie-only default)",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
     Deno.env.set("COOKIE_INSECURE", "false");
+    Deno.env.delete("AUTH_HEADER_TOKENS");
     registerSessionHooks();
     const req: Any = { method: "POST", path: "/api/provider/auth/verify-otp", body: { email: "Lawyer@x.com" }, headers: {} };
     const f = fakeRes();
     loginHooks(req, f.res, () => {});
-    f.res.json({ success: true, token: "tok123", email: "lawyer@x.com", expiresAt: new Date(Date.now() + 3600_000).toISOString() });
+    f.res.json({ success: true, token: "tok123", email: "lawyer@x.com", expiresAt: new Date(Date.now() + 24 * 3600_000).toISOString() });
     await f.done;
-    assertEquals((f.body() as Any).token, "tok123");
+    const body = f.body() as Any;
+    assertEquals("token" in body, false);
+    const hours = (new Date(body.expiresAt).getTime() - Date.now()) / 3600_000;
+    assertEquals(hours > 11.9 && hours <= 12, true);
     const cookies = f.headers["set-cookie"] as string[];
     assertEquals(cookies.length, 1);
     assertEquals(cookies[0].startsWith("ilp_lawyer_session=tok123; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age="), true);
+    const maxAge = Number(/Max-Age=(\d+)/.exec(cookies[0])?.[1]);
+    assertEquals(maxAge > 11.9 * 3600 && maxAge <= 12 * 3600, true);
+  },
+});
+
+Deno.test({
+  name: "AUTH_HEADER_TOKENS=true keeps the token in the body; client sessions last 7 days",
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    Deno.env.set("AUTH_HEADER_TOKENS", "true");
+    registerSessionHooks();
+    const req: Any = { method: "POST", path: "/api/client-status/auth/verify-otp", body: { email: "m@x.com" }, headers: {} };
+    const f = fakeRes();
+    loginHooks(req, f.res, () => {});
+    f.res.json({ success: true, token: "ctok", email: "m@x.com" });
+    await f.done;
+    const body = f.body() as Any;
+    Deno.env.delete("AUTH_HEADER_TOKENS");
+    assertEquals(body.token, "ctok");
+    const days = (new Date(body.expiresAt).getTime() - Date.now()) / 86400_000;
+    assertEquals(days > 6.99 && days <= 7, true);
   },
 });
 
