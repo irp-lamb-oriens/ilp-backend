@@ -45,9 +45,28 @@ Deno.test("capacity: blocks when fewer than 20 minutes remain", () => {
   ok(c.reason?.includes("15 minutes"), c.reason);
 });
 
-Deno.test("capacity: past_due and missing membership cannot book", () => {
-  eq(bookingCapacity({ ...active, status: "past_due" }, []).canBook, false);
+Deno.test("capacity: missing, pending and cancelled memberships cannot book", () => {
   eq(bookingCapacity(null, []).canBook, false);
+  eq(bookingCapacity({ ...active, status: "pending" }, []).canBook, false);
+  eq(bookingCapacity({ ...active, status: "cancelled" }, []).canBook, false);
+});
+
+Deno.test("capacity: past_due books inside the 7-day grace, with a notice", () => {
+  const pastDue = { ...active, status: "past_due" as const, pastDueSince: "2026-10-20T12:00:00.000Z" };
+  // 6 days 23 h after the failed payment: still inside the grace window.
+  const c = bookingCapacity(pastDue, [], 20, new Date("2026-10-27T11:00:00.000Z"));
+  eq(c.canBook, true);
+  ok(c.notice?.includes("did not go through"), c.notice);
+  eq(c.graceEndsAt, "2026-10-27T12:00:00.000Z");
+});
+
+Deno.test("capacity: past_due is blocked once the grace ends, with a clear reason", () => {
+  const pastDue = { ...active, status: "past_due" as const, pastDueSince: "2026-10-20T12:00:00.000Z" };
+  // Exactly 7 days after: access pauses.
+  const c = bookingCapacity(pastDue, [], 20, new Date("2026-10-27T12:00:00.000Z"));
+  eq(c.canBook, false);
+  ok(c.reason?.includes("paused"), c.reason);
+  eq(c.notice, undefined);
 });
 
 Deno.test("slots: weekdays only, CR business hours, 20 minutes apart, taken removed", () => {

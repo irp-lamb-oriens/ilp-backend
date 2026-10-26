@@ -3,7 +3,8 @@
  * ──────────────────────────────────────────────────────────────────────────
  * Pure helpers for the member home (W4). No I/O, so they run under tests.
  *
- *   • booking capacity (calls + minutes left, counting calls already booked)
+ *   • booking capacity (calls + minutes left, counting calls already booked;
+ *     past_due members keep booking during the 7-day grace, see accessFor)
  *   • 20-minute slot generation in Costa Rica business hours
  *   • the single "next step" for a matter (matter.nextStep vs latest handoff)
  *   • money: charges + quotes normalised to integer cents, no cost/margin data
@@ -17,6 +18,7 @@ import {
   type Membership,
   PLAN_STANDARD,
 } from "../../schemas/contracts.ts";
+import { accessFor } from "../payments/lifecycle.ts";
 
 // ─── Booking capacity ──────────────────────────────────────────────────────
 
@@ -30,14 +32,23 @@ export interface Capacity {
   canBook: boolean;
   /** Plain-language reason when canBook is false. */
   reason?: string;
+  /** Gentle note while booking is still allowed (past_due inside the grace window). */
+  notice?: string;
+  /** When access pauses for a past_due member. */
+  graceEndsAt?: string;
 }
 
 const isUpcoming = (c: Pick<Consultation, "status">) => c.status === "booked" || c.status === "in_progress";
 
 export function bookingCapacity(
-  m: Pick<Membership, "status" | "minutesIncluded" | "minutesUsed" | "callsIncluded" | "callsUsed" | "periodEnd"> | null,
+  m:
+    | (Pick<Membership, "status" | "minutesIncluded" | "minutesUsed" | "callsIncluded" | "callsUsed" | "periodEnd"> & {
+      pastDueSince?: string;
+    })
+    | null,
   consultations: Array<Pick<Consultation, "status" | "durationMin">>,
   callLengthMin: number = PLAN_STANDARD.callLengthMin,
+  now: Date = new Date(),
 ): Capacity {
   const minutesLeft = m ? Math.max(0, (m.minutesIncluded ?? 0) - (m.minutesUsed ?? 0)) : 0;
   const callsLeft = m ? Math.max(0, (m.callsIncluded ?? 0) - (m.callsUsed ?? 0)) : 0;
@@ -46,12 +57,11 @@ export function bookingCapacity(
   const callsBooked = upcoming.length;
   const minutesAvailable = Math.max(0, minutesLeft - minutesBooked);
   const callsAvailable = Math.max(0, callsLeft - callsBooked);
+  // Status rule shared with payments: active, or past_due inside the 7-day grace.
+  const access = accessFor(m, now);
   let reason: string | undefined;
-  if (!m) reason = "You need an active membership to book a call.";
-  else if (m.status !== "active") {
-    reason = m.status === "past_due"
-      ? "Your membership payment is overdue. Once it is paid you can book calls again."
-      : "Your membership is not active, so calls cannot be booked.";
+  if (!m || !access.canBook) {
+    reason = access.message ?? "Your membership is not active, so calls cannot be booked.";
   } else if (callsAvailable <= 0) {
     reason = callsBooked > 0
       ? `You have used or booked all ${m.callsIncluded} calls for this month. New calls open on ${shortDate(m.periodEnd)}.`
@@ -68,6 +78,8 @@ export function bookingCapacity(
     callsAvailable,
     canBook: !reason,
     reason,
+    ...(access.inGrace ? { notice: access.message } : {}),
+    ...(access.graceEndsAt ? { graceEndsAt: access.graceEndsAt } : {}),
   };
 }
 
