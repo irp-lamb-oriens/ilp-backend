@@ -17,6 +17,7 @@ import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { requireStaffRole } from "../../helper/auth/roles.ts";
 import {
   countClientsInStage,
   deleteStageDoc,
@@ -75,6 +76,7 @@ export default function stageConfigRouter(app: Express): void {
   app.patch(
     "/api/dashboard/stage-config/reorder",
     requireDashboardAuth,
+    requireStaffRole("admin"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = (req as any).dashboardUser ?? "dashboard";
       const orderedIds: unknown = req.body?.orderedIds;
@@ -92,6 +94,7 @@ export default function stageConfigRouter(app: Express): void {
   app.post(
     "/api/dashboard/stage-config",
     requireDashboardAuth,
+    requireStaffRole("admin"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = (req as any).dashboardUser ?? "dashboard";
       const b = req.body ?? {};
@@ -150,6 +153,7 @@ export default function stageConfigRouter(app: Express): void {
   app.patch(
     "/api/dashboard/stage-config/:id",
     requireDashboardAuth,
+    requireStaffRole("admin"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = (req as any).dashboardUser ?? "dashboard";
       const { id } = req.params;
@@ -194,6 +198,7 @@ export default function stageConfigRouter(app: Express): void {
   app.post(
     "/api/dashboard/stage-config/:id/migrate-clients",
     requireDashboardAuth,
+    requireStaffRole("admin"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = (req as any).dashboardUser ?? "dashboard";
       const { id } = req.params;
@@ -219,6 +224,7 @@ export default function stageConfigRouter(app: Express): void {
   app.delete(
     "/api/dashboard/stage-config/:id",
     requireDashboardAuth,
+    requireStaffRole("admin"),
     asyncHandler(async (req: Request, res: Response) => {
       const actor = (req as any).dashboardUser ?? "dashboard";
       const { id } = req.params;
