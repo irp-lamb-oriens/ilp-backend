@@ -44,9 +44,21 @@ const isObj = (v: unknown): v is Obj =>
 
 const num = (v: unknown) => (typeof v === "number" ? v : parseFloat(String(v ?? ""))) || 0;
 
-/** A quote document: has a quote id and line items. */
+/** A quote document: quote editor shape (lineItems) or the seed/legacy shape (lines). */
 function isQuote(o: Obj): boolean {
-  return ("quoteId" in o || "lineGroups" in o) && Array.isArray(o.lineItems);
+  if (Array.isArray(o.lineItems)) return "quoteId" in o || "lineGroups" in o;
+  return Array.isArray(o.lines) && ("totalMinor" in o || "title" in o) && ("status" in o);
+}
+
+/** Client-price keys dropped from quotes (fee + price would reveal the margin). */
+const QUOTE_PRICE_KEYS = new Set(["total", "totalMinor"]);
+
+function quoteLines(o: Obj): Obj[] {
+  if (Array.isArray(o.lineItems)) return o.lineItems.filter(isObj);
+  return (Array.isArray(o.lines) ? o.lines : []).filter(isObj).map((l) => ({
+    ...l,
+    amount: l.amount ?? (typeof l.amountMinor === "number" ? l.amountMinor / 100 : 0),
+  }));
 }
 
 /** Sum of the lines that are this lawyer's fee (their own lines, or unassigned lines). */
@@ -61,9 +73,9 @@ export function lawyerFee(lineItems: unknown[], providerId?: string): number {
 }
 
 /**
- * Deep copy with hidden fields removed. Quote documents also lose `total`
- * (the client price, which with the fee would reveal the margin) and gain
- * `yourFee`.
+ * Deep copy with hidden fields removed. Quote documents also lose `total` /
+ * `totalMinor` (the client price, which with the fee would reveal the margin)
+ * and gain `yourFee`.
  */
 export function toLawyerPayload<T>(value: T, providerId?: string): T {
   const hidden = new Set(PROVIDER_HIDDEN_FIELDS);
@@ -74,10 +86,10 @@ export function toLawyerPayload<T>(value: T, providerId?: string): T {
     const out: Obj = {};
     for (const [k, x] of Object.entries(v)) {
       if (hidden.has(k)) continue;
-      if (quote && k === "total") continue;
+      if (quote && QUOTE_PRICE_KEYS.has(k)) continue;
       out[k] = walk(x);
     }
-    if (quote) out.yourFee = lawyerFee(v.lineItems as unknown[], providerId);
+    if (quote) out.yourFee = lawyerFee(quoteLines(v), providerId);
     return out;
   };
   return walk(value) as T;
@@ -92,7 +104,7 @@ export function findHiddenKeys(value: unknown, path = "$"): string[] {
     if (!isObj(v)) return;
     const quote = isQuote(v);
     for (const [k, x] of Object.entries(v)) {
-      if (hidden.has(k) || (quote && k === "total")) found.push(`${p}.${k}`);
+      if (hidden.has(k) || (quote && QUOTE_PRICE_KEYS.has(k))) found.push(`${p}.${k}`);
       walk(x, `${p}.${k}`);
     }
   };

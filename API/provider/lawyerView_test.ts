@@ -39,6 +39,9 @@ const payloads: Record<string, unknown> = {
     total: 1,
   },
   "GET /api/provider/clients/:id/quotes": { quotes: [quote] },
+  "GET /api/provider/clients/:id (seed quote shape)": {
+    quotes: [{ id: "demo_quote_alvarez_1", title: "S.A. clean-up", lines: [{ label: "Tax", amountMinor: 45000 }], totalMinor: 145000, status: "sent" }],
+  },
   "GET /api/provider/clients/:id/quotes/:quoteId": quote,
   "POST /api/provider/clients/:id/quotes": { success: true, quote },
   "GET /api/lawyer/handoffs": {
@@ -69,6 +72,13 @@ Deno.test("quotes lose the client price and show the lawyer's own fee", () => {
   assertEquals(out.total, undefined);
   assertEquals(out.yourFee, 1450); // l1 (own) + l2 (unassigned); l3 belongs to p2
   assertEquals((out.lineItems as Array<Record<string, unknown>>)[0].amount, 650);
+});
+
+Deno.test("seed-shape quotes get yourFee from lines", () => {
+  const q = { id: "x", title: "t", status: "sent", totalMinor: 99000, lines: [{ label: "a", amountMinor: 45000 }, { label: "b", amountMinor: 100000 }] };
+  const out = toLawyerPayload(q) as Record<string, unknown>;
+  assertEquals(out.totalMinor, undefined);
+  assertEquals(out.yourFee, 1450);
 });
 
 Deno.test("middleware filters res.json for every route", () => {
