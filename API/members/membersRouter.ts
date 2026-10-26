@@ -30,6 +30,7 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
+import query from "../../db/query.ts";
 import {
   type AuthedRequest,
   requireClientAuth,
@@ -38,6 +39,7 @@ import {
 } from "../../helper/auth/session.ts";
 import {
   COLLECTIONS,
+  type ConsentRecord,
   type Consultation,
   type CsmTask,
   type Handoff,
@@ -64,6 +66,7 @@ import {
   withDefaults,
 } from "./service.ts";
 import { onRecordCreated, onRecordUpdated } from "./events.ts";
+import { recordingWithdrawn } from "../privacy/policy.ts";
 
 /** Query-string keys accepted as equality filters on staff lists. */
 const FILTER_KEYS = [
@@ -377,7 +380,19 @@ export default function membersRouter(app: Express) {
       const fields: Record<string, unknown> = {};
       for (const k of LAWYER_CONSULTATION_FIELDS) if (req.body?.[k] !== undefined) fields[k] = req.body[k];
       if (fields.consent && typeof fields.consent === "object") {
-        fields.consent = { ...(fields.consent as Record<string, unknown>), at: nowIso() };
+        const recording = (fields.consent as Record<string, unknown>).recording;
+        if (recording !== "granted" && recording !== "declined" && recording !== "pending") {
+          return res.status(400).json({ error: "consent.recording must be granted, declined or pending." });
+        }
+        // P7: a member who withdrew recording on /status/privacy turns it back
+        // on themselves (join screen or privacy page), not through the lawyer.
+        if (recording === "granted") {
+          const rows = (await query(COLLECTIONS.consents, [{ field: "clientId", op: "EQUAL", value: before.clientId }]).catch(() => null)) as ConsentRecord[] | null;
+          if (!rows || recordingWithdrawn(rows)) {
+            return res.status(409).json({ error: "The member withdrew recording consent. Only the member can turn it back on, from the join screen or their privacy page." });
+          }
+        }
+        fields.consent = { recording, at: nowIso(), by: "lawyer", where: "lawyer_call" };
       }
       if (fields.summary && typeof fields.summary === "object") {
         const s = fields.summary as Record<string, unknown>;
