@@ -6,8 +6,7 @@ import { getGoogleAccessToken } from "../../helper/getGoogleAuthClient.ts";
 /**
  * Calendar events listing for ILP (International Legal Partner).
  * Ported from IRP-funnel's calendar router, tailored to ILP:
- * - Google subject email is now configurable via GOOGLE_SUBJECT_EMAIL
- *   (defaults to luisarmando@internationalrelocationpartner.com).
+ * - Google subject email comes from GOOGLE_SUBJECT_EMAIL (required, no default).
  * - CALENDAR_ID is read from the environment, same as IRP.
  */
 export default (app: Express) => {

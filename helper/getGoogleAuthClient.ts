@@ -37,9 +37,11 @@ export const getGoogleAccessToken = async (scopeOverride?: string[]) => {
 
   const email = serviceAccount.client_email;
   const privateKey = serviceAccount.private_key;
-  const subject =
-    Deno.env.get("GOOGLE_SUBJECT_EMAIL") ??
-    "luisarmando@internationalrelocationpartner.com";
+  // P7: no built-in fallback (the old IRP address was one). Set it per deploy.
+  const subject = (Deno.env.get("GOOGLE_SUBJECT_EMAIL") ?? "").trim();
+  if (!subject) {
+    throw new Error("GOOGLE_SUBJECT_EMAIL is not set (the Workspace user the service account acts as).");
+  }
 
   const scopes = (scopeOverride && scopeOverride.length > 0
     ? scopeOverride
