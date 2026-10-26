@@ -15,6 +15,8 @@
  *   ilp_chatbot_threads  public website chatbot threads          RETENTION_CHATBOT_MONTHS (6)
  *   consultations        transcript, summary text removed N      RETENTION_TRANSCRIPT_MONTHS (24)
  *                        months after the membership ended
+ *                        (cancelledAt, else periodEnd; past_due counts as
+ *                        ended at periodEnd once the 7-day grace is over)
  *
  * At most RETENTION_MAX_DELETES_PER_RUN (500) changes per target per run;
  * the rest go on the next day. Queries are single-field range filters
@@ -28,6 +30,7 @@ import replaceDoc from "../db/replace.ts";
 import auditLog from "../helper/auditLog.ts";
 import log from "../helper/log.ts";
 import { COLLECTIONS } from "../schemas/contracts.ts";
+import { GRACE_DAYS } from "../API/payments/lifecycle.ts";
 import { daysBefore, monthsBefore, olderThan, type RetentionConfig, retentionConfig } from "../API/privacy/policy.ts";
 
 type Doc = Record<string, unknown>;
@@ -75,11 +78,29 @@ export function retentionTargets(cfg: RetentionConfig, now: Date): RetentionTarg
   ];
 }
 
-/** Pure: the membership ended before the cutoff and the member has no open membership. */
-export function transcriptExpired(memberships: Doc[], cutoff: Date): boolean {
+/**
+ * Pure: when a membership ended, or null while it is still open (P7).
+ * cancelled → cancelledAt, else periodEnd (a membership can end at period end
+ * without cancelledAt); past_due → periodEnd once the grace window is over
+ * (access paused); pending / active / past_due inside grace → still open.
+ */
+export function membershipEndedAt(m: Doc, now: Date): string | null {
+  const status = String(m.status ?? "");
+  const periodEnd = typeof m.periodEnd === "string" ? m.periodEnd : "";
+  if (status === "cancelled") return String(m.cancelledAt ?? periodEnd) || "";
+  if (status === "past_due") {
+    const end = Date.parse(periodEnd);
+    if (Number.isNaN(end) || end + GRACE_DAYS * 86_400_000 > now.getTime()) return null;
+    return periodEnd;
+  }
+  return null;
+}
+
+/** Pure: every membership of the member ended before the cutoff (none still open). */
+export function transcriptExpired(memberships: Doc[], cutoff: Date, now: Date = new Date()): boolean {
   if (!memberships.length) return false;
-  if (memberships.some((m) => ["pending", "active", "past_due"].includes(String(m.status)))) return false;
-  const ends = memberships.map((m) => String(m.cancelledAt ?? m.periodEnd ?? ""));
+  const ends = memberships.map((m) => membershipEndedAt(m, now));
+  if (ends.some((e) => e === null)) return false;
   return ends.every((e) => olderThan(e, cutoff));
 }
 
@@ -113,15 +134,20 @@ export async function runRetention(store: RetentionStore, cfg: RetentionConfig, 
     counts[t.name] = n;
   }
 
-  // Transcripts: cancelled memberships whose end is older than the cutoff.
+  // Transcripts: memberships that ended before the cutoff. Candidates come
+  // from cancelledAt and from periodEnd (cancelled at period end without
+  // cancelledAt, or past_due beyond grace); transcriptExpired decides.
   const cutoff = monthsBefore(now, cfg.transcriptMonthsAfterEnd);
-  const ended = await store.olderThan(COLLECTIONS.memberships, "cancelledAt", cutoff.toISOString()).catch(() => [] as Doc[]);
+  const ended = [
+    ...await store.olderThan(COLLECTIONS.memberships, "cancelledAt", cutoff.toISOString()).catch(() => [] as Doc[]),
+    ...await store.olderThan(COLLECTIONS.memberships, "periodEnd", cutoff.toISOString()).catch(() => [] as Doc[]),
+  ];
   const clients = [...new Set(ended.map((m) => String(m.clientId ?? "")).filter(Boolean))];
   let trimmed = 0;
   for (const clientId of clients) {
     if (trimmed >= cfg.maxDeletesPerRun) break;
     const ms = await store.where(COLLECTIONS.memberships, "clientId", clientId);
-    if (!transcriptExpired(ms, cutoff)) continue;
+    if (!transcriptExpired(ms, cutoff, now)) continue;
     for (const c of await store.where(COLLECTIONS.consultations, "clientId", clientId)) {
       if (!TRANSCRIPT_FIELDS.some((f) => c[f] !== undefined)) continue;
       const next: Doc = { ...c, transcriptRemovedAt: now.toISOString() };

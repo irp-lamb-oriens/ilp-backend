@@ -11,7 +11,7 @@ import {
 } from "../API/privacy/policy.ts";
 import { buildExport, type ExportBundle } from "../API/privacy/exportData.ts";
 import { erasureBlocker, planErasure, runErasure, type Store, subjectFor } from "../API/privacy/erasure.ts";
-import { retentionTargets, runRetention, type RetentionStore, transcriptExpired } from "../jobs/privacyRetention.ts";
+import { membershipEndedAt, retentionTargets, runRetention, type RetentionStore, transcriptExpired } from "../jobs/privacyRetention.ts";
 import { cleanUri, parseCspReports, resetCspThrottle, shouldStore } from "../API/privacy/cspReport.ts";
 import type { ConsentRecord } from "../schemas/contracts.ts";
 
@@ -246,6 +246,39 @@ Deno.test("retention: deletes only what is past its period", async () => {
   assertEquals(counts["transcripts after membership end"], 1);
   assertEquals(retentionTargets(RETENTION_DEFAULTS, NOW).length, 12);
   assertEquals(transcriptExpired([], new Date()), false);
+});
+
+Deno.test("retention: memberships that ended without cancelledAt (period end, past_due beyond grace) (P7)", async () => {
+  const st = retStore({
+    memberships: [
+      { id: "m_pe", clientId: "cli_period_end", status: "cancelled", periodEnd: "2024-02-01T00:00:00Z" },
+      { id: "m_pd", clientId: "cli_past_due", status: "past_due", periodEnd: "2024-03-01T00:00:00Z" },
+      { id: "m_recent", clientId: "cli_recent", status: "cancelled", periodEnd: "2026-01-01T00:00:00Z" },
+    ],
+    consultations: [
+      { id: "c_pe", clientId: "cli_period_end", transcript: "t", minutesUsed: 20 },
+      { id: "c_pd", clientId: "cli_past_due", summary: { text: "s" } },
+      { id: "c_recent", clientId: "cli_recent", transcript: "t" },
+    ],
+  });
+  const counts = await runRetention(st, RETENTION_DEFAULTS, NOW);
+  const con = (id: string) => st.db.get("consultations")!.get(id)!;
+  assertEquals([con("c_pe").transcript, con("c_pe").minutesUsed, typeof con("c_pe").transcriptRemovedAt], [undefined, 20, "string"]);
+  assertEquals(con("c_pd").summary, undefined);
+  assertEquals(con("c_recent").transcript, "t"); // ended 10 months ago: inside 24 months
+  assertEquals(counts["transcripts after membership end"], 2);
+
+  // the end date rules themselves
+  assertEquals(membershipEndedAt({ status: "cancelled", cancelledAt: "2024-01-15T00:00:00Z", periodEnd: "2024-02-01T00:00:00Z" }, NOW), "2024-01-15T00:00:00Z");
+  assertEquals(membershipEndedAt({ status: "cancelled", periodEnd: "2024-02-01T00:00:00Z" }, NOW), "2024-02-01T00:00:00Z");
+  assertEquals(membershipEndedAt({ status: "past_due", periodEnd: "2026-10-22T00:00:00Z" }, NOW), null); // day 4 of 7: still open
+  assertEquals(membershipEndedAt({ status: "past_due", periodEnd: "2026-10-18T00:00:00Z" }, NOW), "2026-10-18T00:00:00Z"); // beyond grace
+  assertEquals(membershipEndedAt({ status: "active", periodEnd: "2024-01-01T00:00:00Z" }, NOW), null);
+  assertEquals(membershipEndedAt({ status: "pending" }, NOW), null);
+  // a past_due inside grace keeps every transcript, even with an old cancelled membership beside it
+  const cutoff = new Date("2024-10-26T00:00:00Z");
+  assertEquals(transcriptExpired([{ status: "cancelled", cancelledAt: "2023-01-01T00:00:00Z" }, { status: "past_due", periodEnd: "2026-10-24T00:00:00Z" }], cutoff, NOW), false);
+  assertEquals(transcriptExpired([{ status: "cancelled", cancelledAt: "2023-01-01T00:00:00Z" }, { status: "past_due", periodEnd: "2024-01-01T00:00:00Z" }], cutoff, NOW), true);
 });
 
 Deno.test("retention: per-run cap", async () => {
