@@ -57,6 +57,7 @@ import callsRouter from "./API/calls/callsRouter.ts"; // P3
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { documentAccessRouter } from "./helper/storage.ts";
+import { securityHeaders } from "./helper/auth/securityHeaders.ts";
 import { errorHandler, installProcessErrorHandlers, registerHealthRoutes } from "./helper/errorReporter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
@@ -80,6 +81,9 @@ function createServer() {
     const server = http.createServer(app);
 
     app.set("trust proxy", true);
+    app.disable("x-powered-by");
+    // nosniff, no-referrer, frame-ancestors 'none', HSTS in production.
+    app.use(securityHeaders(isProduction));
     // Allow only known front-end origins (comma-separated ALLOWED_ORIGINS).
     // Localhost dev origins are permitted when not in production.
     const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
