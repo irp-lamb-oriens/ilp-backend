@@ -19,10 +19,18 @@ import type { Request, Response, NextFunction } from "express";
 import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
 import { auditStaffBypass } from "./audit.ts";
+import { cookieToken } from "./cookies.ts";
 
 /** Shared token resolution: header first, then `?token=` query param. */
 function resolveToken(req: Request): string | undefined {
-  return (req.headers["x-dashboard-token"] as string) || (req.query.token as string);
+  return (req.headers["x-dashboard-token"] as string) || cookieToken(req, "staff") ||
+    (req.query.token as string);
+}
+
+/** Client-status token: legacy header first, then the client cookie. */
+function resolveClientStatusToken(req: Request): string | undefined {
+  return (req.headers["x-dashboard-token"] as string) || (req.headers["x-client-token"] as string) ||
+    cookieToken(req, "client") || (req.query.token as string);
 }
 
 /** Shared session validation against a given collection. */
@@ -129,7 +137,7 @@ export async function requireClientStatusAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const token = resolveToken(req);
+  const token = resolveClientStatusToken(req);
   if (!token) {
     res.status(401).json({ error: "Authentication required." });
     return;
@@ -162,8 +170,8 @@ export async function requireProviderAuth(
   // 1. Provider session via x-provider-token (the lawyer's own login). This
   //    takes precedence so a lawyer who also holds a staff dashboard session
   //    is still resolved as the lawyer, not the staff member.
-  const token =
-    (req.headers["x-provider-token"] as string) || (req.query.token as string);
+  const token = (req.headers["x-provider-token"] as string) || cookieToken(req, "lawyer") ||
+    (req.query.token as string);
   if (token) {
     try {
       const session = await resolveSession("provider_sessions", token);
@@ -182,7 +190,7 @@ export async function requireProviderAuth(
 
   // 2. Staff bypass via dashboard session (mirrors requireClientAuth). Only
   //    reached when there is no valid provider token.
-  const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
+  const dashboardToken = (req.headers["x-dashboard-token"] as string | undefined) || cookieToken(req, "staff");
   if (dashboardToken) {
     try {
       const session = await resolveSession("dashboard_sessions", dashboardToken);
@@ -220,8 +228,12 @@ export async function requireClientAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const dashboardToken = req.headers["x-dashboard-token"] as string | undefined;
-  const clientToken = req.headers["x-client-token"] as string | undefined;
+  // Explicit headers keep their old precedence (staff, then client). Cookies
+  // come after: the member's own cookie wins over a staff cookie in the same
+  // browser, so a staff tester logged in as a member sees the member view.
+  const clientToken = (req.headers["x-client-token"] as string | undefined) || cookieToken(req, "client");
+  const dashboardToken = (req.headers["x-dashboard-token"] as string | undefined) ||
+    (clientToken ? undefined : cookieToken(req, "staff"));
 
   // 1. Staff bypass via dashboard session (org domain only).
   if (dashboardToken) {

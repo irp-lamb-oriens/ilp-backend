@@ -54,6 +54,7 @@ import portalRouter from "./API/portal/portalRouter.ts";
 import pushRouter from "./API/push/pushRouter.ts";
 import membersRouter from "./API/members/membersRouter.ts";
 import { loginHooks } from "./helper/auth/loginHooks.ts";
+import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -86,7 +87,9 @@ function createServer() {
         if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
         cb(null, false);
       },
-      allowedHeaders: ["Content-Type", "x-dashboard-token", "x-provider-token", "x-client-token", "Authorization"],
+      // Cookies (HttpOnly sessions) need credentials; the header tokens still work.
+      credentials: true,
+      allowedHeaders: ["Content-Type", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "Authorization"],
     }));
 
     app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -123,7 +126,9 @@ function createServer() {
     });
 
     // Audit + session hooks around the three OTP verify routes (before routers).
+    registerSessionHooks();
     app.use(loginHooks);
+    sessionRoutes(app);
 
     profilesRouter(app);
     rulesRouter(app);
