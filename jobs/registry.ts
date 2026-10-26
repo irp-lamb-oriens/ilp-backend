@@ -4,6 +4,7 @@ import { runEscalationWorkflow } from "./escalation.ts";
 import { generateAlerts } from "../helper/alertEngine.ts";
 import { deadlineFollowupSweep } from "./deadlineFollowup.ts";
 import { deadlineReminderSweep } from "./deadlineReminderSweep.ts";
+import { taskRuleSweep } from "./taskRuleSweep.ts";
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -50,5 +51,10 @@ export const jobs: JobDef[] = [
     name: "deadlineReminderSweep",
     cron: "0 8 * * *",
     handler: deadlineReminderSweep,
+  },
+  {
+    name: "taskRuleSweep",
+    cron: "30 7 * * *",
+    handler: taskRuleSweep,
   },
 ];

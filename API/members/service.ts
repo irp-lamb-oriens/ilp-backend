@@ -183,6 +183,7 @@ export function profileRecord(client: Record<string, unknown> | null): Record<st
   const nested = {
     ...((client.profile as Record<string, unknown>) ?? {}),
     ...((client.fields as Record<string, unknown>) ?? {}),
+    ...((client.clientFields as Record<string, unknown>) ?? {}),
   };
   return { ...nested, ...client };
 }

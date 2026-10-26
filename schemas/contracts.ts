@@ -188,6 +188,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "membership.activated": { type: "onboarding", dueInHours: 24, title: "Welcome call and profile review" },
   "consultation.booked": { type: "follow_up", dueInHours: 24, title: "Check profile is consultation-ready" },
   "handoff.approved": { type: "follow_up", dueInHours: 24, title: "Send next steps and confirm with member" },
+  "handoff.opportunity": { type: "proposal", dueInHours: 48, title: "Prepare proposal" }, // handoff carries commercialNotes
   "document.missing_3d": { type: "missing_document", dueInHours: 48, title: "Chase missing document" },
   "quote.unanswered_5d": { type: "proposal", dueInHours: 48, title: "Follow up on open proposal" },
   "membership.renewal_7d": { type: "renewal", dueInHours: 72, title: "Renewal check-in" },
