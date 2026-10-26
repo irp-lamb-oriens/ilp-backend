@@ -21,6 +21,7 @@ import {
   readJoinSession,
   startJoin,
 } from "./membership.ts";
+import { markRenewalPaid, membershipById } from "./lifecycle.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -54,6 +55,7 @@ const joinLimiter = rateLimit({
  *   POST /api/payments/join/:token/portal-session — first portal session for a brand-new member
  *   POST /api/payments/stripe/webhook             — Stripe events (verified by fetching them back)
  *   POST /api/payments/memberships/:id/mark-paid  — staff: manual mode payment received
+ *                                                   (pending → activate; active/past_due → renewal, lifecycle.ts)
  */
 export default function paymentsRouter(app: Express) {
   log("Payments router initialized.");
@@ -184,11 +186,23 @@ export default function paymentsRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const staff = (req as Request & { dashboardUser?: string }).dashboardUser ?? "staff";
       const reference = sanitizeStr(req.body?.reference).slice(0, 120);
-      const m = await activateMembership(
-        req.params.id,
-        `manual:${reference || "marked-paid"}`,
-        { uid: staff, email: staff, role: "staff" },
-      );
+      const ref = `manual:${reference || "marked-paid"}`;
+      const actor = { uid: staff, email: staff, role: "staff" };
+      const current = await membershipById(req.params.id);
+      if (!current) return res.status(404).json({ error: "Membership not found." });
+      if (current.status === "cancelled") return res.status(409).json({ error: "This membership is cancelled." });
+      // Pending → first payment (activation). Active or past due → renewal.
+      if (current.status !== "pending") {
+        const daysLeft = (Date.parse(current.periodEnd) - Date.now()) / 86_400_000;
+        if (current.status === "active" && daysLeft > 10) {
+          return res.status(409).json({
+            error: `This membership is paid until ${current.periodEnd.slice(0, 10)}. Record the next payment within 10 days of that date.`,
+          });
+        }
+        const { membership, rolled } = await markRenewalPaid(current, ref, actor);
+        return res.status(200).json({ ...membership, renewal: rolled ? "started" : "recorded" });
+      }
+      const m = await activateMembership(req.params.id, ref, actor);
       if (!m) return res.status(404).json({ error: "Membership not found." });
       res.status(200).json(m);
     }),

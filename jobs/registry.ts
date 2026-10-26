@@ -5,6 +5,7 @@ import { generateAlerts } from "../helper/alertEngine.ts";
 import { deadlineFollowupSweep } from "./deadlineFollowup.ts";
 import { deadlineReminderSweep } from "./deadlineReminderSweep.ts";
 import { taskRuleSweep } from "./taskRuleSweep.ts";
+import { membershipRenewalSweep } from "../API/payments/lifecycle.ts"; // P2
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -56,5 +57,13 @@ export const jobs: JobDef[] = [
     name: "taskRuleSweep",
     cron: "30 7 * * *",
     handler: taskRuleSweep,
+  },
+  // P2: manual-mode renewals (past due / cancel at period end / prepaid renewal).
+  {
+    name: "membershipRenewalSweep",
+    cron: "20 * * * *",
+    handler: async () => {
+      await membershipRenewalSweep();
+    },
   },
 ];

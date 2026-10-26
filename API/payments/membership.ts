@@ -4,7 +4,9 @@
  * Join funnel (W3): lead → client → pending membership → paid → active.
  *
  * Payments run behind PAYMENTS_MODE:
- *   "stripe"  Stripe Checkout in test mode; the webhook activates the membership.
+ *   "stripe"  Stripe Checkout (test keys; live keys need STRIPE_ALLOW_LIVE=true);
+ *             the webhook activates the membership, and lifecycle.ts handles
+ *             renewals, failed payments and cancellations.
  *   otherwise "manual": the membership stays pending until staff marks it paid
  *             (POST /api/payments/memberships/:id/mark-paid). For demos only,
  *             PAYMENTS_DEMO_AUTOPAY=true activates it immediately.
@@ -19,6 +21,7 @@ import auditLog from "../../helper/auditLog.ts";
 import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import { auditAuth } from "../../helper/auth/audit.ts";
 import { emitEvent, seedObligationsFromLead } from "../members/events.ts";
+import { onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated } from "./lifecycle.ts";
 import {
   COLLECTIONS,
   type CountryCode,
@@ -217,20 +220,6 @@ export async function activateMembership(
   return { ...m, ...update } as Membership;
 }
 
-/** Set a status on the membership a Stripe subscription belongs to. */
-export async function setStatusByPaymentRef(paymentRef: string, status: "past_due" | "cancelled"): Promise<void> {
-  const rows = await query(COLLECTIONS.memberships, [{ field: "paymentRef", op: "EQUAL", value: paymentRef }]);
-  const now = nowIso();
-  for (const m of rows as unknown as Membership[]) {
-    await patch(COLLECTIONS.memberships, m.id, {
-      status,
-      updatedAt: now,
-      ...(status === "cancelled" ? { cancelledAt: now } : {}),
-    });
-    await auditLog({ actor: { uid: "stripe", email: "stripe", role: "system" }, action: `membership.${status}`, target: `memberships/${m.id}` });
-  }
-}
-
 export async function readJoinSession(token: string): Promise<JoinSession | null> {
   if (!token || token.length > 200) return null;
   const s = (await get(JOIN_COLLECTION, token).catch(() => null)) as unknown as JoinSession | null;
@@ -270,11 +259,16 @@ export async function issuePortalSession(
 
 // ─── Stripe (test mode) ────────────────────────────────────────────────────
 
-async function stripeApi(path: string, method: "GET" | "POST", form?: URLSearchParams): Promise<Doc> {
+/** Live keys (sk_live_…) are refused unless STRIPE_ALLOW_LIVE=true. Pure; exported for tests. */
+export function stripeKeyAllowed(key: string, allowLive: boolean): boolean {
+  return /^(sk|rk)_test_/.test(key) || (allowLive && /^(sk|rk)_live_/.test(key));
+}
+
+export async function stripeApi(path: string, method: "GET" | "POST" | "DELETE", form?: URLSearchParams): Promise<Doc> {
   const key = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
   if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
-  if (!key.startsWith("sk_test_") && Deno.env.get("STRIPE_ALLOW_LIVE") !== "true") {
-    throw new Error("Only Stripe test keys are allowed (set STRIPE_ALLOW_LIVE=true to go live)");
+  if (!stripeKeyAllowed(key, Deno.env.get("STRIPE_ALLOW_LIVE") === "true")) {
+    throw new Error("Only Stripe test keys are allowed (set STRIPE_ALLOW_LIVE=true to use a live key)");
   }
   const res = await fetch(`https://api.stripe.com/v1${path}`, {
     method,
@@ -324,21 +318,30 @@ export async function handleStripeEvent(body: Doc): Promise<string> {
   const evt = await stripeApi(`/events/${id}`, "GET");
   const obj = ((evt.data as Doc | undefined)?.object ?? {}) as Doc;
   const system = { uid: "stripe", email: "stripe", role: "system" };
+  let outcome = "ignored";
   switch (evt.type) {
     case "checkout.session.completed": {
       const membershipId = String((obj.metadata as Doc | undefined)?.membershipId ?? "");
       if (membershipId && obj.payment_status === "paid") {
         await activateMembership(membershipId, String(obj.subscription ?? obj.id), system);
+        outcome = "activated";
       }
       break;
     }
+    case "invoice.paid":
+      outcome = await onInvoicePaid(obj, (id, ref) => activateMembership(id, ref, system));
+      break;
     case "invoice.payment_failed":
-      if (obj.subscription) await setStatusByPaymentRef(String(obj.subscription), "past_due");
+      outcome = await onInvoiceFailed(obj);
+      break;
+    case "customer.subscription.updated":
+      outcome = await onSubscriptionUpdated(obj);
       break;
     case "customer.subscription.deleted":
-      await setStatusByPaymentRef(String(obj.id), "cancelled");
+      outcome = await onSubscriptionDeleted(obj);
       break;
   }
+  log(`[payments] stripe ${evt.type} ${id}: ${outcome}`, "payments");
   return String(evt.type);
 }
 
