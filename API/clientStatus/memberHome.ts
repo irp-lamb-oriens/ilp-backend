@@ -31,6 +31,7 @@ import query from "../../db/query.ts";
 import { type AuthedRequest, requireClientAuth } from "../../helper/auth/session.ts";
 import {
   COLLECTIONS,
+  type ConsentRecord,
   type Consultation,
   type Matter,
   type Obligation,
@@ -58,7 +59,7 @@ import {
 } from "../dashboard/automation/stageConfig.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
-import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
+import { AI_CONSENT_REQUIRED, bookingRecordingConsent } from "../privacy/policy.ts";
 import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import auditLog from "../../helper/auditLog.ts";
 import {
@@ -256,7 +257,10 @@ export function registerMemberHomeRoutes(app: Express) {
       if (!when || Number.isNaN(when.getTime())) return res.status(400).json({ error: "Pick a time for the call." });
       const q = typeof question === "string" ? question.trim().slice(0, 1000) : "";
       if (!q) return res.status(400).json({ error: "Tell us what you would like to ask." });
-      const consent = recordingConsent === "granted" || recordingConsent === "declined" ? recordingConsent : "pending";
+      // P7: with no answer on the form, a member who withdrew recording on
+      // /status/privacy books with recording declined.
+      const consentRows = (await query(COLLECTIONS.consents, [{ field: "clientId", op: "EQUAL", value: id }]).catch(() => [])) as unknown as ConsentRecord[];
+      const consent = bookingRecordingConsent(recordingConsent, consentRows);
 
       const bundle = await memberBundle(id);
       const cap = bookingCapacity(bundle.membership, bundle.consultations);
@@ -281,7 +285,9 @@ export function registerMemberHomeRoutes(app: Express) {
         durationMin: PLAN_STANDARD.callLengthMin,
         question: fullQuestion,
         bookedBy: actor(req),
-        consent: consent === "pending" ? { recording: "pending" } : { recording: consent, at: nowIso(), by: "client", where: "booking" },
+        consent: consent === "pending"
+          ? { recording: "pending" }
+          : { recording: consent, at: nowIso(), by: "client", where: recordingConsent === consent ? "booking" : "privacy_page" },
       });
       const created = await createRecord(COLLECTIONS.consultations, record);
       if (pending.length) await patch(CLIENTS, id, { pendingQuestions: [] });

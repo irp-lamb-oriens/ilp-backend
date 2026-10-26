@@ -29,6 +29,7 @@ import {
 } from "../../helper/calendar.ts";
 import {
   COLLECTIONS,
+  type ConsentRecord,
   type Consultation,
   type CsmTask,
   type Matter,
@@ -36,6 +37,7 @@ import {
   PLAN_STANDARD,
 } from "../../schemas/contracts.ts";
 import { emitEvent, taskIdFor } from "../members/events.ts";
+import { RECORDING_WITHDRAWN_MESSAGE, recordingAllowedFor } from "../privacy/policy.ts";
 import {
   currentMembership,
   findRecords,
@@ -463,8 +465,23 @@ export async function setConsent(c: CallRecord, recording: "granted" | "declined
  * event and store it on the consultation. Only for calls with recording
  * consent granted. Counts attempts so the sweep gives up after a while.
  */
+/**
+ * Granted on the call and not withdrawn by the member since (P7). Fails
+ * closed: if the consent history cannot be read, nothing is fetched.
+ */
+export async function recordingStillAllowed(c: Pick<CallRecord, "clientId" | "consent">): Promise<boolean> {
+  if (c.consent?.recording !== "granted") return false;
+  try {
+    const rows = await query(COLLECTIONS.consents, [{ field: "clientId", op: "EQUAL", value: c.clientId }]);
+    return recordingAllowedFor(c, rows as unknown as ConsentRecord[]);
+  } catch {
+    return false;
+  }
+}
+
 export async function pullMeetTranscript(c: CallRecord): Promise<{ status: "fetched" | "not_ready" | "no_event" | "no_consent"; text?: string; source?: string; message?: string }> {
   if (c.consent?.recording !== "granted") return { status: "no_consent", message: "Recording consent is not granted." };
+  if (!(await recordingStillAllowed(c))) return { status: "no_consent", message: RECORDING_WITHDRAWN_MESSAGE };
   if (!c.calendarEventId) return { status: "no_event", message: "This call has no Google Calendar event." };
   const r = await fetchMeetNotes(c.calendarEventId);
   if (r.status === "fetched") {

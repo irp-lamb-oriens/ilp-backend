@@ -147,6 +147,50 @@ export function aiAssistantGranted(records: ConsentRecord[]): boolean {
   return latestConsents(records).ai_assistant?.granted === true;
 }
 
+/**
+ * Recording consent, member level (P7). A record tied to one call
+ * (`consultationId`) answers for that call only; the newest record without one
+ * is the member's standing choice (e.g. withdrawn on /status/privacy).
+ */
+export function memberRecordingChoice(records: ConsentRecord[]): ConsentRecord | undefined {
+  let out: ConsentRecord | undefined;
+  for (const r of [...records].sort((a, b) => a.at.localeCompare(b.at))) {
+    if (r.kind === "recording" && !r.consultationId) out = r;
+  }
+  return out;
+}
+
+/** True when the member's standing recording choice is a withdrawal. */
+export function recordingWithdrawn(records: ConsentRecord[]): boolean {
+  return memberRecordingChoice(records)?.granted === false;
+}
+
+/**
+ * Recording state for a new booking: an explicit answer on the booking form
+ * wins; with none, a member who withdrew recording defaults to declined.
+ */
+export function bookingRecordingConsent(requested: unknown, records: ConsentRecord[]): "granted" | "declined" | "pending" {
+  if (requested === "granted" || requested === "declined") return requested;
+  return recordingWithdrawn(records) ? "declined" : "pending";
+}
+
+/**
+ * A call's transcript or recording may be fetched or stored only when the
+ * call's consent is granted and the member has not withdrawn recording since
+ * that grant.
+ */
+export function recordingAllowedFor(
+  c: { consent?: { recording?: string; at?: string } },
+  records: ConsentRecord[],
+): boolean {
+  if (c.consent?.recording !== "granted") return false;
+  const standing = memberRecordingChoice(records);
+  if (standing?.granted === false && standing.at >= (c.consent.at ?? "")) return false;
+  return true;
+}
+
+export const RECORDING_WITHDRAWN_MESSAGE = "The member withdrew recording consent, so no transcript or recording is kept for this call.";
+
 export const AI_CONSENT_REQUIRED = {
   error: "Read and accept the AI assistant notice in Messages before asking the assistant.",
   code: "ai_consent_required",

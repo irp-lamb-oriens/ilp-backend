@@ -44,6 +44,7 @@ import {
   loadAvailability,
   markNoShow,
   pullMeetTranscript,
+  recordingStillAllowed,
   rescheduleCall,
   restoreCall,
   saveAvailability,
@@ -51,6 +52,7 @@ import {
   setConsent,
   slotsFor,
 } from "./callService.ts";
+import { RECORDING_WITHDRAWN_MESSAGE } from "../privacy/policy.ts";
 
 const MAX_AUDIO_BYTES = 7 * 1024 * 1024; // the JSON body limit on upload routes is 10 MB (base64 adds a third)
 
@@ -178,6 +180,9 @@ export default function callsRouter(app: Express) {
       if (!c) return;
       if (c.consent?.recording !== "granted") {
         return res.status(409).json({ error: "The member did not agree to recording, so no recording can be stored or transcribed." });
+      }
+      if (!(await recordingStillAllowed(c))) {
+        return res.status(409).json({ error: RECORDING_WITHDRAWN_MESSAGE });
       }
       const b64 = typeof req.body?.dataBase64 === "string" ? req.body.dataBase64.replace(/^data:[^,]*,/, "") : "";
       if (!b64) return res.status(400).json({ error: "Choose an audio file." });
