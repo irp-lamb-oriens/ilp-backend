@@ -169,7 +169,6 @@ export async function deadlineReminderSweep(): Promise<void> {
         ? entry.remindedPushOffsets
         : [];
 
-      const title = priority.title;
       const body =
         days === 0
           ? `${priority.title} is due today.`
