@@ -350,7 +350,18 @@ function consultations(): Consultation[] {
   });
   return [
     // Today (lawyer Today screens)
-    c("hayes", 1, { scheduledAt: at(0, 10), question: "Is my S.A. in good standing, and what do I need to file before January?" }),
+    // Demo steps 5-6: consent granted and a suggested summary waiting for the lawyer to confirm.
+    c("hayes", 1, {
+      scheduledAt: at(0, 10),
+      question: "Is my S.A. in good standing, and what do I need to file before January?",
+      consent: { recording: "granted", at: at(0, 9, 58) },
+      transcript:
+        "Lawyer: Your S.A. is registered and active. Member: I haven't filed the corporation tax. Lawyer: The annual corporation tax is due January 31, and the beneficial-owner (RTBF) filing by April 30. Send me the legal books and I'll check the shareholder register.",
+      summary: {
+        text: "S.A. is active. Annual corporation tax may require filing by January 31 and the RTBF beneficial-owner filing by April 30. Member to send the legal books; lawyer to review the shareholder register.",
+        status: "suggested",
+      },
+    }),
     c("brooks", 2, { scheduledAt: at(0, 14), question: "What did the title study find on the boundary?" }),
     c("raman", 2, { scheduledAt: at(0, 11, 30), question: "Which documents do I need to register the imported car?" }),
     // Upcoming
