@@ -56,6 +56,7 @@ import membersRouter from "./API/members/membersRouter.ts";
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { documentAccessRouter } from "./helper/storage.ts";
+import { errorHandler, installProcessErrorHandlers, registerHealthRoutes } from "./helper/errorReporter.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -68,6 +69,7 @@ function createServer() {
       Deno.exit(1);
     }
 
+    installProcessErrorHandlers();
     const app = express();
     const isProduction = !!Deno.env.get("RENDER_EXTERNAL_URL");
     const port = parseInt(Deno.env.get("PORT") || "8000");
@@ -180,15 +182,11 @@ function createServer() {
     pushRouter(app);
     membersRouter(app);
 
-    app.get("/health", (_req: Request, res: Response) => {
-      res.status(200).json({ ok: true });
-    });
+    // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
+    registerHealthRoutes(app);
 
-    app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`Unhandled error: ${message}`, "error");
-      res.status(500).json({ error: "Internal server error." });
-    });
+    // Last: unhandled route errors → error_log (+ Sentry when SENTRY_DSN is set).
+    app.use(errorHandler);
 
     if (!baseUrl.includes("localhost") && Deno.env.get("CRON_RUNNER_ENABLED") === "true") {
       startCronRunner();
