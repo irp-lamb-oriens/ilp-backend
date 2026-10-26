@@ -45,40 +45,6 @@ export default function pushRouter(app: Express): void {
     }),
   );
 
-  // Public: the signup flow (lead capture) has no client session yet, so it
-  // subscribes by email. Mirrors the low-trust public /api/leads endpoint.
-  app.post(
-    "/api/push/subscribe-public",
-    asyncHandler(async (req: Request, res: Response) => {
-      const email = String(req.body?.email ?? "").toLowerCase().trim();
-      const sub = req.body?.subscription as PushSubscription | undefined;
-
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ error: "A valid email is required." });
-      }
-      if (
-        !sub ||
-        typeof sub.endpoint !== "string" ||
-        !sub.endpoint.startsWith("https://") ||
-        !sub.keys ||
-        typeof sub.keys.p256dh !== "string" ||
-        typeof sub.keys.auth !== "string"
-      ) {
-        return res.status(400).json({ error: "A valid push subscription is required." });
-      }
-
-      const id = emailToDocId(email);
-      await put(SUBSCRIPTIONS_COLLECTION, id, {
-        email,
-        subscription: sub,
-        updatedAt: new Date().toISOString(),
-      });
-
-      log(`[push] public subscription saved for ${email}`, "push");
-      res.json({ ok: true });
-    }),
-  );
-
   // Upsert a subscription for the signed-in client.
   app.post(
     "/api/push/subscribe",

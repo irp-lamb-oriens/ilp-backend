@@ -29,6 +29,10 @@ export function resolveClientEmail(
 ): string {
   const drip = doc.dripEmail;
   if (typeof drip === "string" && drip.includes("@")) return drip.toLowerCase().trim();
+  const direct = doc.email;
+  if (typeof direct === "string" && direct.includes("@")) {
+    return direct.toLowerCase().trim();
+  }
   const cons = Array.isArray(doc.consultations) ? doc.consultations : [];
   const latest = (cons[cons.length - 1] ?? {}) as Record<string, unknown>;
   if (typeof latest.email === "string" && latest.email.includes("@")) {

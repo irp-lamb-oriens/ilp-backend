@@ -92,6 +92,10 @@ interface StatusChatMessage {
 function resolvePrincipalEmail(doc: Record<string, unknown>, projectId: string): string {
   const drip = doc.dripEmail;
   if (typeof drip === "string" && drip.includes("@")) return drip.toLowerCase().trim();
+  const direct = doc.email;
+  if (typeof direct === "string" && direct.includes("@")) {
+    return direct.toLowerCase().trim();
+  }
   const dotted = projectId.replace(/_/g, ".");
   const parts = dotted.split(".");
   if (parts.length >= 2) {
