@@ -9,6 +9,7 @@
  *   GET   /api/provider/today?from=&to=              the lawyer's consultations in a window, with names
  *   GET   /api/provider/consultations/:id/brief      one-screen pre-call brief
  *   POST  /api/provider/consultations/:id/suggest    AI summary + next steps from the transcript ("suggested")
+ *   GET   /api/provider/clients/:id/brief            member brief for the inspector + this lawyer's calls
  *   GET   /api/provider/board                        matter cards (aging, overdue obligations)
  *   PATCH /api/provider/matters/:id/stage            { stage } → the changed card only
  *   GET   /api/provider/finance                      own fees: paid, pending, per matter, payout dates
@@ -317,6 +318,50 @@ export default function lawyerHomeRoutes(app: Express) {
       if (str(req.body?.transcript)) fields.transcript = transcript;
       await updateRecord(COLLECTIONS.consultations, c.id, fields);
       res.json({ summary: fields.summary, suggestedNextSteps: parsed.nextSteps });
+    }),
+  );
+
+  app.get(
+    "/api/provider/clients/:id/brief",
+    requireProviderAuth,
+    asyncHandler(async (req: Request, res: Response) => {
+      const pid = pidOf(req);
+      const clientId = req.params.id;
+      await ensureStageConfig();
+      const b = await memberBundle(clientId);
+      const assigned = b.client?.assignedProviderId === pid ||
+        b.matters.some((m) => m.assignedProviderId === pid) ||
+        b.consultations.some((c) => c.providerId === pid);
+      if (!b.client || !assigned) return res.status(404).json({ error: "Member not found." });
+      const mine = b.consultations
+        .filter((c) => c.providerId === pid)
+        .sort((a, z) => z.scheduledAt.localeCompare(a.scheduledAt));
+      const nowIso = new Date().toISOString();
+      const anchor = mine.filter((c) => c.status === "booked" && c.scheduledAt >= nowIso).pop() ?? mine[0] ??
+        ({ id: "", clientId, providerId: pid, scheduledAt: "", durationMin: 0, status: "booked", consent: { recording: "pending" }, createdAt: "" } as Consultation);
+      const brief = buildBrief({
+        consultation: anchor as Consultation & Obj,
+        client: b.client,
+        matters: b.matters.filter((m) => !m.assignedProviderId || m.assignedProviderId === pid),
+        obligations: b.obligations,
+        completeness: b.completeness,
+        minutesLeft: b.minutesLeft,
+        callsLeft: b.callsLeft,
+        priorSummaries: [],
+      });
+      res.json({
+        ...brief,
+        calls: mine.map((c) => ({
+          id: c.id,
+          scheduledAt: c.scheduledAt,
+          status: c.status,
+          question: c.question ?? null,
+          minutesUsed: c.minutesUsed ?? null,
+          summary: c.summary?.status === "confirmed" ? c.summary.text : null,
+          summaryStatus: c.summary?.status ?? null,
+          handoffId: c.handoffId ?? null,
+        })),
+      });
     }),
   );
 
