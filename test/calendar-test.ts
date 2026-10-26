@@ -14,7 +14,7 @@ import log from "../helper/log.ts";
  * Run: deno run --allow-net --allow-env --allow-read test/calendar-test.ts
  */
 
-const CALENDAR_ID = Deno.env.get("CALENDAR_ID");
+const CALENDAR_ID = Deno.env.get("CALENDAR_ID") ?? "";
 const SUBJECT = Deno.env.get("GOOGLE_SUBJECT_EMAIL");
 
 if (!CALENDAR_ID) {

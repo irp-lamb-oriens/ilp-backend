@@ -11,10 +11,10 @@ console.log(JSON.stringify({
   name: d?.name,
   email: d?.email,
   hasStatusComments: Array.isArray(d?.statusComments),
-  statusCommentsCount: d?.statusComments?.length,
+  statusCommentsCount: Array.isArray(d?.statusComments) ? d.statusComments.length : undefined,
   hasStageRatings: d?.stageRatings != null,
   hasCharges: Array.isArray(d?.charges),
   hasQuotes: Array.isArray(d?.quotes),
   hasStatusChatThread: Array.isArray(d?.statusChatThread),
-  statusChatThreadCount: d?.statusChatThread?.length,
+  statusChatThreadCount: Array.isArray(d?.statusChatThread) ? d.statusChatThread.length : undefined,
 }, null, 2));

@@ -11,7 +11,7 @@ import log from "../helper/log.ts";
  * Run: deno run --allow-net --allow-env --allow-read test/calendar-write-test.ts
  */
 
-const CALENDAR_ID = Deno.env.get("CALENDAR_ID");
+const CALENDAR_ID = Deno.env.get("CALENDAR_ID") ?? "";
 if (!CALENDAR_ID) {
   console.error("FAIL: CALENDAR_ID is not set.");
   Deno.exit(1);
