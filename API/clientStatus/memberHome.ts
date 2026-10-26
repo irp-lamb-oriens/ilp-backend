@@ -59,6 +59,7 @@ import {
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
+import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import auditLog from "../../helper/auditLog.ts";
 import {
   auditDocumentDownload,
@@ -498,6 +499,8 @@ export function registerMemberHomeRoutes(app: Express) {
         updatedAt: at,
       });
       log(`[member-home] quote ${target.id} accepted by ${email} on ${id}`);
+      // P5/P7: linked opportunities move to won now, not on the next staff read (never throws).
+      await syncOpportunitiesForQuote(id, String(target.id));
       res.json(forClient(moneyView({ ...doc, quotes: updated, charges: [...charges, ...charge] })));
     }),
   );

@@ -53,6 +53,7 @@ import type { FieldDef } from "../dashboard/automation/fieldDefaults.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
+import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import {
   countryCodeFromName,
   prioritiesForCountry,
@@ -808,6 +809,8 @@ export default (app: Express) => {
       });
 
       log(`[client-status] Quote accepted: project=${id} quote=${quoteId} by=${userEmail}`);
+      // P5/P7: linked opportunities move to won now, not on the next staff read (never throws).
+      await syncOpportunitiesForQuote(id, String(quoteId));
 
       // Fire-and-forget confirmation email.
       const clientEmail = resolvePrincipalEmail(doc, id);
