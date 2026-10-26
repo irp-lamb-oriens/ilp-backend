@@ -53,6 +53,7 @@ import type { FieldDef } from "../dashboard/automation/fieldDefaults.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
+import { memberEmailLayout } from "../../helper/emailTemplates.ts";
 import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import {
   countryCodeFromName,
@@ -814,12 +815,12 @@ export default (app: Express) => {
 
       // Fire-and-forget confirmation email.
       const clientEmail = resolvePrincipalEmail(doc, id);
+      const acceptMail = memberEmailLayout({
+        subject: `Quote accepted — ${String(targetQuote.title ?? quoteId)}`,
+        paragraphs: ["Thank you for accepting your quote. Your legal team will be in touch to confirm next steps."],
+      });
       void enqueueEmail(
-        {
-          to: clientEmail,
-          subject: `Quote accepted — ${targetQuote.title ?? quoteId}`,
-          html: `<div style="font-family:sans-serif;max-width:540px"><h2>Quote accepted</h2><p>Thank you for accepting your quote. Your legal team will be in touch to confirm next steps.</p></div>`,
-        },
+        { to: clientEmail, subject: acceptMail.subject, html: acceptMail.html, text: acceptMail.text },
         `quote_accept_${id}_${quoteId}`,
       ).catch((e) => log(`[client-status] Quote acceptance email failed: ${e}`));
 

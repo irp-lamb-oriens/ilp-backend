@@ -15,6 +15,7 @@ export function complianceAlertEmail(opts: {
     <p>Hi ${opts.firstName},</p>
     <p><strong>${opts.obligationTitle}</strong> is coming up: <strong>${opts.deadlineLabel}</strong>.</p>
     <p><a href="${opts.responseUrl}" style="background:#18181B;color:#fff;padding:10px 16px;text-decoration:none;border-radius:6px">Respond to this alert</a></p>
+    ${legacyFooter()}
   </body></html>`;
 }
 
@@ -29,6 +30,7 @@ export function consultationConfirmationEmail(opts: {
     <p>Hi ${opts.firstName},</p>
     <p>Your consultation with <strong>${opts.providerName}</strong> is booked for <strong>${opts.slotLabel}</strong>.</p>
     ${opts.meetingUrl ? `<p><a href="${opts.meetingUrl}">Join the call</a></p>` : ""}
+    ${legacyFooter()}
   </body></html>`;
 }
 
@@ -60,6 +62,21 @@ export interface MemberEmail {
 const escHtml = (v: string) =>
   v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/**
+ * Legal footer on every member email (P6 wording, pending counsel). Keep equal
+ * to EMAIL_FOOTER in frontend/src/components/legal/disclaimers.ts.
+ */
+export const EMAIL_FOOTER =
+  "ILP is a membership service, not a law firm. Reminders and general information in this email are not legal advice; dates may require review by a licensed lawyer.";
+
+/** Footer for the older member templates above (function declaration: hoisted). */
+function legacyFooter(): string {
+  return `<p style="margin:24px 0 0;font-size:13px;color:#4a5a66">${EMAIL_FOOTER}</p>`;
+}
+
+const footerHtml = () =>
+  `<p style="margin:24px 0 0;font-size:13px;color:#4a5a66">${escHtml(EMAIL_FOOTER)}</p>`;
+
 const P2_NAVY = "#123b5d";
 const P2_ACCENT = "#5cccf7";
 
@@ -88,7 +105,7 @@ export function memberEmailLayout(opts: {
     : "";
   const html = `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#202a33;line-height:1.55;font-size:16px;max-width:560px;margin:0 auto;padding:16px">
     <p style="margin:0 0 14px">${escHtml(hello)}</p>${ps}${cta}${links ? `<p style="margin:0 0 14px">${links}</p>` : ""}${opts.afterHtml ?? ""}
-    <p style="margin:18px 0 0">Your ILP team</p>${unsub}
+    <p style="margin:18px 0 0">Your ILP team</p>${footerHtml()}${unsub}
   </body></html>`;
   const text = [
     hello,
@@ -98,6 +115,8 @@ export function memberEmailLayout(opts: {
     ...(opts.links ?? []).map((l) => `${l.label}: ${l.url}`),
     ...(opts.afterText ? [opts.afterText, ""] : []),
     "Your ILP team",
+    "",
+    EMAIL_FOOTER,
     ...(opts.unsubscribeUrl ? ["", `Stop reminder emails: ${opts.unsubscribeUrl}`] : []),
   ].join("\n");
   return { subject: opts.subject, html, text };
@@ -178,10 +197,12 @@ export function renewalReceiptEmail(o: {
 const callEsc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-function callShell(title: string, body: string): string {
+/** `member` adds the legal footer (EMAIL_FOOTER); lawyer-only emails leave it out. */
+function callShell(title: string, body: string, member = false): string {
   return `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#202a33;line-height:1.6;max-width:560px">
     <h2 style="color:#123b5d;margin:0 0 12px">${callEsc(title)}</h2>${body}
-    <p style="color:#7a8a96;font-size:13px;margin-top:24px">ILP International Legal Partner · times are Costa Rica time (GMT-6)</p>
+    <p style="color:#4a5a66;font-size:13px;margin-top:24px">ILP International Legal Partner · times are Costa Rica time (GMT-6)</p>${member ? `
+    <p style="color:#4a5a66;font-size:13px;margin-top:8px">${callEsc(EMAIL_FOOTER)}</p>` : ""}
   </body></html>`;
 }
 
@@ -208,7 +229,7 @@ export function callBookedMemberEmail(o: {
       <p>Hi ${callEsc(o.firstName)},</p>
       <p>Your 20-minute call with <strong>${callEsc(o.lawyerName)}</strong> is on <strong>${callEsc(o.whenLabel)}</strong>.</p>
       ${link}
-      <p>You can change or cancel it up to 24 hours before, from <a href="${callEsc(o.portalUrl)}">your ILP home</a>.</p>`),
+      <p>You can change or cancel it up to 24 hours before, from <a href="${callEsc(o.portalUrl)}">your ILP home</a>.</p>`, true),
   };
 }
 
@@ -264,7 +285,7 @@ export function callReminderEmail(o: {
       <p>Your 20-minute call with <strong>${callEsc(o.otherName)}</strong> is on <strong>${callEsc(o.whenLabel)}</strong>.</p>
       ${o.question ? `<p>Your question:</p>${quoted(o.question)}` : ""}
       ${join}
-      <p>Have any documents you mentioned nearby. ${o.portalUrl ? `Your <a href="${callEsc(o.portalUrl)}">ILP home</a> has the details.` : ""}</p>`),
+      <p>Have any documents you mentioned nearby. ${o.portalUrl ? `Your <a href="${callEsc(o.portalUrl)}">ILP home</a> has the details.` : ""}</p>`, true),
   };
 }
 
@@ -285,7 +306,7 @@ export function callChangedEmail(o: {
       html: callShell("Call cancelled", `
         <p>Hi ${callEsc(o.greetingName)},</p>
         <p>The call with <strong>${callEsc(o.otherName)}</strong> on ${callEsc(o.oldWhenLabel)} is cancelled. It does not count against the monthly calls.</p>
-        ${callButton(o.link, o.linkLabel)}`),
+        ${callButton(o.link, o.linkLabel)}`, true),
     };
   }
   return {
@@ -294,7 +315,7 @@ export function callChangedEmail(o: {
       <p>Hi ${callEsc(o.greetingName)},</p>
       <p>The call with <strong>${callEsc(o.otherName)}</strong> moved from ${callEsc(o.oldWhenLabel)} to <strong>${callEsc(o.newWhenLabel ?? "")}</strong>.</p>
       ${o.meetUrl ? `<p>Same Google Meet link: <a href="${callEsc(o.meetUrl)}">${callEsc(o.meetUrl)}</a></p>` : ""}
-      ${callButton(o.link, o.linkLabel)}`),
+      ${callButton(o.link, o.linkLabel)}`, true),
   };
 }
 
