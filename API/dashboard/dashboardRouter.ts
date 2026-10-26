@@ -166,6 +166,7 @@ export default (app: Express) => {
       res.json({
         authenticated: true,
         email: (req as Request & { dashboardUser?: string }).dashboardUser,
+        role: (req as Request & { dashboardRole?: string }).dashboardRole ?? "staff",
       });
     }
   );
