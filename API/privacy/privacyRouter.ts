@@ -42,10 +42,10 @@ import { memberEmailLayout } from "../../helper/emailTemplates.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
 import { apiUrl, siteUrl } from "../retention/mailer.ts";
 import { readJoinSession } from "../payments/membership.ts";
+import { emitEvent, taskIdFor } from "../members/events.ts";
 import {
   COLLECTIONS,
   type ConsentRecord,
-  type CsmTask,
   type PrivacyRequest,
   type PrivacyRequestKind,
 } from "../../schemas/contracts.ts";
@@ -61,6 +61,7 @@ import {
   parseConsentInput,
   parseJoinConsents,
   privacyRequestId,
+  privacyTaskEvent,
   REQUEST_LABEL,
   responseDays,
   VERSION_FOR_KIND,
@@ -167,29 +168,17 @@ function sendPrivacyEmail(to: string, firstName: string | undefined, subject: st
     .catch((err) => log(`[privacy] email ${key} not queued: ${err instanceof Error ? err.message : err}`, "error"));
 }
 
-/** CSM task for a privacy request. Written directly (no TASK_RULES entry yet, see docs/workstreams/P6.md). */
-async function openPrivacyTask(r: PrivacyRequest): Promise<string> {
-  const owner = env("PRIVACY_OWNER_EMAIL") || env("DEFAULT_CSM_EMAIL") || undefined;
-  const due = businessDaysFrom(new Date(), 2).toISOString();
-  const task: CsmTask = {
-    id: `task_privacy_${r.id}`,
-    clientId: r.clientId,
-    ownerEmail: owner,
-    type: "follow_up",
-    title: `Privacy request: ${REQUEST_LABEL[r.kind]}. Legal deadline ${dayLabel(r.dueAt)}`,
-    dueAt: due < r.dueAt ? due : r.dueAt,
-    status: "open",
-    source: { kind: "manual", id: r.id },
-    createdAt: nowIso(),
-  };
-  const clean = Object.fromEntries(Object.entries(task).filter(([, v]) => v !== undefined));
-  await put(COLLECTIONS.csmTasks, task.id, clean);
-  return task.id;
+/** CSM task for a privacy request: TASK_RULES "privacy.request_received" through emitEvent (idempotent per request). */
+async function openPrivacyTask(r: PrivacyRequest): Promise<string | null> {
+  const ids = await emitEvent("privacy.request_received", privacyTaskEvent(r, env, new Date(), dayLabel));
+  return ids[0] ?? null;
 }
 
-async function closePrivacyTask(requestId: string, outcome: string): Promise<void> {
-  await patch(COLLECTIONS.csmTasks, `task_privacy_${requestId}`, { status: "done", outcome, closedAt: nowIso() })
-    .catch(() => undefined);
+async function closePrivacyTask(requestId: string, clientId: string, outcome: string): Promise<void> {
+  const id = taskIdFor("privacy.request_received", { clientId, sourceId: requestId });
+  const task = await get(COLLECTIONS.csmTasks, id).catch(() => null);
+  if (!task || (task as Doc).status !== "open") return;
+  await patch(COLLECTIONS.csmTasks, id, { status: "done", outcome, closedAt: nowIso() }).catch(() => undefined);
 }
 
 /** Withdrawing recording consent applies to calls not yet held. */
@@ -412,7 +401,7 @@ export default function privacyRouter(app: Express): void {
       const fields: Doc = { status, staffNote: note || undefined, updatedAt: nowIso(), updatedBy: staffActor(req).email };
       if (status === "completed" || status === "refused") fields.completedAt = nowIso();
       await patch(COLLECTIONS.privacyRequests, id, Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)));
-      if (status !== "in_review") await closePrivacyTask(id, `${status}: ${note}`);
+      if (status !== "in_review") await closePrivacyTask(id, r.clientId, `${status}: ${note}`);
       await auditLog({ actor: staffActor(req), action: `privacy.request_${status}`, target: `privacy_requests/${id}`, meta: { kind: r.kind, clientId: r.clientId } });
       if (status !== "in_review") {
         const who = await memberEmailOf(r.clientId, r.email);
@@ -474,7 +463,7 @@ export default function privacyRouter(app: Express): void {
       const result = await runErasure(store, subject);
       const done = nowIso();
       await patch(COLLECTIONS.privacyRequests, id, { status: "completed", completedAt: done, updatedBy: actor.email, erasure: result.lines.map((l) => `${l.collection}:${l.action}:${l.count}`) });
-      await closePrivacyTask(id, `Deletion ran: ${result.lines.filter((l) => l.count).map((l) => `${l.collection} ${l.count}`).join(", ")}`);
+      await closePrivacyTask(id, r.clientId, `Deletion ran: ${result.lines.filter((l) => l.count).map((l) => `${l.collection} ${l.count}`).join(", ")}`);
       await auditLog({ actor, action: "privacy.erasure_completed", target: `clients/${r.clientId}`, meta: { requestId: id, lines: result.lines.map(({ collection, action, count }) => ({ collection, action, count })), filesDeleted: result.filesDeleted, fileErrors: result.fileErrors } });
       // Last message to the address; the email queue copy is purged by the retention job.
       sendPrivacyEmail(

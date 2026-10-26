@@ -58,6 +58,7 @@ const SOURCE_KIND: Record<string, CsmTask["source"]["kind"]> = {
   document: "document",
   quote: "quote",
   call: "consultation",
+  privacy: "privacy_request",
 };
 
 export function isTaskEvent(name: string): name is EventName {

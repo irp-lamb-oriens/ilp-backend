@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
 import { buildTask, eventsFor, taskIdFor } from "../API/members/events.ts";
 import { missingDocumentEvents, renewalEvents, unansweredQuoteEvents } from "../jobs/taskRuleSweep.ts";
 import { type Membership, TASK_RULES } from "../schemas/contracts.ts";
+import { privacyTaskEvent } from "../API/privacy/policy.ts";
 
 /**
  * One test per TASK_RULES entry plus the transition and sweep selectors.
@@ -162,4 +163,28 @@ Deno.test("call.link_failed: follow_up due in 4 h (or the caller's due date), so
   assertEquals(t?.source, { kind: "consultation", id: "con_1" });
   const early = buildTask("call.link_failed", { clientId: "c1", sourceId: "con_1", dueAt: hours(1) }, NOW);
   assertEquals(early?.dueAt, hours(1));
+});
+
+// ─── P7: privacy requests go through TASK_RULES ────────────────────────────
+Deno.test("privacy.request_received: privacy task on the request, owner from PRIVACY_OWNER_EMAIL", () => {
+  const env = (k: string) => ({ PRIVACY_OWNER_EMAIL: "privacy@internationallegalpartner.com", DEFAULT_CSM_EMAIL: "csm@internationallegalpartner.com" } as Record<string, string>)[k];
+  const r = { id: "prq_1", clientId: "c1", kind: "delete" as const, dueAt: "2026-11-09T12:00:00.000Z" };
+  const payload = privacyTaskEvent(r, env, NOW);
+  const t = buildTask("privacy.request_received", payload, NOW, "fallback@internationallegalpartner.com");
+  assertEquals(t?.type, "privacy");
+  assertEquals(t?.source, { kind: "privacy_request", id: "prq_1" });
+  assertEquals(t?.ownerEmail, "privacy@internationallegalpartner.com");
+  assertEquals(t?.dueAt, hours(24));
+  assertEquals(t?.title.startsWith("Privacy request: respond by due date: "), true);
+  assertEquals(t?.title.includes("2026-11-09"), true);
+  assertEquals(t?.id, taskIdFor("privacy.request_received", { clientId: "c1", sourceId: "prq_1" }));
+  // no PRIVACY_OWNER_EMAIL → DEFAULT_CSM_EMAIL; neither → the membership CSM (resolved by emitEvent)
+  assertEquals(privacyTaskEvent(r, (k) => (k === "DEFAULT_CSM_EMAIL" ? "csm@internationallegalpartner.com" : undefined), NOW).ownerEmail, "csm@internationallegalpartner.com");
+  assertEquals(privacyTaskEvent(r, () => undefined, NOW).ownerEmail, undefined);
+});
+
+Deno.test("privacy.request_received: never due after the legal deadline", () => {
+  const r = { id: "prq_2", clientId: "c1", kind: "access" as const, dueAt: hours(6) };
+  const t = buildTask("privacy.request_received", privacyTaskEvent(r, () => undefined, NOW), NOW);
+  assertEquals(t?.dueAt, hours(6));
 });

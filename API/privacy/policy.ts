@@ -23,8 +23,10 @@ import {
   type ConsentKind,
   type ConsentRecord,
   LAWYER_HIDDEN_FIELDS,
+  type PrivacyRequest,
   type PrivacyRequestKind,
 } from "../../schemas/contracts.ts";
+import type { EventPayload } from "../members/events.ts";
 
 // ─── Document versions ─────────────────────────────────────────────────────
 // A ConsentRecord stores the version the person saw. Bump the id when the
@@ -177,6 +179,30 @@ export const REQUEST_LABEL: Record<PrivacyRequestKind, string> = {
  * later. PRIVACY_RESPONSE_DAYS default 10 is a placeholder: counsel must
  * confirm the Ley 8968 / regulation timeline.
  */
+/**
+ * The `privacy.request_received` event for a new request (P7: through
+ * emitEvent and TASK_RULES instead of a direct task write). Owner is
+ * PRIVACY_OWNER_EMAIL, else DEFAULT_CSM_EMAIL; due in 24 h by the rule, never
+ * after the legal deadline.
+ */
+export function privacyTaskEvent(
+  r: Pick<PrivacyRequest, "id" | "clientId" | "kind" | "dueAt">,
+  env: (k: string) => string | undefined,
+  now: Date = new Date(),
+  dayLabel: (iso: string) => string = (iso) => iso.slice(0, 10),
+): EventPayload {
+  const ruleDue = new Date(now.getTime() + 24 * 3600_000).toISOString();
+  const owner = env("PRIVACY_OWNER_EMAIL") || env("DEFAULT_CSM_EMAIL") || undefined;
+  return {
+    clientId: r.clientId,
+    sourceId: r.id,
+    sourceKind: "privacy_request",
+    detail: `${REQUEST_LABEL[r.kind]}, legal deadline ${dayLabel(r.dueAt)}`,
+    ...(owner ? { ownerEmail: owner } : {}),
+    ...(r.dueAt < ruleDue ? { dueAt: r.dueAt } : {}),
+  };
+}
+
 export function businessDaysFrom(from: Date, days: number): Date {
   const d = new Date(from.getTime());
   let left = Math.max(0, Math.floor(days));

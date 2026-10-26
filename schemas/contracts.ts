@@ -179,7 +179,8 @@ export type CsmTaskType =
   | "missing_document"
   | "proposal"
   | "renewal"
-  | "escalation";
+  | "escalation"
+  | "privacy"; // P6/P7: data-rights request with a legal deadline
 
 export type CsmTaskStatus = "open" | "done" | "cancelled";
 
@@ -193,7 +194,7 @@ export interface CsmTask {
   dueAt: Iso;
   status: CsmTaskStatus;
   outcome?: string; // required when status = done
-  source: { kind: "membership" | "consultation" | "handoff" | "quote" | "document" | "manual"; id?: string };
+  source: { kind: "membership" | "consultation" | "handoff" | "quote" | "document" | "privacy_request" | "manual"; id?: string };
   createdAt: Iso;
   closedAt?: Iso;
 }
@@ -211,6 +212,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "membership.cancel_requested": { type: "renewal", dueInHours: 24, title: "Cancellation requested: save call" }, // P2 cancel
   "feedback.low_score": { type: "follow_up", dueInHours: 24, title: "Low rating: follow up" }, // P2 post-call ≤ 2 or monthly ≤ 6
   "call.link_failed": { type: "follow_up", dueInHours: 4, title: "Meet link failed: send link" }, // P3 calendar failure
+  "privacy.request_received": { type: "privacy", dueInHours: 24, title: "Privacy request: respond by due date" }, // P6 data-rights request
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────
@@ -372,6 +374,7 @@ export interface ConsentRecord {
   granted: boolean;
   version: string; // document version accepted, e.g. "privacy-2026-10-26"
   source: string; // "join", "booking", "settings", ...
+  consultationId?: string; // recording consent given for one call
   at: Iso;
 }
 
