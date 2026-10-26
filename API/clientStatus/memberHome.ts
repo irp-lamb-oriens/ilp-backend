@@ -11,8 +11,8 @@
  *   POST  /api/client-status/me/obligations/:id/ask     "Ask my lawyer" → question for the next call
  *   PATCH /api/client-status/me/profile                 { values: { field: value } } (PROFILE_FIELDS only)
  *   GET   /api/client-status/me/documents               metadata list
- *   POST  /api/client-status/me/documents               { matterId, category, fileName, contentType, dataBase64 }
- *   GET   /api/client-status/me/documents/:id/file      download
+ *   POST  /api/client-status/me/documents               raw file body + ?matterId&category&fileName (or legacy JSON dataBase64)
+ *   GET   /api/client-status/me/documents/:id/file      download (audited; private bucket, see helper/storage.ts)
  *   GET   /api/client-status/me/money                   balance, charges, quotes (no cost/margin)
  *   POST  /api/client-status/me/quotes/:id/accept       { fullName, consent: true }
  *   GET   /api/client-status/me/messages                team + AI thread
@@ -56,6 +56,18 @@ import {
   resolveClientDisplayStage,
 } from "../dashboard/automation/stageConfig.ts";
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
+import auditLog from "../../helper/auditLog.ts";
+import {
+  auditDocumentDownload,
+  DOCUMENTS_COLLECTION,
+  documentMeta,
+  rawDocumentBody,
+  readMemberDocument,
+  safeFileName,
+  sendDocument,
+  storeMemberDocument,
+  uploadBytes,
+} from "../../helper/storage.ts";
 import {
   bookingCapacity,
   coerceProfileValue,
@@ -66,9 +78,7 @@ import {
 } from "./memberLogic.ts";
 
 const CLIENTS = "clients";
-const DOCUMENTS = "member_documents";
-/** Firestore caps a document at 1 MiB; base64 adds a third. */
-const MAX_FILE_BYTES = 700 * 1024;
+const DOCUMENTS = DOCUMENTS_COLLECTION;
 export const DOCUMENT_CATEGORIES = [
   "identity",
   "residency",
@@ -332,7 +342,7 @@ export function registerMemberHomeRoutes(app: Express) {
     }),
   );
 
-  // ── Documents ────────────────────────────────────────────────────────────
+  // ── Documents (P1: private storage, see helper/storage.ts) ──────────────
   app.get(
     "/api/client-status/me/documents",
     requireClientAuth,
@@ -341,24 +351,30 @@ export function registerMemberHomeRoutes(app: Express) {
       if (!id) return;
       const docs = await query(DOCUMENTS, [{ field: "clientId", op: "EQUAL", value: id }]);
       const items = (docs as Doc[])
-        .map((d) => ({ ...d, dataBase64: undefined }) as Doc)
+        .map(documentMeta)
         .sort((a, b) => String(b.uploadedAt ?? "").localeCompare(String(a.uploadedAt ?? "")));
       res.json({ items: forClient(items), categories: DOCUMENT_CATEGORIES });
     }),
   );
 
+  /**
+   * Upload one file. Preferred: the raw file as the body (Content-Type = the
+   * file's type) with ?matterId=&category=&fileName= in the query (15 MB).
+   * Legacy: JSON { matterId, category, fileName, dataBase64 } (smaller files).
+   * The stored type comes from the file's bytes (pdf, jpg, png, heic, docx).
+   */
   app.post(
     "/api/client-status/me/documents",
     requireClientAuth,
+    rawDocumentBody,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
-      const { matterId, category, fileName, contentType, dataBase64 } = (req.body ?? {}) as Record<string, unknown>;
-      if (typeof dataBase64 !== "string" || !dataBase64) return res.status(400).json({ error: "Choose a file to upload." });
-      const size = Math.floor((dataBase64.length * 3) / 4);
-      if (size > MAX_FILE_BYTES) {
-        return res.status(413).json({ error: "That file is larger than 700 KB. Try a smaller scan or photo, or email it to your ILP team." });
-      }
+      const isJson = !(req.body instanceof Uint8Array);
+      const input = (isJson ? req.body ?? {} : req.query ?? {}) as Record<string, unknown>;
+      const { matterId, category, fileName } = input;
+      const bytes = uploadBytes(req.body);
+      if (!bytes) return res.status(400).json({ error: "Choose a file to upload." });
       const cat = DOCUMENT_CATEGORIES.includes(category as typeof DOCUMENT_CATEGORIES[number]) ? String(category) : "other";
       let mId: string | undefined;
       if (typeof matterId === "string" && matterId) {
@@ -367,19 +383,27 @@ export function registerMemberHomeRoutes(app: Express) {
         mId = m.id;
       }
       const docId = `doc_${Date.now().toString(36)}${crypto.randomUUID().slice(0, 8)}`;
+      const stored = await storeMemberDocument(id, docId, bytes);
+      if (!stored.ok) return res.status(stored.status).json({ error: stored.error });
       const meta = {
         id: docId,
         clientId: id,
         ...(mId ? { matterId: mId } : {}),
         category: cat,
-        fileName: String(fileName ?? "document").slice(0, 160),
-        contentType: String(contentType ?? "application/octet-stream").slice(0, 100),
-        size,
+        fileName: safeFileName(fileName, stored.contentType),
+        contentType: stored.contentType,
+        size: stored.size,
         uploadedAt: nowIso(),
         uploadedBy: actor(req),
       };
-      await put(DOCUMENTS, docId, { ...meta, dataBase64 });
-      log(`[member-home] document ${docId} (${cat}, ${size} B) uploaded for ${id}`);
+      await put(DOCUMENTS, docId, { ...meta, ...stored.fields });
+      auditLog({
+        actor: { uid: actor(req), email: actor(req), role: isStaff(req) ? "staff" : "client" },
+        action: "document.upload",
+        target: `clients/${id}`,
+        meta: { docId, category: cat, size: stored.size, storage: stored.fields.storage },
+      }).catch(() => {});
+      log(`[member-home] document ${docId} (${cat}, ${stored.size} B, ${stored.fields.storage}) uploaded for ${id}`);
       res.status(201).json(forClient(meta));
     }),
   );
@@ -391,11 +415,15 @@ export function registerMemberHomeRoutes(app: Express) {
       const id = clientIdOf(req, res);
       if (!id) return;
       const d = (await get(DOCUMENTS, req.params.docId)) as Doc | null;
-      if (!d || d.clientId !== id || typeof d.dataBase64 !== "string") return res.status(404).json({ error: "Not found." });
-      const bytes = Uint8Array.from(atob(d.dataBase64), (c) => c.charCodeAt(0));
-      res.setHeader("Content-Type", String(d.contentType ?? "application/octet-stream"));
-      res.setHeader("Content-Disposition", `attachment; filename="${String(d.fileName ?? "document").replace(/"/g, "")}"`);
-      res.send(bytes);
+      if (!d || d.clientId !== id) return res.status(404).json({ error: "Not found." });
+      const bytes = await readMemberDocument(d);
+      if (!bytes) return res.status(404).json({ error: "Not found." });
+      await auditDocumentDownload(
+        { email: actor(req), role: isStaff(req) ? "staff" : "client" },
+        { ...d, id: req.params.docId },
+        isStaff(req) ? "staff" : "member",
+      );
+      sendDocument(res, d, bytes);
     }),
   );
 

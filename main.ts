@@ -55,6 +55,7 @@ import pushRouter from "./API/push/pushRouter.ts";
 import membersRouter from "./API/members/membersRouter.ts";
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
+import { documentAccessRouter } from "./helper/storage.ts";
 
 import { startCronRunner } from "./jobs/cronRunner.ts";
 
@@ -129,6 +130,8 @@ function createServer() {
     registerSessionHooks();
     app.use(loginHooks);
     sessionRoutes(app);
+    // Staff and assigned-lawyer document downloads (private bucket, audited).
+    documentAccessRouter(app);
 
     profilesRouter(app);
     rulesRouter(app);
