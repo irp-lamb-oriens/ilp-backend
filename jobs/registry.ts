@@ -10,6 +10,7 @@ import { firestoreBackup } from "./firestoreBackup.ts"; // P1
 import { retentionSweep } from "./retentionSweep.ts"; // P2
 import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"; // P2
 import { callReminders } from "./callReminders.ts"; // P3
+import { privacyRetention } from "./privacyRetention.ts"; // P6
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -93,6 +94,15 @@ export const jobs: JobDef[] = [
     cron: "0 9 * * *",
     handler: async () => {
       await firestoreBackup();
+    },
+  },
+  // P6: privacy retention (leads, error_log, funnel events, expired sessions/OTPs,
+  // email copies, chatbot threads, transcripts after membership end). 04:10 Costa Rica.
+  {
+    name: "privacyRetention",
+    cron: "10 10 * * *",
+    handler: async () => {
+      await privacyRetention();
     },
   },
 ];
