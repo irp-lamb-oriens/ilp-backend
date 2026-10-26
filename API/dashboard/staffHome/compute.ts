@@ -79,6 +79,10 @@ export function isQuoteAccepted(q: Doc): boolean {
   return ACCEPTED_STATUSES.has(str(q.status));
 }
 
+export function quoteIdOf(q: Doc): string {
+  return str(q.quoteId) || str(q.id);
+}
+
 export function quotesOf(client: Doc | null | undefined): Doc[] {
   return Array.isArray(client?.quotes) ? (client!.quotes as Doc[]) : [];
 }
@@ -290,14 +294,14 @@ export function computeAttention(input: {
       const waited = days(sent);
       if (waited < QUOTE_UNANSWERED_DAYS) continue;
       quotesUnanswered.push({
-        id: `quote:${clientId}:${str(q.id)}`,
+        id: `quote:${clientId}:${quoteIdOf(q)}`,
         kind: "quote",
         clientId,
         memberName: name(clientId),
         title: str(q.title) || "Quote",
         at: quoteSentAt(q),
         days: waited,
-        ref: str(q.id),
+        ref: quoteIdOf(q),
       });
     }
   }
@@ -531,7 +535,7 @@ export function buildTimeline(input: {
   }
 
   for (const q of quotesOf(input.client)) {
-    const id = str(q.id);
+    const id = quoteIdOf(q);
     const created = str(q.createdAt);
     const usd = (quoteCents(q) / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
     if (created) out.push({ id: `quote:${id}:new`, kind: "quote", at: created, title: `Quote created: ${str(q.title) || "Quote"}`, body: usd, actor: str(q.createdBy), ref: id });
