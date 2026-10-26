@@ -25,6 +25,8 @@ import {
 } from "../../schemas/contracts.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../db/records.ts";
 import { recordFirstCallBooked } from "../analytics/funnel.ts"; // P2
+import { handoffNeedsOpportunity } from "../opportunities/logic.ts"; // P5
+import { createOpportunityFromHandoff } from "../opportunities/store.ts"; // P5
 
 export type EventName = keyof typeof TASK_RULES;
 
@@ -229,6 +231,10 @@ async function run(slug: string, before: Doc | null, after: Doc): Promise<string
   }
   if (slug === "memberships" && after.status === "active" && !after.activatedAt && after.id) {
     await updateRecord(COLLECTIONS.memberships, String(after.id), { activatedAt: new Date().toISOString() });
+  }
+  // P5: commercial notes on a handoff (at creation or added later by staff) open an opportunity.
+  if (slug === "handoffs" && handoffNeedsOpportunity(before, after)) {
+    await createOpportunityFromHandoff(after);
   }
   if (slug === "handoffs" && ids.length && after.id) {
     const prev = Array.isArray(after.csmTaskIds) ? (after.csmTaskIds as string[]) : [];
