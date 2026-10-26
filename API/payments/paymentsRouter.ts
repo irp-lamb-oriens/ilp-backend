@@ -22,6 +22,7 @@ import {
   startJoin,
 } from "./membership.ts";
 import { markRenewalPaid, membershipById } from "./lifecycle.ts";
+import { registerCancelRoutes } from "./cancel.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -56,9 +57,12 @@ const joinLimiter = rateLimit({
  *   POST /api/payments/stripe/webhook             — Stripe events (verified by fetching them back)
  *   POST /api/payments/memberships/:id/mark-paid  — staff: manual mode payment received
  *                                                   (pending → activate; active/past_due → renewal, lifecycle.ts)
+ *
+ * Member membership + cancel (P2, see cancel.ts): /api/payments/me/{membership,cancel,cancel/undo,billing-portal}
  */
 export default function paymentsRouter(app: Express) {
   log("Payments router initialized.");
+  registerCancelRoutes(app);
 
   app.post(
     "/api/payments/checkout",

@@ -274,9 +274,10 @@ export const lifecycleHooks: {
   onRenewed?: (m: MembershipDoc, ref: string) => Promise<void>;
   onPastDue?: (m: MembershipDoc) => Promise<void>;
   onCancelled?: (m: MembershipDoc) => Promise<void>;
+  onCancelRequested?: (m: MembershipDoc) => Promise<void>;
 } = {};
 
-async function runHook(name: keyof typeof lifecycleHooks, m: MembershipDoc, ref = ""): Promise<void> {
+export async function runHook(name: keyof typeof lifecycleHooks, m: MembershipDoc, ref = ""): Promise<void> {
   try {
     const fn = lifecycleHooks[name] as ((m: MembershipDoc, ref: string) => Promise<void>) | undefined;
     if (fn) await fn(m, ref);
