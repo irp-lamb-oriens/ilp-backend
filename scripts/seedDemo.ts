@@ -30,6 +30,7 @@ import put from "../db/put.ts";
 import { createRecord, type RecordCollection } from "../db/records.ts";
 import { emailToDocId, generateSessionToken } from "../helper/auth/otp.ts";
 import { buildTask } from "../API/members/events.ts";
+import { opportunityFromHandoff } from "../API/opportunities/logic.ts";
 import {
   COLLECTIONS,
   type Consultation,
@@ -40,6 +41,7 @@ import {
   type Matter,
   type Membership,
   type Obligation,
+  type Opportunity,
   PLAN_STANDARD,
 } from "../schemas/contracts.ts";
 
@@ -636,6 +638,15 @@ function build() {
     if (c) c.handoffId = h.id;
   }
 
+  // P5/P7: handoffs with commercial notes open their opportunity, as the live
+  // hook does (same pure builder, deterministic id opp_hof_<handoffId>), so
+  // the Opportunities board is not empty after seeding (the Alvarez S.A. clean-up).
+  const opportunities: Opportunity[] = hofs.flatMap((h) => {
+    const area = matters.find((m) => m.id === h.matterId)?.area;
+    const o = opportunityFromHandoff(h as unknown as Record<string, unknown>, { ownerEmail: CSM.toLowerCase(), area, now: NOW });
+    return o ? [o] : [];
+  });
+
   const leads: Lead[] = [
     {
       id: "demo_lead_hayes",
@@ -677,7 +688,7 @@ function build() {
     },
   ];
 
-  return { clients, memberships, matters, obligations, consultations: cons, handoffs: hofs, tasks: csm, leads, availability: availability() };
+  return { clients, memberships, matters, obligations, consultations: cons, handoffs: hofs, tasks: csm, leads, opportunities, availability: availability() };
 }
 
 async function main() {
@@ -701,6 +712,7 @@ async function main() {
   for (const p of providers) writes.push(["providers", p.id, p]);
   for (const a of data.availability) writes.push([COLLECTIONS.availability, a.id, { ...a, seed: true }]);
   for (const c of data.clients) writes.push([COLLECTIONS.clients, String(c.id), c]);
+  for (const o of data.opportunities) writes.push([COLLECTIONS.opportunities, o.id, { ...o, seed: true }]);
   const recs: Array<[RecordCollection, Array<{ id: string }>]> = [
     [COLLECTIONS.memberships, data.memberships],
     [COLLECTIONS.matters, data.matters],
@@ -716,7 +728,7 @@ async function main() {
     `  ${providers.length} lawyers, ${data.clients.length} members, ${data.memberships.length} memberships, ` +
       `${data.matters.length} matters, ${data.consultations.length} consultations, ${data.handoffs.length} handoffs, ` +
       `${data.tasks.filter((t) => t.status === "open").length} open CSM tasks, ${data.obligations.length} obligations, ${data.leads.length} leads, ` +
-      `${data.availability.length} lawyer hours`,
+      `${data.availability.length} lawyer hours, ${data.opportunities.length} opportunities`,
   );
   if (DRY) return;
 

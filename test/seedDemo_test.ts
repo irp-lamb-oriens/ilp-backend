@@ -32,3 +32,17 @@ Deno.test("seed: today's 10:00 Hayes call is ready for the 3-click handoff", () 
   assertEquals(c?.suggestedNextSteps?.length, 2);
   assertEquals(c?.status, "booked");
 });
+
+Deno.test("seed: the Alvarez handoff's commercial notes open an opportunity (P5/P7)", () => {
+  const withNotes = data.handoffs.filter((h) => h.commercialNotes);
+  assertEquals(withNotes.length > 0, true);
+  assertEquals(data.opportunities.length, withNotes.length);
+  for (const h of withNotes) {
+    const o = data.opportunities.find((x) => x.id === `opp_hof_${h.id}`);
+    assertEquals(o?.source, { kind: "handoff", id: h.id });
+    assertEquals(o?.clientId, h.clientId);
+    assertEquals(o?.stage, "identified");
+    assertEquals(o?.ownerEmail, o?.ownerEmail?.toLowerCase());
+  }
+  assertEquals(data.opportunities.some((o) => o.clientId.includes("alvarez")), true);
+});
