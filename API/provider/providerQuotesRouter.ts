@@ -52,6 +52,10 @@ import { resolveQuoteTemplateBlocks } from "../dashboard/contractTemplate.ts";
 import { buildContractPdfBuffer, contractFileName } from "../dashboard/contractPdf.ts";
 import { loadQuoteApprovers, isQuoteApprover } from "../dashboard/automation/quoteApprovers.ts";
 import { resolveClientEmail } from "../dashboard/clientHelpers.ts";
+import { mergeLawyerLineGroups, mergeLawyerLineItems } from "./lawyerView.ts";
+
+/** Margin a new lawyer-created line starts with; staff set the real one. */
+const DEFAULT_MARGIN_PCT = 20;
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -135,7 +139,6 @@ export default function providerQuotesRouter(app: Express) {
         notes = null,
         status = "draft",
         serviceType = null,
-        defaultMarginPct = 20,
         clientDescription = null,
         optionGroupId = null,
         optionLabel = null,
@@ -161,10 +164,14 @@ export default function providerQuotesRouter(app: Express) {
         });
       }
 
-      const normalizedGroups = normalizeLineGroups(lineGroups, currency);
+      // Lawyers enter their fee only; margin fields are never taken from the body.
+      const normalizedGroups = normalizeLineGroups(
+        mergeLawyerLineGroups(lineGroups, [], DEFAULT_MARGIN_PCT) as any[],
+        currency,
+      );
       const normalizedLineItems = normalizedGroups
         ? flattenLineGroups(normalizedGroups)
-        : normalizeLineItems(lineItems, currency);
+        : normalizeLineItems(mergeLawyerLineItems(lineItems, [], DEFAULT_MARGIN_PCT), currency);
       const { costSubtotal, total, earnings } = computeQuoteMath(normalizedLineItems);
       const quoteId = nanoId(14);
 
@@ -179,7 +186,7 @@ export default function providerQuotesRouter(app: Express) {
         costSubtotal,
         earnings,
         serviceType: serviceType || null,
-        defaultMarginPct: typeof defaultMarginPct === "number" ? defaultMarginPct : 20,
+        defaultMarginPct: DEFAULT_MARGIN_PCT,
         clientDescription: clientDescription?.trim() || null,
         optionGroupId: optionGroupId || null,
         optionLabel: optionLabel?.trim() || null,
@@ -234,7 +241,8 @@ export default function providerQuotesRouter(app: Express) {
       const changedFields: string[] = [];
 
       const scalarFields = [
-        "title", "currency", "notes", "status", "serviceType", "defaultMarginPct",
+        // defaultMarginPct is staff-only.
+        "title", "currency", "notes", "status", "serviceType",
         "clientDescription", "optionGroupId", "optionLabel", "role",
       ];
       for (const key of scalarFields) {
@@ -249,7 +257,11 @@ export default function providerQuotesRouter(app: Express) {
 
       if ("lineGroups" in (req.body ?? {})) {
         const resolvedCurrency = updates.currency ?? existing.currency ?? "USD";
-        const normalizedGroups = normalizeLineGroups(req.body.lineGroups, resolvedCurrency);
+        const margin = typeof existing.defaultMarginPct === "number" ? existing.defaultMarginPct : DEFAULT_MARGIN_PCT;
+        const normalizedGroups = normalizeLineGroups(
+          mergeLawyerLineGroups(req.body.lineGroups, existing.lineItems, margin) as any[],
+          resolvedCurrency,
+        );
         const derivedLineItems = normalizedGroups ? flattenLineGroups(normalizedGroups) : [];
         const math = computeQuoteMath(derivedLineItems);
         updates.lineGroups = normalizedGroups;
@@ -260,7 +272,11 @@ export default function providerQuotesRouter(app: Express) {
         changedFields.push("lineGroups");
       } else if ("lineItems" in (req.body ?? {})) {
         const resolvedCurrency = updates.currency ?? existing.currency ?? "USD";
-        const normalizedLineItems = normalizeLineItems(req.body.lineItems, resolvedCurrency);
+        const margin = typeof existing.defaultMarginPct === "number" ? existing.defaultMarginPct : DEFAULT_MARGIN_PCT;
+        const normalizedLineItems = normalizeLineItems(
+          mergeLawyerLineItems(req.body.lineItems, existing.lineItems, margin),
+          resolvedCurrency,
+        );
         const math = computeQuoteMath(normalizedLineItems);
         updates.lineItems = normalizedLineItems;
         updates.total = math.total;

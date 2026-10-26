@@ -12,20 +12,24 @@
  *   GET   /api/provider/me
  *   GET   /api/provider/clients
  *   PATCH /api/provider/clients/:id/stage
- *   GET   /api/provider/finance
+ *   GET   /api/provider/finance            (lawyerHomeRoutes.ts)
+ *
+ * Plus the lawyer home routes in lawyerHomeRoutes.ts (today, brief, board,
+ * matter stage, finance). Every /api/provider and /api/lawyer JSON response
+ * is filtered by stripProviderResponses (lawyerView.ts): no margins, no
+ * client price, no commercial notes, no ILP ranking.
  */
 
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
-import getAll from "../../db/getAll.ts";
+import query from "../../db/query.ts";
 import put from "../../db/put.ts";
 import { requireProviderAuth } from "../../helper/auth/session.ts";
 import {
   buildClientSummary,
   computeStage,
-  fetchAllClientsWithIds,
   getStageIds,
   getStageLabels,
 } from "../dashboard/clientHelpers.ts";
@@ -42,9 +46,13 @@ import {
   prioritiesForCountry,
   priorityById,
 } from "../countries/countryCatalog.ts";
+import {
+  LAWYER_EDITABLE_CLIENT_FIELDS,
+  stripProviderResponses,
+} from "./lawyerView.ts";
+import lawyerHomeRoutes from "./lawyerHomeRoutes.ts";
 
 const CLIENTS_COLLECTION = "clients";
-const SETTLEMENTS = "quoteSettlements";
 
 /** The authenticated provider id, attached by requireProviderAuth. */
 function providerIdOf(req: Request): string {
@@ -77,6 +85,13 @@ function normalizeDeadlineDate(v: unknown): string | null {
 export default function providerDashboardRouter(app: Express) {
   log("Provider dashboard router initialized.");
 
+  // Must be registered before any provider/lawyer route (main.ts mounts this
+  // router before providerQuotesRouter and membersRouter).
+  app.use("/api/provider", stripProviderResponses);
+  app.use("/api/lawyer", stripProviderResponses);
+
+  lawyerHomeRoutes(app);
+
   app.get(
     "/api/provider/me",
     requireProviderAuth,
@@ -105,14 +120,13 @@ export default function providerDashboardRouter(app: Express) {
       }
 
       await ensureStageConfig();
-      const all = await fetchAllClientsWithIds();
-      const mine = all.filter(
-        ({ data }) => data.assignedProviderId === providerId,
-      );
+      // Equality query on assignedProviderId (index in firestore.indexes.json
+      // is single-field, automatic) instead of scanning every client.
+      const mine = await query(CLIENTS_COLLECTION, [
+        { field: "assignedProviderId", op: "EQUAL", value: providerId },
+      ]);
 
-      const clients = mine.map(({ docId, data }) =>
-        buildClientSummary(docId, data, false)
-      );
+      const clients = mine.map((doc) => buildClientSummary(doc.id, doc, false));
       clients.sort((a, b) => {
         const da = a.lastUpdated ? new Date(a.lastUpdated as string).getTime() : 0;
         const db = b.lastUpdated ? new Date(b.lastUpdated as string).getTime() : 0;
@@ -165,8 +179,7 @@ export default function providerDashboardRouter(app: Express) {
 
       const previousStage = computeStage(doc);
       const nowIso = new Date().toISOString();
-
-      await put(CLIENTS_COLLECTION, id, {
+      const changes = {
         stage,
         stageEnteredAt: nowIso,
         updatedAt: nowIso,
@@ -180,10 +193,17 @@ export default function providerDashboardRouter(app: Express) {
             timestamp: nowIso,
           },
         ],
-      });
+      };
+      await put(CLIENTS_COLLECTION, id, changes);
 
       log(`[provider] ${providerEmailOf(req)} moved ${id} from ${previousStage} to ${stage}`);
-      res.json({ success: true, stage, previousStage });
+      // Return only the changed card so the board patches it in place.
+      res.json({
+        success: true,
+        stage,
+        previousStage,
+        client: buildClientSummary(id, { ...doc, ...changes }, false),
+      });
     })
   );
 
@@ -198,6 +218,12 @@ export default function providerDashboardRouter(app: Express) {
 
       if (!field || typeof field !== "string") {
         return res.status(400).json({ error: "field is required." });
+      }
+      // Identity fields and ILP's priority rank are staff-only (plan 9, 24.1).
+      if (!LAWYER_EDITABLE_CLIENT_FIELDS.includes(field)) {
+        return res.status(403).json({
+          error: `Lawyers can edit only: ${LAWYER_EDITABLE_CLIENT_FIELDS.join(", ")}.`,
+        });
       }
 
       const doc = await get(CLIENTS_COLLECTION, id);
@@ -636,55 +662,6 @@ export default function providerDashboardRouter(app: Express) {
       await put(CLIENTS_COLLECTION, id, { deadlines: nextDeadlines });
       log(`[provider] Deadline removed on client ${id}: ${priorityId} by ${providerEmailOf(req)}`);
       res.json({ ok: true });
-    })
-  );
-
-  app.get(
-    "/api/provider/finance",
-    requireProviderAuth,
-    asyncHandler(async (req: Request, res: Response) => {
-      const providerId = providerIdOf(req);
-      if (!providerId) {
-        return res.status(401).json({ error: "No provider identity on session." });
-      }
-
-      const settlementDocs = await getAll(SETTLEMENTS).catch(() => []);
-
-      // This lawyer's provider-payment rows across every settlement.
-      const providerPayments: Array<Record<string, unknown>> = [];
-      let totalEarned = 0;
-      let totalPending = 0;
-
-      for (const s of settlementDocs) {
-        const rows = Array.isArray(s?.providerPayments) ? s.providerPayments : [];
-        for (const p of rows) {
-          if (p?.providerId !== providerId) continue;
-          const amount = Number(p.amount) || 0;
-          const paid = p.paid === true;
-          providerPayments.push({
-            quoteId: s.id,
-            clientId: s.clientId ?? null,
-            date: p.date ?? null,
-            amount,
-            paid,
-            note: p.note ?? null,
-          });
-          if (paid) totalEarned += amount;
-          else totalPending += amount;
-        }
-      }
-
-      providerPayments.sort((a, b) =>
-        String(b.date ?? "").localeCompare(String(a.date ?? ""))
-      );
-
-      res.json({
-        providerId,
-        providerPayments,
-        totalEarned: Math.round(totalEarned * 100) / 100,
-        totalPending: Math.round(totalPending * 100) / 100,
-        settlementCount: providerPayments.length,
-      });
     })
   );
 }

@@ -22,6 +22,7 @@ import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
+import query from "../../db/query.ts";
 import put from "../../db/put.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import {
@@ -35,6 +36,13 @@ import { requireProviderAuth } from "../../helper/auth/session.ts";
 /** Resolve a provider doc by email (case-insensitive). */
 async function findProviderByEmail(email: string): Promise<Record<string, unknown> | null> {
   const normalized = email.trim().toLowerCase();
+  // Equality query first (emails are stored lowercase by the seeds and the
+  // staff providers editor); the scan is only a fallback for legacy
+  // mixed-case docs and runs on a miss, never on the data routes.
+  for (const value of new Set([normalized, email.trim()])) {
+    const hit = await query("providers", [{ field: "email", op: "EQUAL", value }]).catch(() => []);
+    if (hit[0]) return hit[0];
+  }
   const all = await getAll("providers");
   return (
     all.find(
