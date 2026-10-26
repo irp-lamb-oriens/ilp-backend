@@ -6,6 +6,7 @@
  *       Signed link from reminder emails. Without confirm it shows one button
  *       (so link scanners do not unsubscribe people); with confirm it sets
  *       clients.emailOptOut = true. Payment and account emails still arrive.
+ *   /api/retention/me/feedback/*  post-call rating + monthly 0-10 (feedback.ts)
  */
 
 import type { Express, Request, Response } from "express";
@@ -13,6 +14,7 @@ import asyncHandler from "../../helper/asyncHandler.ts";
 import patch from "../../db/patch.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { siteUrl, verifyUnsubscribe } from "./mailer.ts";
+import { registerFeedbackRoutes } from "./feedback.ts";
 
 const page = (title: string, body: string) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
@@ -20,6 +22,8 @@ const page = (title: string, body: string) =>
   <h1 style="color:#123b5d;font-size:1.5rem;line-height:1.2">${title}</h1>${body}</body></html>`;
 
 export function registerRetentionRoutes(app: Express) {
+  registerFeedbackRoutes(app); // /api/retention/me/feedback/* (feedback.ts)
+
   app.get(
     "/api/retention/unsubscribe",
     asyncHandler(async (req: Request, res: Response) => {
