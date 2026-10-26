@@ -26,6 +26,9 @@ export const COLLECTIONS = {
   csmTasks: "csm_tasks",
   obligations: "obligations",
   auditLog: "audit_log", // existing
+  availability: "lawyer_availability", // one doc per providerId
+  funnelEvents: "funnel_events",
+  feedback: "member_feedback",
 } as const;
 
 export type Iso = string;
@@ -86,6 +89,9 @@ export interface Membership {
   paymentRef?: string; // Stripe id or "manual"
   sourceLeadId?: string; // lead that converted into this membership (free check)
   cancelledAt?: Iso;
+  cancelAtPeriodEnd?: boolean; // member asked to cancel; access runs to periodEnd
+  cancelReason?: string;
+  pastDueSince?: Iso; // first failed payment of the current period
   createdAt: Iso;
   updatedAt: Iso;
 }
@@ -136,6 +142,10 @@ export interface Consultation {
   summary?: { text: string; status: "suggested" | "confirmed"; confirmedAt?: Iso };
   handoffId?: string;
   endedAt?: Iso;
+  meetUrl?: string; // Google Meet link from the calendar event
+  calendarEventId?: string;
+  remindersSent?: string[]; // e.g. ["24h", "1h"]
+  rating?: { score: 1 | 2 | 3 | 4 | 5; comment?: string; at: Iso }; // member, after the call
   createdAt: Iso;
 }
 
@@ -270,3 +280,52 @@ export const CLIENT_HIDDEN_FIELDS = [
   "commercialNotes",
   "priorityRank",
 ] as const;
+
+
+// ─── Lawyer availability (feeds booking slots) ────────────────────────────
+export interface WeeklyWindow {
+  day: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday, Costa Rica time
+  start: string; // "08:30"
+  end: string; // "12:00"
+}
+
+export interface LawyerAvailability {
+  id: string; // = providerId
+  providerId: string;
+  timezone: "America/Costa_Rica";
+  weekly: WeeklyWindow[];
+  blackoutDates: string[]; // "2026-12-24"
+  minLeadHours: number; // default 18
+  maxCallsPerDay: number; // default 6
+  specialties: string[]; // legal areas, used for routing
+  updatedAt: Iso;
+}
+
+// ─── Funnel + feedback (PMF measurement) ──────────────────────────────────
+export type FunnelStep =
+  | "check_started"
+  | "check_completed"
+  | "check_email_given"
+  | "join_started"
+  | "join_paid"
+  | "first_call_booked";
+
+export interface FunnelEvent {
+  id: string;
+  step: FunnelStep;
+  anonId: string; // random id kept in the browser, no PII
+  leadId?: string;
+  clientId?: string;
+  source?: string; // utm_source or referrer host
+  at: Iso;
+}
+
+export interface MemberFeedback {
+  id: string;
+  clientId: string;
+  kind: "post_call" | "monthly" | "cancel";
+  consultationId?: string;
+  score?: number; // 1-5 post_call; 0-10 monthly (likelihood to recommend)
+  comment?: string;
+  at: Iso;
+}
