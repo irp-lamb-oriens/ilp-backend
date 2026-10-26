@@ -296,6 +296,7 @@ export function callChangedEmail(o: {
       ${o.meetUrl ? `<p>Same Google Meet link: <a href="${callEsc(o.meetUrl)}">${callEsc(o.meetUrl)}</a></p>` : ""}
       ${callButton(o.link, o.linkLabel)}`),
   };
+}
 
 /** Obligations reaching 30 or 7 days out. Worded "may require review". */
 export function obligationsDueEmail(o: {
