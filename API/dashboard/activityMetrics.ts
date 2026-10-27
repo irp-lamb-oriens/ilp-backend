@@ -13,6 +13,8 @@
  *     matching the client-status portal's accept-quote flow.
  */
 
+import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
+
 export interface CallPerClient {
   clientId: string;
   clientName: string;
@@ -153,7 +155,7 @@ export function aggregateCalls(
 // ── Quote aggregation ────────────────────────────────────────────────────────
 
 function quoteAccepted(q: Record<string, unknown>): boolean {
-  return q.status === "accepted" || !!q.acceptedAt;
+  return isQuoteAccepted(q);
 }
 
 export function aggregateQuotes(

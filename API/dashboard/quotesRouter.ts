@@ -29,6 +29,7 @@
  *   GET    /api/dashboard/clients/:id/quotes/:quoteId/contract-pdf
  */
 
+import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
 import get from "../../db/get.ts";
@@ -934,7 +935,7 @@ export default function quotesRouter(app: Express) {
       try {
         const quote = findQuote(await readQuotes(id), quoteId);
         if (!quote) return res.status(404).json({ error: "Quote not found." });
-        if (!quote.clientAcceptedAt && quote.status !== "client_accepted") {
+        if (!isQuoteAccepted(quote)) {
           return res.status(400).json({
             error: "A contract exists only once the client has accepted this quote.",
           });

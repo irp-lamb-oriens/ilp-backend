@@ -33,6 +33,8 @@
  * tab does.
  */
 
+import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
+
 // ── Input shapes ─────────────────────────────────────────────────────────────
 
 /** A payment row on an invoice. `received !== false` means the money arrived. */
@@ -565,7 +567,7 @@ export function buildSalesReport(input: SalesReportInput): SalesReport {
   }
 
   for (const q of input.quotes) {
-    const complete = q.status === "client_accepted" || !!q.clientAcceptedAt;
+    const complete = isQuoteAccepted(q);
     projects.push({
       kind: "quote",
       id: q.quoteId,

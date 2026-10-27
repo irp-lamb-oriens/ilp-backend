@@ -11,6 +11,7 @@
  *   • messages: team comments and Lily replies merged into one thread
  */
 
+import { type QuotePhase, quoteAcceptedAt, quoteKey, quotePhase } from "../../schemas/quoteStatus.ts";
 import {
   type Consultation,
   type Handoff,
@@ -248,11 +249,10 @@ export function normalizeCharge(raw: unknown, i: number): ClientCharge {
   };
 }
 
-const QUOTE_STATUS: Record<string, ClientQuote["status"] | undefined> = {
-  sent: "awaiting",
-  received: "awaiting",
+/** Member-facing status from the shared phase (schemas/quoteStatus.ts); drafts and internal review stay hidden. */
+const QUOTE_STATUS: Partial<Record<QuotePhase, ClientQuote["status"]>> = {
+  awaiting_client: "awaiting",
   accepted: "accepted",
-  rejected: "declined",
   declined: "declined",
 };
 
@@ -275,10 +275,12 @@ export function quoteScope(q: Record<string, unknown>): string[] {
 
 export function normalizeQuote(raw: unknown): ClientQuote | null {
   const q = (raw ?? {}) as Record<string, unknown>;
-  const status = QUOTE_STATUS[String(q.status ?? "")];
-  if (!status || !str(q.id)) return null;
+  const phase = quotePhase(q);
+  const status = phase ? QUOTE_STATUS[phase] : undefined;
+  const id = quoteKey(q);
+  if (!status || !id) return null;
   return {
-    id: String(q.id),
+    id,
     title: str(q.title) ?? "Legal work proposal",
     status,
     totalCents: cents(q, ["totalMinor", "clientTotalMinor"], ["clientTotal", "total"]),
@@ -286,7 +288,7 @@ export function normalizeQuote(raw: unknown): ClientQuote | null {
     scope: quoteScope(q),
     summary: str(q.scopeSummary) ?? str(q.summary) ?? str(q.description),
     createdAt: str(q.createdAt),
-    acceptedAt: str(q.acceptedAt),
+    acceptedAt: quoteAcceptedAt(q) || undefined,
     matterId: str(q.matterId),
   };
 }

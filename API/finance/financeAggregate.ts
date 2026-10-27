@@ -23,6 +23,8 @@
  *      is an absence of data, so it never reaches an average.
  */
 
+import { isQuoteAccepted, isQuoteAwaitingClient, isQuoteClientFacing } from "../../schemas/quoteStatus.ts";
+
 // ── Input shape ──────────────────────────────────────────────────────────────
 
 /** A quote document joined with the route/stage facts of its client. */
@@ -140,7 +142,7 @@ function round2(n: number): number {
 }
 
 function isWon(q: FinanceQuote): boolean {
-  return q.status === WON_STATUS || !!q.clientAcceptedAt;
+  return isQuoteAccepted(q); // client_accepted / accepted / clientAcceptedAt (schemas/quoteStatus.ts)
 }
 
 /** Earliest date that tells us when this quote's money happened. */
@@ -323,11 +325,11 @@ export function aggregateFinance(
   skipped.exclusiveAlternates = dropped;
 
   const won = kept.filter(isWon);
-  const open = kept.filter((q) => !isWon(q) && OPEN_STATUSES.has(q.status ?? ""));
+  const open = kept.filter((q) => !isWon(q) && (OPEN_STATUSES.has(q.status ?? "") || isQuoteAwaitingClient(q)));
   const draft = kept.filter((q) => DRAFT_STATUSES.has(q.status ?? ""));
 
   const clientFacing = kept.filter(
-    (q) => CLIENT_FACING_STATUSES.has(q.status ?? "") || isWon(q),
+    (q) => CLIENT_FACING_STATUSES.has(q.status ?? "") || isQuoteClientFacing(q) || isWon(q),
   );
 
   const cycleValues: number[] = [];

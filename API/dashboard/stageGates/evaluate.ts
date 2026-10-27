@@ -12,6 +12,7 @@
  * documents, transcriptInsights) rather than IRP's `consultations` subcollections.
  */
 
+import { isQuoteAccepted, isQuoteAwaitingClient } from "../../../schemas/quoteStatus.ts";
 import get from "../../../db/get.ts";
 import log from "../../../helper/log.ts";
 import { getEnabledRulesForStage } from "./store.ts";
@@ -49,7 +50,7 @@ function makeFactResolver(clientDoc: any) {
           break;
         case "quotes_sent_to_client":
           value = (Array.isArray(clientDoc?.quotes) ? clientDoc.quotes : []).filter(
-            (r: any) => r?.status === "sent_to_client" || r?.status === "client_accepted",
+            (r: any) => isQuoteAwaitingClient(r) || isQuoteAccepted(r),
           ).length;
           break;
         case "notes_count":

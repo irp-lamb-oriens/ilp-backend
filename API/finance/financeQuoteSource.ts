@@ -12,6 +12,7 @@
  * and the two screens would quietly disagree about the same money.
  */
 
+import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
 import getAll from "../../db/getAll.ts";
 import { buildClientSummary } from "../dashboard/clientHelpers.ts";
 
@@ -165,5 +166,5 @@ export async function fetchAcceptedQuotes(): Promise<
   Array<Record<string, unknown>>
 > {
   const { quotes } = await fetchQuotesWithFacts();
-  return quotes.filter((q) => q.status === WON_STATUS);
+  return quotes.filter((q) => isQuoteAccepted(q)); // either spelling (schemas/quoteStatus.ts)
 }

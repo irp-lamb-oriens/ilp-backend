@@ -10,6 +10,7 @@
  * The pure selectors are exported for tests.
  */
 
+import { isQuoteAwaitingClient, quoteKey, quoteSentAt } from "../schemas/quoteStatus.ts";
 import getAll from "../db/getAll.ts";
 import { findRecords } from "../db/records.ts";
 import log from "../helper/log.ts";
@@ -39,12 +40,12 @@ export function unansweredQuoteEvents(clients: Doc[], now: Date): Array<[EventNa
   for (const c of clients) {
     const quotes = Array.isArray(c.quotes) ? (c.quotes as Doc[]) : [];
     for (const q of quotes) {
-      if (q.status !== "sent") continue;
-      const sent = String(q.sentAt ?? q.updatedAt ?? q.createdAt ?? "");
+      if (!isQuoteAwaitingClient(q)) continue; // sent or sent_to_client (schemas/quoteStatus.ts)
+      const sent = quoteSentAt(q) || String(q.updatedAt ?? "");
       if (!sent || now.getTime() - new Date(sent).getTime() < 5 * DAY) continue;
       out.push(["quote.unanswered_5d", {
         clientId: String(c.id),
-        sourceId: String(q.id ?? sent),
+        sourceId: quoteKey(q) || sent,
         detail: typeof q.title === "string" ? q.title : undefined,
       }]);
     }

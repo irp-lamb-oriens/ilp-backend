@@ -9,6 +9,13 @@
  * (accepted quotes, "legal GMV") are always reported apart (docs/PLAN.md).
  */
 
+import {
+  isQuoteAccepted as sharedAccepted,
+  isQuoteAwaitingClient,
+  quoteAcceptedAt as sharedAcceptedAt,
+  quoteKey,
+  quoteSentAt as sharedSentAt,
+} from "../../../schemas/quoteStatus.ts";
 import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
 import {
   type Consultation,
@@ -54,8 +61,6 @@ export function displayName(client: Doc | null | undefined, fallback = ""): stri
 
 // ─── Quotes (embedded on the clients doc) ──────────────────────────────────
 
-const SENT_STATUSES = new Set(["sent", "sent_to_client"]);
-const ACCEPTED_STATUSES = new Set(["client_accepted", "accepted", "paid"]);
 
 export function quoteCents(q: Doc): number {
   if (typeof q.totalMinor === "number") return Math.round(q.totalMinor);
@@ -64,25 +69,14 @@ export function quoteCents(q: Doc): number {
   return lines.reduce((n, l) => n + (typeof l.amountMinor === "number" ? l.amountMinor : 0), 0);
 }
 
-export function quoteSentAt(q: Doc): string {
-  return str(q.sentToClientAt) || str(q.sentAt) || str(q.createdAt);
-}
-
-export function quoteAcceptedAt(q: Doc): string {
-  return str(q.clientAcceptedAt) || str(q.acceptedAt);
-}
-
-export function isQuoteOpen(q: Doc): boolean {
-  return SENT_STATUSES.has(str(q.status));
-}
-
-export function isQuoteAccepted(q: Doc): boolean {
-  return ACCEPTED_STATUSES.has(str(q.status));
-}
-
-export function quoteIdOf(q: Doc): string {
-  return str(q.quoteId) || str(q.id);
-}
+// Status reading is shared by every view (schemas/quoteStatus.ts).
+export const quoteSentAt = (q: Doc): string => sharedSentAt(q);
+export const quoteAcceptedAt = (q: Doc): string => sharedAcceptedAt(q);
+/** With the member, not yet answered (sent / sent_to_client). */
+export const isQuoteOpen = (q: Doc): boolean => isQuoteAwaitingClient(q);
+/** Accepted (accepted / client_accepted / paid, or an acceptance timestamp). */
+export const isQuoteAccepted = (q: Doc): boolean => sharedAccepted(q);
+export const quoteIdOf = (q: Doc): string => quoteKey(q);
 
 export function quotesOf(client: Doc | null | undefined): Doc[] {
   return Array.isArray(client?.quotes) ? (client!.quotes as Doc[]) : [];

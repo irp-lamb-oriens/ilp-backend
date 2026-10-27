@@ -21,6 +21,7 @@
  * DETAILS:        PATCH .../details
  */
 
+import { isQuoteAccepted, isQuoteAwaitingClient, quoteKey } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
@@ -749,7 +750,7 @@ export default (app: Express) => {
       }
 
       const allQuotes = Array.isArray(doc.quotes) ? doc.quotes : [];
-      const receivedQuotes = allQuotes.filter((q) => (q as Record<string, unknown>).status === "received");
+      const receivedQuotes = allQuotes.filter((q) => isQuoteAwaitingClient(q as Record<string, unknown>));
 
       const { quoteId: _qid, fullName: _fn, consent: _consent } = req.body ?? {};
       const fullName = (typeof _fn === "string" ? _fn : "").trim();
@@ -761,30 +762,32 @@ export default (app: Express) => {
       let quoteId = _qid;
       if (!quoteId) {
         if (receivedQuotes.length === 1) {
-          quoteId = (receivedQuotes[0] as Record<string, unknown>).id;
+          quoteId = quoteKey(receivedQuotes[0] as Record<string, unknown>);
         } else if (receivedQuotes.length === 0) {
           return res.status(409).json({ error: "No received quotes available to accept." });
         } else {
           return res.status(400).json({
             error: "Multiple quotes are available. Please specify quoteId in the request body.",
-            availableQuoteIds: receivedQuotes.map((q) => (q as Record<string, unknown>).id),
+            availableQuoteIds: receivedQuotes.map((q) => quoteKey(q as Record<string, unknown>)),
           });
         }
       }
 
-      const targetQuote = allQuotes.find((q) => (q as Record<string, unknown>).id === quoteId) as Record<string, unknown> | undefined;
+      const targetQuote = allQuotes.find((q) => quoteKey(q as Record<string, unknown>) === quoteId) as Record<string, unknown> | undefined;
       if (!targetQuote) return res.status(404).json({ error: `Quote ${quoteId} not found on this project.` });
-      if (targetQuote.status === "accepted") return res.status(409).json({ error: "This quote has already been accepted." });
+      if (isQuoteAccepted(targetQuote)) return res.status(409).json({ error: "This quote has already been accepted." });
 
       const nowIso = new Date().toISOString();
       const newStage = "quote_accepted";
 
       const updatedQuotes = allQuotes.map((q) =>
-        (q as Record<string, unknown>).id === quoteId
+        quoteKey(q as Record<string, unknown>) === quoteId
           ? {
               ...(q as Record<string, unknown>),
               status: "accepted",
               acceptedAt: nowIso,
+              clientAcceptedAt: nowIso, // staff/finance spelling (schemas/quoteStatus.ts)
+              clientAcceptedBy: userEmail,
               acceptedBy: userEmail,
               typedFullName: fullName,
               consent: true,

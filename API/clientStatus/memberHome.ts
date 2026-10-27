@@ -21,6 +21,7 @@
  *   POST  /api/client-status/me/lily                    { message } → AI assistant
  */
 
+import { isQuoteAccepted, isQuoteAwaitingClient, quoteKey } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
@@ -479,34 +480,35 @@ export function registerMemberHomeRoutes(app: Express) {
       const doc = (await get(CLIENTS, id)) as Doc | null;
       if (!doc) return res.status(404).json({ error: "Not found." });
       const quotes = Array.isArray(doc.quotes) ? doc.quotes as Doc[] : [];
-      const target = quotes.find((q) => q.id === req.params.qid);
+      const target = quotes.find((q) => quoteKey(q) === req.params.qid);
       if (!target) return res.status(404).json({ error: "Proposal not found." });
-      if (target.status === "accepted") return res.status(409).json({ error: "You already accepted this proposal." });
-      if (!["sent", "received"].includes(String(target.status))) {
+      const targetId = quoteKey(target);
+      if (isQuoteAccepted(target)) return res.status(409).json({ error: "You already accepted this proposal." });
+      if (!isQuoteAwaitingClient(target)) {
         return res.status(409).json({ error: "This proposal can no longer be accepted. Ask your team for an update." });
       }
       const at = nowIso();
       const email = actor(req);
       const view = moneyView({ quotes: [target] }).quotes[0];
       const updated = quotes.map((q) =>
-        q.id === target.id
-          ? { ...q, status: "accepted", acceptedAt: at, acceptedBy: email, typedFullName: fullName, consent: true, consentAt: at }
+        quoteKey(q) === targetId
+          ? { ...q, status: "accepted", acceptedAt: at, acceptedBy: email, clientAcceptedAt: at, clientAcceptedBy: email, typedFullName: fullName, consent: true, consentAt: at }
           : q
       );
       const charges = Array.isArray(doc.charges) ? doc.charges as Doc[] : [];
       const charge = view?.totalCents
-        ? [{ id: `ch_quote_${target.id}`, label: view.title, amountMinor: view.totalCents, currency: view.currency, status: "pending", createdAt: at, quoteId: target.id }]
+        ? [{ id: `ch_quote_${targetId}`, label: view.title, amountMinor: view.totalCents, currency: view.currency, status: "pending", createdAt: at, quoteId: targetId }]
         : [];
       await patch(CLIENTS, id, {
         quotes: updated,
-        charges: [...charges.filter((c) => c.id !== `ch_quote_${target.id}`), ...charge],
-        quoteAcceptance: { quoteId: target.id, acceptedAt: at, acceptedBy: email, typedFullName: fullName, consent: true, consentAt: at },
+        charges: [...charges.filter((c) => c.id !== `ch_quote_${targetId}`), ...charge],
+        quoteAcceptance: { quoteId: targetId, acceptedAt: at, acceptedBy: email, typedFullName: fullName, consent: true, consentAt: at },
         ...(doc.stage === "quote_sent" ? { stage: "quote_accepted", stageEnteredAt: at } : {}),
         updatedAt: at,
       });
-      log(`[member-home] quote ${target.id} accepted by ${email} on ${id}`);
+      log(`[member-home] quote ${targetId} accepted by ${email} on ${id}`);
       // P5/P7: linked opportunities move to won now, not on the next staff read (never throws).
-      await syncOpportunitiesForQuote(id, String(target.id));
+      await syncOpportunitiesForQuote(id, targetId);
       res.json(forClient(moneyView({ ...doc, quotes: updated, charges: [...charges, ...charge] })));
     }),
   );
