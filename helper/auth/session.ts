@@ -32,6 +32,7 @@ import {
   setSessionCookie,
 } from "./cookies.ts";
 import { sessionStore } from "./sessionStore.ts";
+import { staffRoleFor } from "./roles.ts";
 
 /** Shared session validation against a given collection. */
 interface ResolvedSession {
@@ -147,7 +148,8 @@ async function findProviderForStaff(
 
 /**
  * Middleware: resolve the dashboard session and attach the staff email to the
- * request as `dashboardUser` (and the staff sub-role as `dashboardRole`).
+ * request as `dashboardUser` (and the staff sub-role as `dashboardRole`,
+ * resolved from env on every request: see roles.ts).
  */
 export async function requireDashboardAuth(
   req: Request,
@@ -166,7 +168,9 @@ export async function requireDashboardAuth(
       return;
     }
     (req as AuthedRequest).dashboardUser = found.session.email;
-    (req as AuthedRequest).dashboardRole = found.session.role ?? "staff";
+    // Role from ADMIN_EMAILS / OWNER_EMAILS / CSM_EMAILS now, not the role
+    // stamped at login, so env changes apply without waiting for a new session.
+    (req as AuthedRequest).dashboardRole = staffRoleFor(found.session.email);
     next();
   } catch {
     res.status(401).json({ error: "Authentication failed." });

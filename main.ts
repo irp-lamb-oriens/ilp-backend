@@ -59,6 +59,7 @@ import opportunitiesRouter from "./API/opportunities/opportunitiesRouter.ts"; //
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
+import { warnIfNoAdmins } from "./helper/auth/roles.ts";
 import { documentAccessRouter } from "./helper/storage.ts";
 import { securityHeaders } from "./helper/auth/securityHeaders.ts";
 import { errorHandler, installProcessErrorHandlers, registerHealthRoutes } from "./helper/errorReporter.ts";
@@ -146,6 +147,8 @@ function createServer() {
 
     // Audit + session hooks around the three OTP verify routes (before routers).
     registerSessionHooks();
+    // ROLES: loud log when no admin is configured (ADMIN_EMAILS / OWNER_EMAILS).
+    warnIfNoAdmins();
     app.use(loginHooks);
     sessionRoutes(app);
     // AUTH: POST /api/download-ticket, and ?ticket= on file routes only.

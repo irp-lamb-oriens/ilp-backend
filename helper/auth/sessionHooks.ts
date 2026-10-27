@@ -8,7 +8,8 @@
  *     see session.ts) for clients; stored on the session doc and returned as
  *     `expiresAt`;
  *   - staff: stamp `role` (staff | csm | admin) on the dashboard session and
- *     return it in the JSON body;
+ *     return it in the JSON body (informational: requireDashboardAuth
+ *     re-resolves the role from env on every request, see roles.ts);
  *   - keep `token` in the JSON body: the front end stores it and sends it as
  *     `Authorization: Bearer <token>` (AUTH; cross-site cookies are dropped);
  *   - set the role's HttpOnly session cookie only when AUTH_COOKIES=true.

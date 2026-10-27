@@ -83,6 +83,7 @@ function call(mw: Any, r: Any): Promise<{ status: number; next: boolean; body?: 
 Deno.test("Bearer resolves each role in its own collection", async () => {
   seed();
   Deno.env.delete("AUTH_COOKIES");
+  Deno.env.set("CSM_EMAILS", "ana@internationallegalpartner.com"); // role comes from env (ROLES)
   const s = await call(requireDashboardAuth, req(bearer("staffTok")));
   assertEquals([s.next, s.req.dashboardUser, s.req.dashboardRole], [true, "ana@internationallegalpartner.com", "csm"]);
   const l = await call(requireProviderAuth, req(bearer("lawTok")));

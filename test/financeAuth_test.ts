@@ -17,7 +17,10 @@ function run(role: string | undefined) {
   let status = 200;
   let body: unknown;
   let passed = false;
-  const req: Any = { dashboardUser: "x@internationallegalpartner.com", dashboardRole: role };
+  // The gate resolves the role from env by email (ROLES), so each role gets its own address.
+  Deno.env.set("ADMIN_EMAILS", "admin@internationallegalpartner.com");
+  Deno.env.set("CSM_EMAILS", "csm@internationallegalpartner.com");
+  const req: Any = { dashboardUser: `${role ?? "nobody"}@internationallegalpartner.com`, dashboardRole: role };
   const res: Any = {
     status(n: number) { status = n; return this; },
     json(b: unknown) { body = b; return this; },
