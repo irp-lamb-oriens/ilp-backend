@@ -18,6 +18,7 @@ import patch from "./patch.ts";
 import query, { type QueryFilter } from "./query.ts";
 import getAll from "./getAll.ts";
 import { COLLECTIONS } from "../schemas/contracts.ts";
+import { derivedStamp, isPlaceholderId, PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
 
 export type RecordCollection =
   | typeof COLLECTIONS.leads
@@ -95,8 +96,14 @@ export async function createRecord<T extends object>(
   data: T,
 ): Promise<T & { id: string }> {
   const given = (data as { id?: unknown }).id;
-  const id = typeof given === "string" && given ? given : newId(collection);
-  const doc = clean({ ...data, id }) as T & { id: string };
+  const clientId = (data as { clientId?: unknown }).clientId;
+  // Records about placeholder (seed) members are placeholder too: ph_ id + flag,
+  // so scripts/removePlaceholders.ts finds them (helper/placeholder.ts).
+  const ph = isPlaceholderId(clientId) || isPlaceholderId(given);
+  const base = typeof given === "string" && given ? given : newId(collection);
+  const id = ph && !isPlaceholderId(base) ? `${PLACEHOLDER_PREFIX}${base}` : base;
+  const stamp = ph && (data as { placeholder?: unknown }).placeholder !== true ? derivedStamp() : {};
+  const doc = clean({ ...data, ...stamp, id }) as T & { id: string };
   await put(collection, id, doc as unknown as Record<string, unknown>);
   return doc;
 }

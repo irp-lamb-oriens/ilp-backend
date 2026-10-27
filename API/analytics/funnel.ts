@@ -14,6 +14,7 @@
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import query from "../../db/query.ts";
+import { derivedStamp, isPlaceholderId, PLACEHOLDER_PREFIX } from "../../helper/placeholder.ts";
 import log from "../../helper/log.ts";
 import { COLLECTIONS, type FunnelEvent, type FunnelStep, type MemberFeedback } from "../../schemas/contracts.ts";
 
@@ -55,13 +56,14 @@ export async function recordFunnelEvent(ev: FunnelEvent): Promise<boolean> {
 export async function recordFirstCallBooked(clientId: string): Promise<void> {
   try {
     if (!clientId) return;
-    const id = `first_call_booked_${clientId}`.replace(/[^A-Za-z0-9_-]/g, "_");
+    const ph = isPlaceholderId(clientId);
+    const id = `${ph ? PLACEHOLDER_PREFIX : ""}first_call_booked_${clientId}`.replace(/[^A-Za-z0-9_-]/g, "_");
     if (await get(COLLECTIONS.funnelEvents, id).catch(() => null)) return;
     const c = (await get("clients", clientId).catch(() => null)) as Record<string, unknown> | null;
-    const anon = typeof c?.funnelAnonId === "string" && ANON_RE.test(c.funnelAnonId) ? c.funnelAnonId : `member_${id.slice(18, 60)}`;
+    const anon = typeof c?.funnelAnonId === "string" && ANON_RE.test(c.funnelAnonId) ? c.funnelAnonId : `member_${id.slice(ph ? 21 : 18, 60)}`;
     const ev: FunnelEvent = { id, step: "first_call_booked", anonId: anon, clientId, at: new Date().toISOString() };
     if (typeof c?.funnelSource === "string") ev.source = c.funnelSource;
-    await put(COLLECTIONS.funnelEvents, id, ev as unknown as Record<string, unknown>);
+    await put(COLLECTIONS.funnelEvents, id, { ...ev, ...(ph ? derivedStamp() : {}) } as unknown as Record<string, unknown>);
   } catch (err) {
     log(`[funnel] first_call_booked failed: ${err instanceof Error ? err.message : err}`, "error");
   }

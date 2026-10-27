@@ -14,6 +14,7 @@
  */
 
 import log from "../../helper/log.ts";
+import { derivedStamp, isPlaceholderClient, isPlaceholderId, PLACEHOLDER_PREFIX } from "../../helper/placeholder.ts";
 import {
   COLLECTIONS,
   type CsmTask,
@@ -68,7 +69,9 @@ export function isTaskEvent(name: string): name is EventName {
 /** Deterministic task id: one task per (event, source). */
 export function taskIdFor(name: string, payload: Pick<EventPayload, "clientId" | "sourceId" | "dedupeKey">): string {
   const src = (payload.dedupeKey || payload.sourceId || payload.clientId).replace(/[^A-Za-z0-9_-]/g, "_");
-  return `task_${name.replace(/[^a-z0-9]+/gi, "_")}__${src}`.slice(0, 1400);
+  // Tasks about placeholder (seed) members get the ph_ prefix, so removePlaceholders clears them too.
+  const prefix = isPlaceholderId(payload.clientId) ? PLACEHOLDER_PREFIX : "";
+  return `${prefix}task_${name.replace(/[^a-z0-9]+/gi, "_")}__${src}`.slice(0, 1400);
 }
 
 /**
@@ -96,6 +99,7 @@ export function buildTask(
     createdAt: now.toISOString(),
   };
   if (payload.matterId) task.matterId = payload.matterId;
+  if (isPlaceholderId(payload.clientId)) Object.assign(task, derivedStamp());
   const owner = payload.ownerEmail || defaultOwner;
   if (owner) task.ownerEmail = owner;
   return task;
@@ -131,6 +135,8 @@ export async function emitEvent(name: string, payload: EventPayload): Promise<st
     if (existing) return [id];
     const task = buildTask(name, payload, new Date(), await resolveOwner(payload));
     if (!task) return [];
+    // The login-alias placeholder member keeps a real-looking id: flag its tasks.
+    if (!isPlaceholderId(payload.clientId) && await isPlaceholderClient(payload.clientId)) Object.assign(task, derivedStamp());
     await createRecord(COLLECTIONS.csmTasks, task);
     log(`[events] ${name} → csm_task ${id} (${task.ownerEmail ?? "unassigned"})`);
     return [id];
