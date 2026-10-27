@@ -16,6 +16,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import patch from "../../db/patch.ts";
@@ -48,7 +49,9 @@ export function cancelReasonText(reason: unknown, comment: unknown): string {
   return [label, c].filter(Boolean).join(" — ") || "No reason given";
 }
 
-const isStripeSub = (m: Pick<Membership, "paymentRef">) => /^sub_[A-Za-z0-9]+$/.test(String(m.paymentRef ?? ""));
+// Placeholder (seed) memberships never reach Stripe, whatever their paymentRef.
+const isStripeSub = (m: Pick<Membership, "paymentRef">) =>
+  !isPlaceholderDoc(m) && /^sub_[A-Za-z0-9]+$/.test(String(m.paymentRef ?? ""));
 
 /** Deterministic id of the save-call task for one cancel request. */
 export const saveTaskKey = (m: Pick<Membership, "id" | "periodEnd">) => `${m.id}_${String(m.periodEnd).slice(0, 10)}`;

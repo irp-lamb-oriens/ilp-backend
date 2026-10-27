@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
+import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
@@ -1122,6 +1123,9 @@ export default (app: Express) => {
 
       const doc = await get(CLIENTS_COLLECTION, id);
       if (!doc) return res.status(404).json({ error: "Client not found." });
+      if (isPlaceholderDoc({ ...doc, id })) {
+        return res.status(409).json({ error: "Placeholder data: no calendar event is created for a placeholder member." });
+      }
 
       const event = await createCalendarEvent({
         slot: { start: slot.start, end: slot.end, timezone: slot.timezone ?? "America/Costa_Rica" },

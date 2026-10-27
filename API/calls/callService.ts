@@ -15,6 +15,7 @@ import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
+import { isPlaceholderClient, isPlaceholderDoc, isPlaceholderId, logSkipped } from "../../helper/placeholder.ts";
 import {
   callBookedLawyerEmail,
   callBookedMemberEmail,
@@ -89,9 +90,11 @@ export function whenLabel(iso: string): string {
 export interface CallPeople {
   member: { name: string; firstName: string; email: string | null };
   lawyer: { name: string; email: string | null };
+  /** Member or lawyer is placeholder (seed) data: no Calendar event, no email. */
+  placeholder?: boolean;
 }
 
-export async function peopleFor(c: Pick<Consultation, "clientId" | "providerId">): Promise<CallPeople> {
+export async function peopleFor(c: Pick<Consultation, "clientId" | "providerId"> & { id?: string; placeholder?: boolean }): Promise<CallPeople> {
   const [client, provider] = await Promise.all([
     get(COLLECTIONS.clients, c.clientId).catch(() => null) as Promise<Doc | null>,
     c.providerId ? (get("providers", c.providerId).catch(() => null) as Promise<Doc | null>) : Promise.resolve(null),
@@ -102,6 +105,8 @@ export async function peopleFor(c: Pick<Consultation, "clientId" | "providerId">
   return {
     member: { name: full, firstName: first, email: str(p.email)?.toLowerCase() ?? null },
     lawyer: { name: str(provider?.name) ?? "your ILP lawyer", email: str(provider?.email)?.toLowerCase() ?? null },
+    placeholder: isPlaceholderDoc(c) || isPlaceholderId(c.clientId) || isPlaceholderDoc(client) ||
+      isPlaceholderId(c.providerId) || isPlaceholderDoc(provider),
   };
 }
 
@@ -184,7 +189,8 @@ export async function routeLawyer(clientId: string, matterId?: string): Promise<
   const area = matter?.area ?? str(client?.legalArea);
   if (!area) return fallback;
   try {
-    const candidates = await lawyerCandidates(area);
+    // Placeholder (seed) lawyers only ever take placeholder members, and the reverse.
+    const candidates = await lawyerCandidates(area, await isPlaceholderClient(clientId));
     return pickLawyer(area, candidates, fallback);
   } catch (err) {
     log(`[calls] routing failed for ${clientId}: ${err instanceof Error ? err.message : err}`, "error");
@@ -192,7 +198,7 @@ export async function routeLawyer(clientId: string, matterId?: string): Promise<
   }
 }
 
-async function lawyerCandidates(area: string): Promise<LawyerCandidate[]> {
+async function lawyerCandidates(area: string, placeholderMember = false): Promise<LawyerCandidate[]> {
   const avail = (await getAll(COLLECTIONS.availability).catch(() => [])) as Doc[];
   const byId = new Map<string, string[]>();
   for (const a of avail) {
@@ -210,6 +216,7 @@ async function lawyerCandidates(area: string): Promise<LawyerCandidate[]> {
   const out: LawyerCandidate[] = [];
   for (const [providerId, specialties] of byId) {
     if (!specialties.length) continue;
+    if (isPlaceholderId(providerId) !== placeholderMember) continue;
     const load = (await findRecords<Consultation>(COLLECTIONS.consultations, { providerId, status: "booked" }).catch(() => [])).length;
     out.push({ providerId, specialties, load });
   }
@@ -250,6 +257,14 @@ export async function flagCalendarProblem(c: CallRecord, memberName: string, pro
 
 // ─── Google Meet on booking ────────────────────────────────────────────────
 
+/** Fake Meet link in Google's xxx-xxxx-xxx shape, stable per id (placeholder calls only). */
+export function placeholderMeetUrl(id: string): string {
+  let h = 2166136261;
+  for (const ch of id) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const letters = Array.from({ length: 10 }, (_, i) => String.fromCharCode(97 + ((h >>> (i % 4) * 8) + i * 7) % 26)).join("");
+  return `https://meet.google.com/${letters.slice(0, 3)}-${letters.slice(3, 7)}-${letters.slice(7)}`;
+}
+
 const slotOf = (iso: string, durationMin: number) => ({
   start: iso,
   end: new Date(Date.parse(iso) + durationMin * MIN).toISOString(),
@@ -263,6 +278,15 @@ const slotOf = (iso: string, durationMin: number) => ({
  */
 export async function attachMeeting(c: CallRecord, people?: CallPeople): Promise<CallRecord> {
   const who = people ?? (await peopleFor(c));
+  if (who.placeholder) {
+    // Placeholder (seed) call: no Calendar event or invitation, a fake Meet link.
+    logSkipped("calendar event", c.id);
+    const updated = await updateRecord<CallRecord>(COLLECTIONS.consultations, c.id, {
+      meetUrl: placeholderMeetUrl(c.id),
+      calendarError: null,
+    });
+    return updated ?? c;
+  }
   try {
     const ev = await createCalendarEvent({
       slot: slotOf(c.scheduledAt, c.durationMin || PLAN_STANDARD.callLengthMin),
@@ -299,11 +323,11 @@ export async function sendBookingEmails(c: CallRecord, people?: CallPeople): Pro
   try {
     if (who.member.email) {
       const m = callBookedMemberEmail({ firstName: who.member.firstName, lawyerName: who.lawyer.name, whenLabel: when, meetUrl: c.meetUrl, portalUrl: memberHomeUrl() });
-      await enqueueEmail({ to: who.member.email, ...m }, `call_booked_${c.id}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
+      await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
     }
     if (who.lawyer.email) {
       const l = callBookedLawyerEmail({ lawyerName: who.lawyer.name, memberName: who.member.name, whenLabel: when, question: c.question, briefUrl: lawyerBriefUrl(c.id) });
-      await enqueueEmail({ to: who.lawyer.email, ...l }, `call_booked_${c.id}_${c.scheduledAt}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_lawyer`);
     }
   } catch (err) {
     log(`[calls] booking emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -346,10 +370,10 @@ export async function cancelCall(c: CallRecord, actor: Actor, reason?: string): 
   const old = whenLabel(c.scheduledAt);
   try {
     if (who.member.email) {
-      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ change: "cancelled", greetingName: who.member.firstName, otherName: who.lawyer.name, oldWhenLabel: old, link: `${frontendUrl()}/status/book`, linkLabel: "Book another time" }) }, `call_cancelled_${c.id}_member`);
+      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ change: "cancelled", greetingName: who.member.firstName, otherName: who.lawyer.name, oldWhenLabel: old, link: `${frontendUrl()}/status/book`, linkLabel: "Book another time" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_member`);
     }
     if (who.lawyer.email) {
-      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ change: "cancelled", greetingName: who.lawyer.name, otherName: who.member.name, oldWhenLabel: old, link: `${frontendUrl()}/lawyer`, linkLabel: "Open Today" }) }, `call_cancelled_${c.id}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ change: "cancelled", greetingName: who.lawyer.name, otherName: who.member.name, oldWhenLabel: old, link: `${frontendUrl()}/lawyer`, linkLabel: "Open Today" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_lawyer`);
     }
   } catch (err) {
     log(`[calls] cancel emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -386,10 +410,10 @@ export async function rescheduleCall(c: CallRecord, newIso: string, actor: Actor
   try {
     const args = { change: "rescheduled" as const, oldWhenLabel: whenLabel(old), newWhenLabel: whenLabel(newIso), meetUrl: updated.meetUrl };
     if (who.member.email) {
-      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ ...args, greetingName: who.member.firstName, otherName: who.lawyer.name, link: memberHomeUrl(), linkLabel: "Open your ILP home" }) }, `call_moved_${c.id}_${newIso}_member`);
+      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ ...args, greetingName: who.member.firstName, otherName: who.lawyer.name, link: memberHomeUrl(), linkLabel: "Open your ILP home" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_member`);
     }
     if (who.lawyer.email) {
-      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ ...args, greetingName: who.lawyer.name, otherName: who.member.name, link: lawyerBriefUrl(c.id), linkLabel: "Open the brief" }) }, `call_moved_${c.id}_${newIso}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ ...args, greetingName: who.lawyer.name, otherName: who.member.name, link: lawyerBriefUrl(c.id), linkLabel: "Open the brief" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_lawyer`);
     }
   } catch (err) {
     log(`[calls] reschedule emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -474,6 +498,7 @@ export async function recordingStillAllowed(c: Pick<CallRecord, "clientId" | "co
 }
 
 export async function pullMeetTranscript(c: CallRecord): Promise<{ status: "fetched" | "not_ready" | "no_event" | "no_consent"; text?: string; source?: string; message?: string }> {
+  if (isPlaceholderDoc(c)) return { status: "no_event", message: "Placeholder call: no Google Meet transcript." };
   if (c.consent?.recording !== "granted") return { status: "no_consent", message: "Recording consent is not granted." };
   if (!(await recordingStillAllowed(c))) return { status: "no_consent", message: RECORDING_WITHDRAWN_MESSAGE };
   if (!c.calendarEventId) return { status: "no_event", message: "This call has no Google Calendar event." };
