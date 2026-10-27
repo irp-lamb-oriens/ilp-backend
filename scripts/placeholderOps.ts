@@ -46,6 +46,26 @@ export function selectForDeletion(collection: string, docs: Doc[], o: SelectOpti
   return out;
 }
 
+/**
+ * Pure: the account-seed cleanup rule (removePlaceholders.ts --accounts).
+ * Removes placeholder docs of `batch` with a ph_ id, the missing-account docs
+ * that batch created (`placeholderAccount: true`, e.g. lawyer_availability at
+ * the real lawyer's id), and app-derived placeholder records (batch "derived")
+ * about the batch's members or the member account. Real docs (no
+ * `placeholder: true`) are never selected; they are restored instead.
+ */
+export function selectAccountDeletion(collection: string, docs: Doc[], batch: string, clientIds: ReadonlySet<string>): { remove: Doc[]; kept: Doc[] } {
+  const out = { remove: [] as Doc[], kept: [] as Doc[] };
+  for (const d of docs) {
+    if (d.placeholder !== true) continue;
+    const id = String(d.id ?? "");
+    const mine = d.placeholderBatch === batch && (isPlaceholderId(id) || d.placeholderAccount === true);
+    const derived = d.placeholderBatch === "derived" && isPlaceholderId(id) && typeof d.clientId === "string" && clientIds.has(d.clientId);
+    if (mine || derived) out.remove.push(d);
+    else if (d.placeholderBatch === batch) out.kept.push(d);
+  }
+  return out;
+}
 
 /** Run `fn` over `items` with at most `limit` in flight. */
 export async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
