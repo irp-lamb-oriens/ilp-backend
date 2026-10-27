@@ -180,6 +180,50 @@ export async function mergeDocument(
 }
 
 /**
+ * One write to an EXISTING document through `documents:commit`: `set` keys
+ * (top-level or dotted paths such as "clientFields.phone") are written,
+ * `unset` paths are deleted, and `append` / `remove` add or take out array
+ * elements in place (appendMissingElements / removeAllFromArray), so every
+ * other field and every other array element stays exactly as stored (types
+ * included). Fails when the document does not exist. Used by the account seed
+ * (scripts/seedAccounts.ts) and its cleanup to touch real documents.
+ */
+export async function commitFieldWrite(
+  collection: string,
+  id: string,
+  o: { set?: Record<string, unknown>; unset?: string[]; append?: Record<string, unknown[]>; remove?: Record<string, unknown[]> },
+): Promise<void> {
+  const url = getFirestoreDocumentUrl(collection, id);
+  const name = url.slice(url.indexOf("/projects/") + 1);
+  const path = (p: string) => p.split(".").map(fieldPathFor).join(".");
+  // Dotted paths in `set` become nested maps in the body; the mask names each path.
+  const fields: Record<string, unknown> = {};
+  for (const [p, v] of Object.entries(o.set ?? {})) {
+    const parts = p.split(".");
+    let node = fields;
+    for (const part of parts.slice(0, -1)) node = (node[part] ??= {}) as Record<string, unknown>;
+    node[parts[parts.length - 1]] = v;
+  }
+  const transforms = [
+    ...Object.entries(o.append ?? {}).filter(([, v]) => v.length)
+      .map(([p, v]) => ({ fieldPath: path(p), appendMissingElements: { values: v.map(toFirestoreValue) } })),
+    ...Object.entries(o.remove ?? {}).filter(([, v]) => v.length)
+      .map(([p, v]) => ({ fieldPath: path(p), removeAllFromArray: { values: v.map(toFirestoreValue) } })),
+  ];
+  const write: Record<string, unknown> = {
+    update: { name, ...toFirestoreDocument(fields) },
+    updateMask: { fieldPaths: [...Object.keys(o.set ?? {}), ...(o.unset ?? [])].map(path) },
+    currentDocument: { exists: true },
+  };
+  if (transforms.length) write.updateTransforms = transforms;
+  const commitUrl = `${url.slice(0, url.indexOf("/documents/"))}/documents:commit`;
+  await firestoreRequest("commit", `${collection}/${id}`, commitUrl, {
+    method: "POST",
+    body: JSON.stringify({ writes: [write] }),
+  });
+}
+
+/**
  * Upsert a document at a fixed id using PATCH. Only the provided fields are
  * written. When `overwrite` is false, existing fields are preserved
  * (field-level merge via updateMask); when true, the whole doc is replaced.
