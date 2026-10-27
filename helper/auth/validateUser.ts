@@ -1,15 +1,15 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "./verifyToken.ts";
 import type { Role, SessionUser } from "./types.ts";
-import get from "../../db/get.ts";
 import log from "../log.ts";
-import { cookieToken, headerTokensEnabled } from "./cookies.ts";
+import { bearerToken, cookieToken, isJwt, legacyHeaderToken } from "./cookies.ts";
+import { sessionStore } from "./sessionStore.ts";
 
 /**
  * Express middleware that resolves the current user from EITHER:
- *   1. the staff session cookie `ilp_staff_session` (or, only when
- *      AUTH_HEADER_TOKENS=true, the legacy `x-dashboard-token` header) —
- *      treated as staff, OR
+ *   1. a staff dashboard session: the legacy `x-dashboard-token` header, an
+ *      opaque (non-JWT) `Authorization: Bearer` token, or the staff cookie
+ *      when AUTH_COOKIES=true — treated as staff, OR
  *   2. `Authorization: Bearer <JWT>` (customer / provider / staff JWT)
  * and applies optional role checks.
  *
@@ -33,12 +33,13 @@ export default function validateUser(allowed?: Role | Role[]) {
     //    OTP and stores a session doc keyed by a random token; it never mints a
     //    JWT. Resolve that session here so staff routes work with the same
     //    token the rest of the dashboard uses.
-    const dashboardToken =
-      (headerTokensEnabled() ? (req.headers["x-dashboard-token"] as string | undefined) : undefined) ||
+    const bearer = bearerToken(req);
+    const dashboardToken = legacyHeaderToken(req, "staff") ||
+      (bearer && !isJwt(bearer) ? bearer : undefined) ||
       cookieToken(req, "staff");
     if (dashboardToken) {
       try {
-        const session = await get("dashboard_sessions", dashboardToken);
+        const session = await sessionStore.get("dashboard_sessions", dashboardToken);
         if (session && session.email) {
           const expired = session.expiresAt &&
             new Date(session.expiresAt as string) < new Date();

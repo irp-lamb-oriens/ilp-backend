@@ -254,7 +254,7 @@ export async function deepHealth(probe: () => Promise<{ ok: boolean; ms: number;
       documentBucket: env("DOCUMENT_BUCKET"),
       backupBucket: env("BACKUP_BUCKET"),
       sentry: !!parseSentryDsn(Deno.env.get("SENTRY_DSN")),
-      headerTokens: Deno.env.get("AUTH_HEADER_TOKENS") === "true",
+      authCookies: Deno.env.get("AUTH_COOKIES") === "true",
     },
   };
 }

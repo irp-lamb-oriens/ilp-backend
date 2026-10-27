@@ -11,7 +11,7 @@
  * backward compatible.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { AccessTokenPayload } from "./types.ts";
+import type { AccessTokenPayload } from "./types.ts";
 
 function base64UrlDecode(input: string): string {
   const b64 = input.replace(/-/g, "+").replace(/_/g, "/");

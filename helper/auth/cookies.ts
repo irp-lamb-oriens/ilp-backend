@@ -1,23 +1,26 @@
 /**
  * helper/auth/cookies.ts
  * ──────────────────────────────────────────────────────────────────────────
- * HttpOnly session cookies for the three portals. The verify-otp responses
- * set them (via loginHooks); the session middleware reads them after the
- * legacy header tokens, which keep working during the transition.
+ * Session lifetimes, request-token helpers and the OPTIONAL session cookies.
  *
- * Cookie names (frontend must send requests with `credentials: "include"`):
- *   ilp_staff_session   dashboard (staff | csm | admin)
- *   ilp_lawyer_session  lawyer portal
- *   ilp_client_session  client portal (/status)
+ * AUTH (2026-10): sessions travel as `Authorization: Bearer <token>`. The
+ * site (Netlify) and the API (Render) are different sites, so a session
+ * cookie set by the API is third-party and browsers drop it; header tokens
+ * are the default and always on. The legacy role headers still work:
+ *   x-dashboard-token  staff (staff | csm | admin)
+ *   x-provider-token   lawyer
+ *   x-client-token     client
+ * `?token=` query tokens are never accepted (downloads use single-use
+ * tickets instead, see downloadTicket.ts).
  *
- * Env:
+ * Cookies are off unless AUTH_COOKIES=true. When on, verify-otp also sets
+ *   ilp_staff_session / ilp_lawyer_session / ilp_client_session
+ * (HttpOnly) and the middleware reads them after the headers.
+ *
+ * Env (cookies only, ignored unless AUTH_COOKIES=true):
  *   COOKIE_DOMAIN     optional, e.g. ".internationallegalpartner.com"
- *   COOKIE_SAMESITE   Lax (default) | Strict | None (None when the API and
- *                     the front end are on different sites)
+ *   COOKIE_SAMESITE   Lax (default) | Strict | None
  *   COOKIE_INSECURE   "true" drops the Secure flag (plain-http dev only)
- *   AUTH_HEADER_TOKENS "true" re-enables the legacy header / ?token= session
- *                     tokens and returns `token` in verify-otp bodies (seed
- *                     scripts, local tools). Default off: cookies only.
  *
  * Session lifetimes (P1): staff and lawyers 12 h from login; clients 7 days,
  * sliding (each authenticated request at least an hour after the last refresh
@@ -33,9 +36,35 @@ export const SESSION_COOKIES: Record<PortalRole, string> = {
   client: "ilp_client_session",
 };
 
-/** Legacy header / query tokens: only when AUTH_HEADER_TOKENS === "true". */
-export function headerTokensEnabled(): boolean {
-  return Deno.env.get("AUTH_HEADER_TOKENS") === "true";
+/** Session cookies are opt-in: only when AUTH_COOKIES === "true" (default off). */
+export function cookiesEnabled(): boolean {
+  return Deno.env.get("AUTH_COOKIES") === "true";
+}
+
+/** Legacy per-role headers, still accepted after `Authorization: Bearer`. */
+export const LEGACY_HEADERS: Record<PortalRole, string> = {
+  staff: "x-dashboard-token",
+  lawyer: "x-provider-token",
+  client: "x-client-token",
+};
+
+/** `Authorization: Bearer <token>`, or undefined. */
+export function bearerToken(req: Request): string | undefined {
+  const h = req.headers?.authorization;
+  if (typeof h !== "string") return undefined;
+  const m = /^Bearer\s+(\S+)\s*$/i.exec(h);
+  return m ? m[1] : undefined;
+}
+
+/** A JWT (three dot-separated parts), as opposed to an opaque session token. */
+export function isJwt(token: string): boolean {
+  return token.split(".").length === 3;
+}
+
+/** A legacy role header value, or undefined. */
+export function legacyHeaderToken(req: Request, role: PortalRole): string | undefined {
+  const v = req.headers?.[LEGACY_HEADERS[role]];
+  return typeof v === "string" && v ? v : undefined;
 }
 
 const HOUR_MS = 3600_000;
@@ -84,7 +113,9 @@ export function parseCookies(header: string | string[] | undefined): Record<stri
   return out;
 }
 
+/** The role's session cookie, only when AUTH_COOKIES=true. */
 export function cookieToken(req: Request, role: PortalRole): string | undefined {
+  if (!cookiesEnabled()) return undefined;
   const v = parseCookies(req.headers.cookie)[SESSION_COOKIES[role]];
   return v || undefined;
 }
@@ -123,12 +154,28 @@ function baseOpts() {
   };
 }
 
+/** Set the role's session cookie. No-op unless AUTH_COOKIES=true. */
 export function setSessionCookie(res: Response, role: PortalRole, token: string, expiresAt?: string): void {
+  if (!cookiesEnabled()) return;
   const exp = expiresAt ? new Date(expiresAt).getTime() : Date.now() + 24 * 3600_000;
   const maxAgeSec = Math.max(60, (exp - Date.now()) / 1000);
   appendSetCookie(res, serializeCookie(SESSION_COOKIES[role], token, { ...baseOpts(), maxAgeSec }));
 }
 
+/** Clear the role's session cookie. No-op unless AUTH_COOKIES=true. */
 export function clearSessionCookie(res: Response, role: PortalRole): void {
+  if (!cookiesEnabled()) return;
   appendSetCookie(res, serializeCookie(SESSION_COOKIES[role], "", { ...baseOpts(), maxAgeSec: 0 }));
+}
+
+/**
+ * The caller's own session token candidates for a role, in order: Bearer,
+ * the legacy role header, the role cookie (AUTH_COOKIES=true). Deduplicated.
+ */
+export function roleTokens(req: Request, role: PortalRole): string[] {
+  const out: string[] = [];
+  for (const t of [bearerToken(req), legacyHeaderToken(req, role), cookieToken(req, role)]) {
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
 }

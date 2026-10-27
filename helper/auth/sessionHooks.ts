@@ -7,13 +7,14 @@
  *   - set the session lifetime: 12 h for staff and lawyers, 7 days (sliding,
  *     see session.ts) for clients; stored on the session doc and returned as
  *     `expiresAt`;
- *   - set the role's HttpOnly session cookie (see cookies.ts for names);
  *   - staff: stamp `role` (staff | csm | admin) on the dashboard session and
  *     return it in the JSON body;
- *   - drop `token` from the JSON body unless AUTH_HEADER_TOKENS=true, so the
- *     session secret only ever lives in the HttpOnly cookie.
+ *   - keep `token` in the JSON body: the front end stores it and sends it as
+ *     `Authorization: Bearer <token>` (AUTH; cross-site cookies are dropped);
+ *   - set the role's HttpOnly session cookie only when AUTH_COOKIES=true.
  *
- * Logout (all clear the cookie, delete the session doc, write audit):
+ * Logout (delete the session doc named by the Bearer token / legacy header /
+ * cookie, clear the cookie when cookies are on, write audit):
  *   POST /api/dashboard/auth/logout          POST /api/dashboard/auth/logout-all
  *   POST /api/provider/auth/logout           POST /api/provider/auth/logout-all
  *   POST /api/client-status/auth/logout      POST /api/client-status/auth/logout-all
@@ -22,19 +23,10 @@
  */
 
 import type { Express, Request, Response } from "express";
-import patch from "../../db/patch.ts";
-import remove from "../../db/delete.ts";
-import get from "../../db/get.ts";
-import query from "../../db/query.ts";
 import log from "../log.ts";
 import { auditAuth, type PortalRole } from "./audit.ts";
-import {
-  clearSessionCookie,
-  cookieToken,
-  headerTokensEnabled,
-  SESSION_TTL_MS,
-  setSessionCookie,
-} from "./cookies.ts";
+import { clearSessionCookie, roleTokens, SESSION_TTL_MS, setSessionCookie } from "./cookies.ts";
+import { sessionStore } from "./sessionStore.ts";
 import { onLoginSuccess } from "./loginHooks.ts";
 import { staffRoleFor } from "./roles.ts";
 
@@ -42,12 +34,6 @@ export const SESSION_COLLECTION: Record<PortalRole, string> = {
   staff: "dashboard_sessions",
   lawyer: "provider_sessions",
   client: "client_status_sessions",
-};
-
-const HEADER: Record<PortalRole, string> = {
-  staff: "x-dashboard-token",
-  lawyer: "x-provider-token",
-  client: "x-client-token",
 };
 
 let registered = false;
@@ -64,20 +50,27 @@ export function registerSessionHooks(): void {
       body.role = staffRole;
     }
     try {
-      await patch(SESSION_COLLECTION[role], token, fields);
+      await sessionStore.patch(SESSION_COLLECTION[role], token, fields);
     } catch (err) {
       log(`[session] could not stamp ${role} session: ${err instanceof Error ? err.message : err}`, "error");
     }
     body.expiresAt = expiresAt;
-    setSessionCookie(res, role, token, expiresAt);
-    if (!headerTokensEnabled()) delete body.token;
+    body.token = token;
+    setSessionCookie(res, role, token, expiresAt); // no-op unless AUTH_COOKIES=true
   });
 }
 
-/** The caller's own session token for a role: cookie, or the legacy header when enabled. */
-function sessionToken(req: Request, role: PortalRole): string | undefined {
-  const header = headerTokensEnabled() ? (req.headers[HEADER[role]] as string | undefined) : undefined;
-  return header || cookieToken(req, role);
+/**
+ * The caller's own live session token for a role: the first of Bearer, legacy
+ * header, cookie that exists in the role's collection (so a staff Bearer sent
+ * to the client logout route ends nothing).
+ */
+async function sessionToken(req: Request, role: PortalRole): Promise<{ token: string; session: Record<string, unknown> } | null> {
+  for (const token of roleTokens(req, role)) {
+    const session = await sessionStore.get(SESSION_COLLECTION[role], token);
+    if (session) return { token, session: session as Record<string, unknown> };
+  }
+  return null;
 }
 
 export function sessionRoutes(app: Express): void {
@@ -88,36 +81,36 @@ export function sessionRoutes(app: Express): void {
   };
   for (const role of Object.keys(base) as PortalRole[]) {
     app.post(`${base[role]}/logout`, async (req: Request, res: Response) => {
-      const token = sessionToken(req, role);
       clearSessionCookie(res, role);
-      if (token) {
-        try {
-          const session = await get(SESSION_COLLECTION[role], token);
-          await remove(SESSION_COLLECTION[role], token);
-          const email = String(session?.email ?? "unknown");
+      try {
+        const found = await sessionToken(req, role);
+        if (found) {
+          await sessionStore.remove(SESSION_COLLECTION[role], found.token);
+          const email = String(found.session.email ?? "unknown");
           auditAuth("auth.logout", { email, role }, `${role}:${email}`, { portal: role });
-        } catch (err) {
-          log(`[session] logout cleanup failed: ${err instanceof Error ? err.message : err}`, "error");
         }
+      } catch (err) {
+        log(`[session] logout cleanup failed: ${err instanceof Error ? err.message : err}`, "error");
       }
       res.json({ success: true });
     });
 
     app.post(`${base[role]}/logout-all`, async (req: Request, res: Response) => {
-      const token = sessionToken(req, role);
-      if (!token) return res.status(401).json({ error: "Authentication required." });
+      if (!roleTokens(req, role).length) return res.status(401).json({ error: "Authentication required." });
       try {
-        const session = await get(SESSION_COLLECTION[role], token);
+        const found = await sessionToken(req, role);
+        const token = found?.token ?? "";
+        const session = found?.session;
         const expired = session?.expiresAt && new Date(String(session.expiresAt)) < new Date();
         if (!session?.email || expired) return res.status(401).json({ error: "Invalid or expired session." });
         const email = String(session.email).trim().toLowerCase();
-        const rows = await query(SESSION_COLLECTION[role], [{ field: "email", op: "EQUAL", value: email }]);
+        const rows = await sessionStore.query(SESSION_COLLECTION[role], [{ field: "email", op: "EQUAL", value: email }]);
         const ids = new Set(rows.map((r) => r.id));
         ids.add(token);
         let ended = 0;
         for (const id of ids) {
           try {
-            await remove(SESSION_COLLECTION[role], id);
+            await sessionStore.remove(SESSION_COLLECTION[role], id);
             ended++;
           } catch (err) {
             log(`[session] logout-all could not delete a session: ${err instanceof Error ? err.message : err}`, "error");

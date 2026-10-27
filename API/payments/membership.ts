@@ -262,18 +262,15 @@ export async function issuePortalSession(
 }
 
 /**
- * JSON body for the join portal-session route. The session secret lives only
- * in the HttpOnly cookie; `token` is added only when legacy header tokens are
- * on (AUTH_HEADER_TOKENS=true). Pure; exported for tests.
+ * JSON body for the join portal-session route: `{ token, expiresAt, projectId,
+ * email }`. The front end stores `token` for the client role and sends it as
+ * `Authorization: Bearer` (AUTH). Pure; exported for tests.
  */
 export function portalSessionBody(
   issued: { token: string; expiresAt: string },
   s: { clientId: string; email: string },
-  includeToken: boolean,
 ): Record<string, string> {
-  const body: Record<string, string> = { projectId: s.clientId, email: s.email, expiresAt: issued.expiresAt };
-  if (includeToken) body.token = issued.token;
-  return body;
+  return { token: issued.token, expiresAt: issued.expiresAt, projectId: s.clientId, email: s.email };
 }
 
 // ─── Stripe (test mode) ────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import { createCheckoutSession } from "../../config/integrations.ts";
 import type { SessionUser } from "../../helper/auth/types.ts";
 import rateLimit from "express-rate-limit";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
-import { headerTokensEnabled, setSessionCookie } from "../../helper/auth/cookies.ts";
+import { setSessionCookie } from "../../helper/auth/cookies.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
 import { PLAN_STANDARD } from "../../schemas/contracts.ts";
 import patch from "../../db/patch.ts";
@@ -183,9 +183,10 @@ export default function paymentsRouter(app: Express) {
       if (m?.status !== "active") return res.status(409).json({ error: "Your membership is not active yet." });
       const issued = await issuePortalSession(req.params.token, s);
       if (!issued) return res.status(200).json({ loginRequired: true, projectId: s.clientId, email: s.email });
-      // HttpOnly cookie only; `token` is in the body only with AUTH_HEADER_TOKENS=true.
+      // The front end stores `token` and sends it as a Bearer header (AUTH). The
+      // cookie is set only when AUTH_COOKIES=true.
       setSessionCookie(res, "client", issued.token, issued.expiresAt);
-      res.status(200).json(portalSessionBody(issued, s, headerTokensEnabled()));
+      res.status(200).json(portalSessionBody(issued, s));
     }),
   );
 

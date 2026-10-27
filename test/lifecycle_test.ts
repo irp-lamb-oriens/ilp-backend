@@ -102,9 +102,8 @@ Deno.test("live Stripe keys need STRIPE_ALLOW_LIVE", () => {
   assertEquals(stripeKeyAllowed("pk_live_abc", true), false);
 });
 
-Deno.test("join portal session: no token in the body unless header tokens are on", () => {
+Deno.test("join portal session: the body always carries token and expiresAt (Bearer auth)", () => {
   const issued = { token: "secret", expiresAt: "2026-11-02T12:00:00.000Z" };
   const s = { clientId: "c1", email: "a@b.co" };
-  assertEquals(portalSessionBody(issued, s, false), { projectId: "c1", email: "a@b.co", expiresAt: issued.expiresAt });
-  assertEquals(portalSessionBody(issued, s, true).token, "secret");
+  assertEquals(portalSessionBody(issued, s), { token: "secret", expiresAt: issued.expiresAt, projectId: "c1", email: "a@b.co" });
 });
