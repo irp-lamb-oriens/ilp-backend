@@ -19,7 +19,9 @@
  *     BEFORE this is run, so no email, push, Calendar or Stripe call is made
  *     for this data;
  *   - a real run needs --confirm-project=<Firestore project id>.
- * Re-running with the same --size/--seed updates the same ids.
+ * Re-running with the same --size/--seed rewrites the same ids (full replace of
+ * each placeholder doc) and prunes this batch's docs that the new plan no
+ * longer has (the story is re-dated to the new "today"), so a re-run is a reset.
  * Remove everything with scripts/removePlaceholders.ts.
  *
  * Flags:
@@ -30,6 +32,7 @@
  *   --config=auto|always|never  catalog collections: auto = only when the collection has no real docs
  *   --with-files              upload a tiny placeholder PDF per document (needs DOCUMENT_BUCKET)
  *   --concurrency=N           parallel writes, default 8
+ *   --no-prune                keep this batch's docs that the new plan no longer contains
  *   --confirm-project=<id>    required for a real run; must equal the service account's project
  * Env:
  *   SERVICE_ACCOUNT_KEY       service-account JSON or a path to it (real run)
@@ -48,7 +51,8 @@ import { loadSync } from "dotenv/mod.ts";
 loadSync({ export: true, allowEmptyValues: true, examplePath: null });
 
 import get from "../db/get.ts";
-import put from "../db/put.ts";
+import replace from "../db/replace.ts";
+import remove from "../db/delete.ts";
 import getAll from "../db/getAll.ts";
 import query from "../db/query.ts";
 import { clean } from "../db/records.ts";
@@ -56,6 +60,7 @@ import { getProjectId } from "../db/projectId.ts";
 import { putObject } from "../helper/storage.ts";
 import { assertPlaceholderDoc, assertPlaceholderId, isPlaceholderDoc, isReservedEmail } from "../helper/placeholder.ts";
 import { buildPlaceholderData, countDocs, type Doc, readyShare, type SeedData, type SeedSize, SIZES } from "./placeholderData.ts";
+import { pool, printTable, selectForDeletion } from "./placeholderOps.ts";
 
 export interface CliOptions {
   size: SeedSize;
@@ -65,6 +70,7 @@ export interface CliOptions {
   config: "auto" | "always" | "never";
   withFiles: boolean;
   concurrency: number;
+  prune: boolean;
   confirmProject?: string;
   memberEmail?: string;
   lawyerEmail?: string;
@@ -95,6 +101,7 @@ export function parseArgs(args: string[], env: (k: string) => string | undefined
     batch: flag("batch"),
     dryRun: flag("dry-run") === "true" || args.includes("-n"),
     withFiles: flag("with-files") === "true",
+    prune: flag("no-prune") !== "true",
     confirmProject: flag("confirm-project"),
     memberEmail: email("PLACEHOLDER_MEMBER_EMAIL"),
     lawyerEmail: email("PLACEHOLDER_LAWYER_EMAIL"),
@@ -107,18 +114,6 @@ export function parseArgs(args: string[], env: (k: string) => string | undefined
     return { error: "PLACEHOLDER_MEMBER_EMAIL and PLACEHOLDER_LAWYER_EMAIL must be different inboxes" };
   }
   return out;
-}
-
-/** Run `fn` over `items` with at most `limit` in flight. */
-export async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
 /** A minimal one-page PDF that says it is a placeholder (≈ 600 bytes). */
@@ -153,14 +148,6 @@ function preview(v: unknown, depth = 0): unknown {
     return Object.fromEntries(Object.entries(v as Doc).map(([k, x]) => [k, preview(x, depth + 1)]));
   }
   return v;
-}
-
-export function printTable(rows: Array<[string, number | string, ...Array<number | string>]>, head: string[]): void {
-  const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => String(r[i] ?? "").length)));
-  const line = (cells: Array<string | number>) => "| " + cells.map((c, i) => String(c).padEnd(widths[i])).join(" | ") + " |";
-  console.log(line(head));
-  console.log("| " + widths.map((w) => "-".repeat(w)).join(" | ") + " |");
-  for (const r of rows) console.log(line(r));
 }
 
 /** Every write the seed will make, in order (people first, then records). */
@@ -244,7 +231,9 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   const write = async (w: { collection: string; id: string; doc: Doc }) => {
     const key = w.collection.includes("/") ? `clients/*/${w.collection.split("/").pop()}` : w.collection;
     try {
-      await put(w.collection, w.id, clean(w.doc));
+      // Full replace: every placeholder doc is entirely ours (checked above), and a
+      // merge would keep fields an earlier run wrote that this plan no longer has.
+      await replace(w.collection, w.id, clean(w.doc));
       done.set(key, (done.get(key) ?? 0) + 1);
     } catch (err) {
       failed.set(key, (failed.get(key) ?? 0) + 1);
@@ -279,6 +268,28 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   await pool(people, o.concurrency, write);
   await pool([...rest, ...configWrites], o.concurrency, write);
 
+  // Prune: this batch's docs (ph_ + placeholder: true) that the new plan no longer has.
+  let pruned = 0;
+  if (o.prune) {
+    const planned = new Map<string, Set<string>>();
+    for (const w of [...writes, ...configWrites]) {
+      (planned.get(w.collection) ?? planned.set(w.collection, new Set()).get(w.collection)!).add(w.id);
+    }
+    for (const [col, ids] of planned) {
+      if (col.includes("/")) continue; // subcollections: stable ids, nothing to prune
+      const docs = (await query(col, [{ field: "placeholder", op: "EQUAL", value: true }]).catch(() => [])) as unknown as Doc[];
+      const stale = selectForDeletion(col.includes("/") ? "sub" : col, docs, { batch: data.batch }).remove.filter((d) => !ids.has(String(d.id)));
+      await pool(stale, o.concurrency, async (d) => {
+        try {
+          await remove(col, String(d.id));
+          pruned++;
+        } catch (err) {
+          if (errors.length < 10) errors.push(`prune ${col}/${d.id}: ${err instanceof Error ? err.message : err}`);
+        }
+      });
+    }
+  }
+
   // Placeholder files (tiny PDFs) only with --with-files and a bucket.
   let uploaded = 0;
   if (o.withFiles) {
@@ -305,6 +316,7 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   printTable(rows, ["collection", "planned", "written", "failed"]);
   for (const [c, note] of configNote) console.log(`  config ${c}: ${note}`);
   if (o.withFiles) console.log(`  files uploaded: ${uploaded}/${data.files.length}`);
+  if (o.prune) console.log(`  pruned ${pruned} documents of batch ${data.batch} that this run no longer contains.`);
   console.log(`  ${[...done.values()].reduce((s, n) => s + n, 0)} documents written in ${Math.round((Date.now() - started) / 1000)} s.`);
   if (errors.length) {
     console.error("  First errors:");

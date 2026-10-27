@@ -38,46 +38,12 @@ import getAll from "../db/getAll.ts";
 import remove from "../db/delete.ts";
 import { getProjectId } from "../db/projectId.ts";
 import { scopedAccessToken } from "../helper/storage.ts";
-import { isPlaceholderId, PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
-import { pool, printTable } from "./seedPlaceholdersFull.ts";
+import { PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
+import { CLIENT_SUBCOLLECTIONS, PLACEHOLDER_COLLECTIONS, pool, printTable, type SelectOptions, selectForDeletion } from "./placeholderOps.ts";
+
+export { CLIENT_SUBCOLLECTIONS, PLACEHOLDER_COLLECTIONS, selectForDeletion, type SelectOptions } from "./placeholderOps.ts";
 
 type Doc = Record<string, unknown>;
-
-/** Every collection the seed (or the app, for seed members) can write placeholder docs to. */
-export const PLACEHOLDER_COLLECTIONS = [
-  "providers", "lawyer_availability", "leads", "memberships", "matters", "consultations", "handoffs", "csm_tasks",
-  "obligations", "opportunities", "funnel_events", "member_feedback", "consents", "privacy_requests",
-  "member_documents", "audit_log", "quoteSettlements", "financeLedger", "invoices",
-  "quote_service_types", "quote_labels", "quote_line_templates", "quote_templates", "vendors", "posts", "updates",
-  "clients", // last: subcollections and records first
-] as const;
-export const CLIENT_SUBCOLLECTIONS = ["pricing_requests", "quoteRequests"] as const;
-
-export interface SelectOptions {
-  batch?: string;
-  includeAlias?: boolean;
-  /** Client ids of login-alias placeholder members (clients docs with placeholderAlias: true). */
-  aliasClientIds?: ReadonlySet<string>;
-}
-
-/**
- * Pure: which of these documents may be deleted. A document must carry
- * `placeholder: true` AND have a ph_ id; the alias exceptions apply only with
- * includeAlias. Exported for tests.
- */
-export function selectForDeletion(collection: string, docs: Doc[], o: SelectOptions = {}): { remove: Doc[]; kept: Doc[] } {
-  const out = { remove: [] as Doc[], kept: [] as Doc[] };
-  for (const d of docs) {
-    if (d.placeholder !== true) continue; // not ours: not even counted
-    if (o.batch && d.placeholderBatch !== o.batch) continue;
-    const id = String(d.id ?? "");
-    const ok = isPlaceholderId(id) ||
-      (!!o.includeAlias && collection === "clients" && d.placeholderAlias === true) ||
-      (!!o.includeAlias && collection !== "clients" && typeof d.clientId === "string" && !!o.aliasClientIds?.has(d.clientId));
-    (ok ? out.remove : out.kept).push(d);
-  }
-  return out;
-}
 
 async function deleteObject(objectName: string): Promise<void> {
   const bucket = Deno.env.get("DOCUMENT_BUCKET");

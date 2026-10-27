@@ -22,6 +22,15 @@ Deno.test("seed: same size + seed → same ids and content", () => {
   assertEquals(JSON.stringify(other) === JSON.stringify(pilot), false);
 });
 
+Deno.test("seed: a re-run a day later keeps people, memberships and matters on the same ids", () => {
+  const later = buildPlaceholderData({ size: "pilot", seed: 7, now: new Date(NOW.getTime() + 86_400_000) });
+  const ids = (d: typeof pilot, c: string) => d.collections[c].map((x) => String(x.id)).sort();
+  for (const c of ["clients", "memberships", "providers", "lawyer_availability", "matters"]) assertEquals(ids(later, c), ids(pilot, c), c);
+  const before = new Set(ids(pilot, "consultations"));
+  const kept = ids(later, "consultations").filter((id) => before.has(id)).length;
+  assertEquals(kept / before.size > 0.8, true, `consultations kept ${kept}/${before.size}`);
+});
+
 Deno.test("seed: every document is ph_, placeholder: true and carries the batch", () => {
   for (const d of all()) {
     assertEquals(String(d.id).startsWith("ph_"), true, String(d.id));
@@ -29,6 +38,9 @@ Deno.test("seed: every document is ph_, placeholder: true and carries the batch"
     assertEquals(d.placeholderBatch, "ph-pilot-7", String(d.id));
   }
   checkWrites(plannedWrites(pilot), pilot.aliasClientId);
+  for (const [col, list] of Object.entries(pilot.collections)) {
+    assertEquals(new Set(list.map((d) => d.id)).size, list.length, `duplicate ids in ${col}`);
+  }
 });
 
 Deno.test("seed: only reserved emails, 555-01xx phones and PH- identifiers", () => {

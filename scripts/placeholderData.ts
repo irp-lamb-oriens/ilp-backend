@@ -79,8 +79,24 @@ export interface SeedData {
 
 export class Rng {
   private a: number;
+  private readonly base: number;
   constructor(seed: number) {
-    this.a = (seed >>> 0) || 1;
+    this.base = (seed >>> 0) || 1;
+    this.a = this.base;
+  }
+  /**
+   * Restart the stream from (seed, keys…). Each member/phase gets its own
+   * stream, so a change in one member's story (a new month, today's date)
+   * does not reshuffle every member after it.
+   */
+  reseed(...keys: Array<number | string>): void {
+    let h = this.base ^ 0x9e3779b9;
+    for (const k of keys) {
+      const s = String(k);
+      for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
+      h = Math.imul(h ^ (h >>> 13), 0x5bd1e995) >>> 0;
+    }
+    this.a = h || 1;
   }
   next(): number {
     let t = (this.a = (this.a + 0x6d2b79f5) | 0);
@@ -785,6 +801,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     return { ...l, id, email, name: `${l.first} ${l.last}`, load: 0 };
   });
   for (const [i, l] of lawyers.entries()) {
+    rng.reseed("lawyer", i);
     add("providers", {
       id: l.id,
       name: l.name,
@@ -856,6 +873,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     return false;
   };
   for (let i = 0; i < cfg.members; i++) {
+    rng.reseed("member", i);
     let first = "";
     let last = "";
     for (let t = 0; t < 200; t++) {
@@ -1048,6 +1066,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     });
   };
   for (const mem of members) {
+    rng.reseed("members-1", mem.i);
     const src = rng.weighted(SOURCES);
     const anon = newAnon();
     const fromCheck = mem.i === 0 || rng.chance(0.7);
@@ -1072,6 +1091,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const checkMembers = members.filter((m) => m.leadId).length;
   const extraLeads = checkMembers * cfg.leadsPerCheckMember;
   for (let k = 0; k < extraLeads; k++) {
+    rng.reseed("lead", k);
     const first = rng.pick(FIRST);
     const last = rng.pick(LAST);
     const createdAt = NOW - Math.round(cfg.windowDays * (1 - Math.sqrt(rng.next())) * DAY);
@@ -1102,6 +1122,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // Visitors who started the check but left before the email step.
   for (let k = 0; k < Math.round(extraLeads * 0.6); k++) {
+    rng.reseed("visit", k);
     const anon = newAnon();
     const t = NOW - Math.round(cfg.windowDays * (1 - Math.sqrt(rng.next())) * DAY);
     const s: Doc = {};
@@ -1114,6 +1135,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // ── Matters ──
   const mattersBy = new Map<string, MatterRec[]>();
   for (const mem of members) {
+    rng.reseed("members-2", mem.i);
     if (mem.status === "pending") continue;
     const n = mem.i === 0 ? 2 : rng.weighted([[1, 55], [2, 35], [3, 10]] as const);
     const areas = PERSONA_AREAS[mem.persona];
@@ -1290,6 +1312,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     [...recs].filter((r) => r.openedAt <= t).sort((a, b) => b.openedAt - a.openedAt)[0] ?? recs[0];
 
   for (const mem of members) {
+    rng.reseed("members-3", mem.i);
     const recs = mattersBy.get(mem.id) ?? [];
     if (!recs.length) continue;
     mem.periods.forEach((start, p) => {
@@ -1311,6 +1334,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const todayUsed = new Set<string>();
   const todayHours = [8, 9, 10, 11, 13, 14, 15, 16];
   for (const [li, l] of lawyers.entries()) {
+    rng.reseed("today", li);
     const want = li === 0 ? 3 : 2;
     const mine = rng.shuffle(activeMembers.filter((m) => !todayUsed.has(m.id) && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId === l.id && !r.doc.closedAt)));
     if (li === 0 && aliasClientId && !mine.some((m) => m.id === aliasClientId)) {
@@ -1327,6 +1351,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // Upcoming bookings in the next 14 days.
   for (const mem of activeMembers) {
+    rng.reseed("upcoming", mem.i);
     if (todayUsed.has(mem.id) && mem.id !== aliasClientId) continue;
     if (!(mem.id === aliasClientId || mem.i === 0 || rng.chance(0.35))) continue;
     const t = bizTime(NOW + 3 * HOUR, Math.min(NOW + 14 * DAY, Date.parse(String(mem.membership.periodEnd)) + 10 * DAY));
@@ -1336,6 +1361,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // Minutes and calls used this period.
   for (const mem of members) {
+    rng.reseed("members-4", mem.i);
     const m = mem.membership;
     const used = consultations.filter((c) => c.clientId === mem.id && c.status === "completed" &&
       String(c.scheduledAt) >= String(m.periodStart) && String(c.scheduledAt) < String(m.periodEnd));
@@ -1415,6 +1441,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   };
 
   for (const c of consultations) {
+    rng.reseed("after-call", String(c.id));
     const summary = c.summary as { status: string; confirmedAt?: string } | undefined;
     if (c.status !== "completed" || summary?.status !== "confirmed" || !rng.chance(0.8)) continue;
     const mem = memberById.get(String(c.clientId))!;
@@ -1498,6 +1525,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // A few opportunities that start from an obligation or a CSM conversation.
   let oppN = 0;
   for (const mem of members) {
+    rng.reseed("members-5", mem.i);
     if (mem.status === "pending" || mem.status === "cancelled") continue;
     const recs = mattersBy.get(mem.id) ?? [];
     if (mem.profile.hasCompany && rng.chance(0.12)) {
@@ -1540,6 +1568,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     doc.stageEnteredAt = iso(Math.min(t, NOW));
   };
   for (const mem of members) {
+    rng.reseed("members-6", mem.i);
     for (const rec of mattersBy.get(mem.id) ?? []) {
       const d = rec.doc;
       const cons = consultations.filter((c) => c.matterId === d.id && c.status === "completed").sort((a, b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt)));
@@ -1594,6 +1623,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // ── Finance: settlements, invoices and the ledger for won quotes ──
   let invN = 0;
   for (const { q, mem, lawyer, acceptedAt } of wonQuotes) {
+    rng.reseed("finance", String(q.id));
     const total = Number(q.total);
     const cost = Number(q.costSubtotal);
     const secondDue = acceptedAt + 30 * DAY;
@@ -1682,6 +1712,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // ── Obligations from the Costa Rica catalog ──
   const obligationsBy = new Map<string, Doc[]>();
   for (const mem of members) {
+    rng.reseed("members-7", mem.i);
     if (mem.status === "pending") continue;
     const list: Doc[] = [];
     const nowAnswers: CheckAnswers = { ...mem.answers };
@@ -1704,6 +1735,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
 
   // ── Membership tasks, feedback, consents ──
   for (const mem of members) {
+    rng.reseed("members-8", mem.i);
     const m = mem.membership;
     if (mem.status !== "pending") {
       mkTask("membership.activated", { clientId: mem.id, sourceId: m.id, detail: `${mem.first} ${mem.last}` }, mem.activatedAt,
@@ -1737,6 +1769,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         const score = rng.weighted([[10, 30], [9, 25], [8, 15], [7, 12], [6, 7], [5, 5], [4, 3], [3, 2], [1, 1]] as const);
         const month = iso(t).slice(0, 7);
         const fid = `${PLACEHOLDER_PREFIX}fb_m_${pad(mem.i + 1)}_${month}`;
+        if ((collections[COLLECTIONS.feedback] ?? []).some((f) => f.id === fid)) continue; // one answer per month
         add(COLLECTIONS.feedback, {
           id: fid, clientId: mem.id, kind: "monthly", score, month, at: iso(t),
           ...(score <= 6 ? { comment: rng.pick(["Hard to get a call slot this month.", "Not sure I'm using it enough.", "Took a while to hear back."]) } : score >= 9 && rng.chance(0.4) ? { comment: rng.pick(["Peace of mind for our house.", "The deadline reminders alone are worth it.", "Mariana is fantastic."]) } : {}),
@@ -1768,6 +1801,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (mem.recordingWithdrawnAt && mem.recordingWithdrawnAt < NOW) cons("recording", false, mem.recordingWithdrawnAt, "privacy_page");
   }
   for (const c of consultations) {
+    rng.reseed("after-call", String(c.id));
     const consent = c.consent as { recording: string; at?: string };
     if (consent.recording === "pending" || !consent.at) continue;
     const mem = memberById.get(String(c.clientId))!;
@@ -1787,6 +1821,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // Post-call ratings → member_feedback (+ low-score follow-ups).
   for (const r of ratings) {
+    rng.reseed("rating", String(r.c.id));
     const fid = `${PLACEHOLDER_PREFIX}fb_c_${String(r.c.id).replace(PLACEHOLDER_PREFIX, "")}`;
     add(COLLECTIONS.feedback, {
       id: fid, clientId: r.mem.id, kind: "post_call", consultationId: r.c.id, providerId: r.c.providerId, score: r.score,
@@ -1826,6 +1861,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     ["tax", "rental-income-2025.pdf", "application/pdf", (m) => m.persona === "business" || m.persona === "owner"],
   ];
   for (const mem of members) {
+    rng.reseed("members-9", mem.i);
     if (mem.status === "pending") continue;
     const recs = mattersBy.get(mem.id) ?? [];
     const eligible = DOCS.filter((d) => d[3](mem));
@@ -1853,6 +1889,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // ── Client records (person doc with the embedded arrays the portals read) ──
   const clients: Doc[] = [];
   for (const mem of members) {
+    rng.reseed("members-10", mem.i);
     const m = mem.membership;
     const recs = mattersBy.get(mem.id) ?? [];
     const primary = recs.find((r) => !r.doc.closedAt) ?? recs[0];
@@ -1968,6 +2005,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     ...missingDocumentEvents(clients, now),
   ];
   for (const [name, payload] of sweep) {
+    rng.reseed("sweep", name, String(payload.sourceId ?? payload.clientId));
     const rule = TASK_RULES[name];
     let eventAt = NOW - rng.int(1, 30) * HOUR;
     if (name === "quote.unanswered_5d") {
@@ -1997,6 +2035,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     add(COLLECTIONS.auditLog, { id: `${PLACEHOLDER_PREFIX}aud_${pad(++audN, 6)}`, actor, action, target, meta, at: iso(t) });
   };
   for (const mem of members) {
+    rng.reseed("members-11", mem.i);
     const actor = { uid: mem.id, email: mem.email, role: "client" };
     audit({ uid: "system", email: "system", role: "system" }, mem.status === "pending" ? "membership.join_started" : "membership.activated", `memberships/${mem.membership.id}`, mem.activatedAt, { paymentRef: "manual" });
     const logins = Math.min(8, 1 + Math.round(((mem.cancelAt ?? NOW) - mem.activatedAt) / (12 * DAY)));
@@ -2009,6 +2048,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     audit({ uid: String(d.uploadedBy), email: String(d.uploadedBy), role: byStaff ? "staff" : "client" }, "document.upload", `clients/${d.clientId}`, Date.parse(String(d.uploadedAt)), { docId: d.id, category: d.category });
   }
   for (const h of handoffs) {
+    rng.reseed("hof-audit", String(h.id));
     const l = lawyerById.get(String(h.providerId))!;
     audit({ uid: l.id, email: l.email, role: "lawyer" }, "handoff.created", `handoffs/${h.id}`, Date.parse(String(h.approvedAt)), { consultationId: h.consultationId });
   }
@@ -2016,11 +2056,13 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (t.status === "done" && t.closedAt) audit({ uid: String(t.ownerEmail), email: String(t.ownerEmail), role: "csm" }, "csm_task.closed", `csm_tasks/${t.id}`, Date.parse(t.closedAt), { type: t.type });
   }
   for (const s of staff) {
+    rng.reseed("staff", s.email);
     for (let d = Math.min(cfg.windowDays, 120); d >= 0; d -= rng.int(1, 3)) {
       audit({ uid: s.email, email: s.email, role: s.role }, "auth.login", `staff:${s.email}`, crAt(today0 - d * DAY, rng.int(7, 10), rng.int(0, 59)), { portal: "staff" });
     }
   }
   for (const l of lawyers) {
+    rng.reseed("lawyer-login", l.id);
     for (let d = Math.min(cfg.windowDays, 120); d >= 0; d -= rng.int(3, 8)) {
       audit({ uid: l.id, email: l.email, role: "lawyer" }, "auth.login", `lawyer:${l.email}`, crAt(today0 - d * DAY, rng.int(7, 9), rng.int(0, 59)), { portal: "lawyer" });
     }
