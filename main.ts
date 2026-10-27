@@ -89,7 +89,12 @@ function createServer() {
     // Allow only known front-end origins (comma-separated ALLOWED_ORIGINS).
     // Localhost dev origins are permitted when not in production.
     const allowedOrigins = (Deno.env.get("ALLOWED_ORIGINS") ?? "")
-      .split(",").map((o) => o.trim()).filter(Boolean);
+      .split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean);
+    if (!allowedOrigins.length) {
+      // Safety net: never ship a production API that blocks its own site.
+      allowedOrigins.push("https://internationallegalpartner.com", "https://www.internationallegalpartner.com");
+      log("WARN: ALLOWED_ORIGINS is not set; defaulting to internationallegalpartner.com (+www).");
+    }
     if (!isProduction) allowedOrigins.push("http://localhost:3000", "http://127.0.0.1:3000");
     app.use(cors({
       origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
