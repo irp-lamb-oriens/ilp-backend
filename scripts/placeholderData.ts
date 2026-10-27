@@ -34,12 +34,45 @@ import { LEGAL_VERSIONS } from "../API/privacy/policy.ts";
 import { CANCEL_REASONS } from "../API/payments/cancel.ts";
 import { missingDocumentEvents, renewalEvents, unansweredQuoteEvents } from "../jobs/taskRuleSweep.ts";
 import { PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
+import {
+  ACCESSIBILITY,
+  type Background,
+  BACKGROUNDS,
+  BLOCKED_NAMES,
+  COMPANIES,
+  COMPANY_WEIGHTS,
+  type CompanyKind,
+  COVER_PEOPLE,
+  EMPLOYEE_WEIGHTS,
+  type EmployeeKind,
+  EMPLOYEES,
+  type Gender,
+  type Household,
+  HOUSEHOLDS,
+  LANGUAGES,
+  MARITAL,
+  NATIONALITIES,
+  PETS,
+  PLACES,
+  PROPERTIES,
+  PROPERTY_LABEL,
+  PROPERTY_WEIGHTS,
+  type PropertyKind,
+  PROVINCES,
+  PRONOUNS,
+  RESIDENCIES,
+  RESIDENCY_WEIGHTS,
+  type Residency,
+  VEHICLE_WEIGHTS,
+  type VehicleKind,
+  VEHICLES,
+} from "./placeholderPeople.ts";
 
 export type Doc = Record<string, unknown>;
 export type SeedSize = "demo" | "pilot" | "large";
 
 export const SIZES: Record<SeedSize, { members: number; lawyers: number; staff: number; windowDays: number; leadsPerCheckMember: number }> = {
-  demo: { members: 15, lawyers: 3, staff: 2, windowDays: 120, leadsPerCheckMember: 6 },
+  demo: { members: 16, lawyers: 3, staff: 3, windowDays: 180, leadsPerCheckMember: 6 },
   pilot: { members: 60, lawyers: 6, staff: 4, windowDays: 182, leadsPerCheckMember: 10 },
   large: { members: 300, lawyers: 12, staff: 6, windowDays: 365, leadsPerCheckMember: 10 },
 };
@@ -154,46 +187,10 @@ const crDow = (ms: number) => new Date(ms - 6 * HOUR).getUTCDay();
 
 // ─── Content pools ────────────────────────────────────────────────────────
 
-const FIRST = [
-  "Robert", "Linda", "James", "Patricia", "Michael", "Barbara", "David", "Susan", "Richard", "Karen",
-  "Thomas", "Nancy", "Mark", "Deborah", "Steven", "Carol", "Paul", "Sandra", "Kenneth", "Donna",
-  "Brian", "Sharon", "Gary", "Cynthia", "Jeffrey", "Kathleen", "Scott", "Diane", "Gregory", "Janet",
-  "Douglas", "Laurie", "Randall", "Brenda", "Wayne", "Teresa", "Dennis", "Heather", "Craig", "Melissa",
-  "Todd", "Amy", "Bruce", "Lori", "Keith", "Rachel", "Derek", "Megan", "Trevor", "Colleen",
-  "Priya", "Wei", "Andre", "Marisol", "Kenji", "Aisha", "Glenn", "Marjorie", "Russell", "Yvonne",
-] as const;
-const LAST = [
-  "Whitaker", "Lindqvist", "Hollis", "Brennan", "Kowalski", "Delgado", "Fairbanks", "Thornton", "McAllister", "Pruitt",
-  "Gallagher", "Okafor", "Haverford", "Castellano", "Brandt", "Ellison", "Rasmussen", "Van Dorn", "Chandler", "Petrakis",
-  "Abernathy", "Sorensen", "Yamada", "Kessler", "Holloway", "Prescott", "Dempsey", "Langford", "Whitcomb", "Marchetti",
-  "Byrne", "Lachance", "Tremblay", "Bouchard", "Gagnon", "Fitzgerald", "Rinaldi", "Stroud", "Ashby", "Calloway",
-  "Mercer", "Quinlan", "Halvorsen", "Pendleton", "Ostrowski", "Delacroix", "Winslow", "Garrity", "Lundgren", "Beaumont",
-] as const;
-/** Combinations that could read as a public figure; never generated. */
-const BLOCKED_NAMES = new Set([
-  "Michael Thornton", "Paul Ellison", "James Holloway", "Mark Kessler", "David Brennan", "Robert Mercer",
-  "Thomas Kessler", "Steven Rinaldi", "Gary Gallagher", "Kenneth Fairbanks", "Richard Gagnon",
-]);
-
 const US_AREA = ["503", "612", "415", "512", "720", "206", "305", "216", "919", "480", "602", "828", "941", "571"] as const;
 const CA_AREA = ["604", "416", "647", "902", "403", "613", "250"] as const;
 
-export const LOCATIONS = [
-  { place: "Nosara", province: "Guanacaste" },
-  { place: "Tamarindo", province: "Guanacaste" },
-  { place: "Playas del Coco", province: "Guanacaste" },
-  { place: "Escazú", province: "San José" },
-  { place: "Santa Ana", province: "San José" },
-  { place: "San José", province: "San José" },
-  { place: "Atenas", province: "Alajuela" },
-  { place: "Grecia", province: "Alajuela" },
-  { place: "Heredia", province: "Heredia" },
-  { place: "Puerto Viejo", province: "Limón" },
-  { place: "Dominical", province: "Puntarenas" },
-  { place: "Ojochal", province: "Puntarenas" },
-  { place: "Jacó", province: "Puntarenas" },
-] as const;
-type Loc = (typeof LOCATIONS)[number];
+type Loc = { place: string; province: string };
 
 /** ILP legal areas used on matters, specialties and opportunities. */
 export const AREAS = ["immigration", "real_estate", "corporate", "tax", "vehicle", "family_estate", "labor"] as const;
@@ -686,6 +683,22 @@ const MEMBER_MESSAGES = [
   "Could we move my call to next week? Something came up.",
   "That's very helpful, thank you.",
 ];
+const TEAM_MESSAGES_ES = [
+  "Hola {M}, bienvenido a ILP. Soy tu gestora de cuenta. Puedes reservar tu primera llamada desde la pestaña Book cuando quieras.",
+  "Gracias por enviar los documentos, {M}. Ya se los pasé a {L} y te confirmo cuando estén revisados.",
+  "{L} confirmó el resumen de tu llamada; los próximos pasos ya están en tu página de inicio.",
+];
+const MEMBER_MESSAGES_ES = [
+  "¡Gracias! ¿Necesito preparar algo antes de la llamada?",
+  "Subí el escaneo del pasaporte, ¿me confirman que les llegó?",
+  "¿Podemos mover la llamada a la próxima semana?",
+];
+/** A very long free-text note and a very short one (layout edge cases). */
+const LONG_NOTE =
+  "Long welcome call with {M}. Background: bought the {loc} property in 2019 through an S.A. set up by the developer's lawyer, never received the legal books, and is not sure who the current legal representative is. " +
+  "Spouse is a dual citizen and may apply for residency separately next year. Adult children live abroad and would inherit; member asked whether a Costa Rican will is needed in addition to the US trust (flagged for the lawyer, no advice given). " +
+  "Prefers email, reads Spanish slowly, and asked us to avoid calls before 9:00 because of a hearing aid fitting schedule. Wants a written summary after each call. Mentioned possibly selling the lot next to the house in 18 months; noted as a future real estate opportunity, not raised with the member.";
+const SHORT_NOTES = ["ok", "👍", "Left voicemail."];
 const CSM_NOTES = [
   "Welcome call done. Prefers email over WhatsApp; spends winters in {loc}.",
   "Asked about adding spouse to the membership. Explained the plan covers one member for now.",
@@ -721,7 +734,6 @@ export function meetUrlFor(id: string): string {
 }
 
 type Persona = "retiree" | "remote" | "owner" | "business" | "applicant";
-const PERSONAS: Array<[Persona, number]> = [["retiree", 30], ["remote", 20], ["owner", 20], ["business", 15], ["applicant", 15]];
 const PERSONA_AREAS: Record<Persona, Area[]> = {
   retiree: ["immigration", "real_estate", "family_estate", "vehicle", "tax"],
   remote: ["immigration", "vehicle", "tax"],
@@ -757,6 +769,8 @@ interface Member {
   leadId?: string;
   aiConsent: boolean;
   recordingWithdrawnAt?: number;
+  /** Diversity dimensions (report + area choice). */
+  situation: { background: string; residency: string; property: string; company: string; vehicle: string; employees: string; household: string; language: string; age: number; nationalities: string[]; province: string };
 }
 
 interface MatterRec {
@@ -829,6 +843,13 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const morning = rng.pick([["08:00", "12:00"], ["08:30", "12:00"], ["09:00", "12:30"]] as const);
     const afternoon = rng.pick([["13:30", "16:30"], ["14:00", "17:00"], ["13:00", "16:00"]] as const);
     const days: Array<0 | 1 | 2 | 3 | 4 | 5 | 6> = i % 3 === 2 ? [1, 2, 3, 4] : [1, 2, 3, 4, 5];
+    // The last lawyer never saved their hours (the app falls back to defaults).
+    if (i === cfg.lawyers - 1 && cfg.lawyers > 2) continue;
+    const year = new Date(NOW).getUTCFullYear();
+    // One lawyer is on vacation in about two weeks (blackout days).
+    const vacation = i === (cfg.lawyers >= 4 ? 2 : 0)
+      ? Array.from({ length: 7 }, (_, k) => ymd(today0 + (15 + k) * DAY + 12 * HOUR))
+      : [];
     add(COLLECTIONS.availability, {
       id: l.id,
       providerId: l.id,
@@ -837,9 +858,9 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         { day, start: morning[0], end: morning[1] },
         ...(i % 2 === 0 || day !== 5 ? [{ day, start: afternoon[0], end: afternoon[1] }] : []),
       ]),
-      blackoutDates: [`${new Date(NOW).getUTCFullYear()}-12-24`, `${new Date(NOW).getUTCFullYear()}-12-25`, `${new Date(NOW).getUTCFullYear() + 1}-01-01`],
+      blackoutDates: [...vacation, `${year}-12-24`, `${year}-12-25`, `${year + 1}-01-01`],
       minLeadHours: [18, 24, 18, 12][i % 4],
-      maxCallsPerDay: [6, 5, 4, 6][i % 4],
+      maxCallsPerDay: i === 1 ? 3 : [6, 5, 4, 6][i % 4], // lawyer 2 is fully booked (3 a day)
       specialties: [...l.areas],
       calendarId: null,
       updatedAt: iso(NOW - rng.int(2, 60) * DAY),
@@ -858,8 +879,11 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
 
   // ── Members ──
   const used = new Set<string>();
+  const usedEmails = new Set<string>();
   const members: Member[] = [];
-  const pendingIdx = new Set(cfg.members >= 30 ? [cfg.members - 1, cfg.members - 2] : [cfg.members - 1]);
+  const pendingIdx = new Set(cfg.members >= 10 ? [cfg.members - 1, cfg.members - 2] : [cfg.members - 1]);
+  // Fixed roles at every size, so each state the UI can show exists (SEED.md "Diversity").
+  const ROLE = { complete: 0, joined1d: 1, joinedToday: 2, longFull: 3, cancelled: 4, pastDue: 5, cancelPending: 6, noCalls: 7, renewToday: 8, unassigned: 9, missingDoc: 10 } as const;
   // Churn on a steady rhythm (not pure chance) so month-3 retention lands near 80-82%.
   const churn = { old: [0, 0], young: [0, 0] };
   const churnNow = (tenureDays: number) => {
@@ -872,86 +896,162 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     }
     return false;
   };
+  // Coverage: members 1…n walk through every value of each dimension once (in a
+  // seeded order), later members draw with plausible weights.
+  rng.reseed("perms");
+  const perms = {
+    household: rng.shuffle(HOUSEHOLDS),
+    residency: rng.shuffle(RESIDENCIES),
+    property: rng.shuffle(PROPERTIES),
+    company: rng.shuffle(COMPANIES),
+    vehicle: rng.shuffle(VEHICLES),
+    employees: rng.shuffle(EMPLOYEES),
+    province: rng.shuffle(PROVINCES),
+    pets: rng.shuffle(PETS.map((_, k) => k)),
+  };
+  const cover = <T>(values: readonly T[], weights: ReadonlyArray<readonly [T, number]>, slot: number): T =>
+    slot >= 0 && slot < values.length ? values[slot] : rng.weighted(weights);
+  // CSM load: the first CSM carries the most members; a third CSM (new hire) has none yet.
+  const emptyCsm = csms.length >= 3 ? csms[2].email : null;
+  const csmPool = csms.filter((c) => c.email !== emptyCsm);
+  const csmFor = () => (csmPool.length === 1 || rng.chance(0.65) ? csmPool[0].email : rng.pick(csmPool.slice(1)).email);
+  const bgWeights: Array<[Background, number]> = BACKGROUNDS.map((b) => [b, b.key === "anglo" ? 30 : b.key === "hispanic" ? 10 : 4]);
+
   for (let i = 0; i < cfg.members; i++) {
     rng.reseed("member", i);
+    const slot = i - 1; // member 0 is the fully completed showcase profile
+    const spec = COVER_PEOPLE[i];
+    const bg = BACKGROUNDS.find((b) => b.key === spec?.bg) ?? rng.weighted(bgWeights);
     let first = "";
     let last = "";
-    for (let t = 0; t < 200; t++) {
-      first = rng.pick(FIRST);
-      last = rng.pick(LAST);
-      const full = `${first} ${last}`;
-      if (!used.has(full) && !BLOCKED_NAMES.has(full)) break;
+    let gender: Gender = "x";
+    if (spec?.name) ({ first, last, gender } = spec.name);
+    else {
+      for (let t = 0; t < 200; t++) {
+        [first, gender] = rng.pick(bg.firsts);
+        last = rng.pick(bg.lasts);
+        const full = `${first} ${last}`;
+        if (!used.has(full) && !BLOCKED_NAMES.has(full)) break;
+      }
     }
-    used.add(`${first} ${last}`);
+    const fullName = last ? `${first} ${last}` : first;
+    used.add(fullName);
     const alias = i === 0 && !!opts.memberEmail;
-    const email = alias ? opts.memberEmail!.toLowerCase().trim() : `${slug(first)}.${slug(last)}@example.com`;
+    let local = last ? `${slug(first)}.${slug(last)}` : slug(first);
+    for (let n = 2; usedEmails.has(local); n++) local = `${last ? `${slug(first)}.${slug(last)}` : slug(first)}${n}`;
+    usedEmails.add(local);
+    const email = alias ? opts.memberEmail!.toLowerCase().trim() : `${local}@example.com`;
     const id = alias ? email.replace(/[@.]/g, "_") : `${PLACEHOLDER_PREFIX}cli_${pad(i + 1)}`;
-    const ca = rng.chance(0.2);
-    const phone = `+1 ${rng.pick(ca ? CA_AREA : US_AREA)} 555 01${pad(i % 100, 2)}`;
-    const persona = i === 0 ? "owner" : rng.weighted(PERSONAS);
-    const loc = rng.pick(LOCATIONS);
+    const nationality = spec?.nat ?? rng.pick(bg.nationalities);
+    const second = spec?.dual ?? (rng.chance(0.12) ? rng.pick(NATIONALITIES.filter((n) => n !== nationality)) : undefined);
+    const language = spec?.lang ?? (rng.chance(0.85) ? bg.languages[bg.languages.length - 1] === "en" ? "en" : bg.languages[0] : rng.pick(LANGUAGES));
+    // UK numbers in Ofcom's drama range (07700 900xxx); everyone else +1 555-01xx.
+    const phone = nationality === "UK"
+      ? `+44 7700 900${pad(100 + i % 900, 3)}`
+      : `+1 ${rng.pick(nationality === "CA" ? CA_AREA : US_AREA)} 555 01${pad(i % 100, 2)}`;
 
-    // Join date: more recent joins (growth); a few fixed ones keep the demo lively.
-    let joinedDaysAgo = cfg.windowDays * (1 - Math.sqrt(rng.next()));
-    if (i === 0) joinedDaysAgo = Math.min(48, cfg.windowDays - 5);
-    if (i === 1) joinedDaysAgo = 1.2;
-    if (i === 2) joinedDaysAgo = 0.3;
-    if (i === 3) joinedDaysAgo = Math.min(cfg.windowDays - 2, 150);
-    if (pendingIdx.has(i)) joinedDaysAgo = rng.int(1, 3) - 0.5;
-    joinedDaysAgo = Math.max(0.25, Math.min(cfg.windowDays, joinedDaysAgo));
-    const activatedAt = NOW - Math.round(joinedDaysAgo * DAY);
+    // Situation (coverage first, then weights).
+    const residency: Residency = i === 0 ? "pensionado" : cover(perms.residency, RESIDENCY_WEIGHTS, slot);
+    const property: PropertyKind = i === 0 ? "house" : cover(perms.property, PROPERTY_WEIGHTS, slot);
+    const companyKind: CompanyKind = i === 0 ? "one_sa" : cover(perms.company, COMPANY_WEIGHTS, slot);
+    const vehicle: VehicleKind = i === 0 ? "local" : cover(perms.vehicle, VEHICLE_WEIGHTS, slot);
+    const employees: EmployeeKind = i === 0 ? "domestic" : cover(perms.employees, EMPLOYEE_WEIGHTS, slot);
+    const household: Household = cover(perms.household, HOUSEHOLDS.map((h) => [h, h === "married" ? 40 : h === "single" ? 15 : 9] as [Household, number]), i);
+    const province = cover(perms.province, PROVINCES.map((p) => [p, p === "Guanacaste" || p === "San José" ? 25 : 10] as [(typeof PROVINCES)[number], number]), i);
+    const loc: Loc = { place: rng.pick(PLACES[province]), province };
+    const persona: Persona = residency === "pensionado" ? "retiree"
+      : residency === "digital_nomad" ? "remote"
+      : ["in_process", "refused", "temporary"].includes(residency) ? "applicant"
+      : ["one_sa", "multiple_sa", "srl"].includes(companyKind) && (employees === "small_business" || property === "airbnb_rental") ? "business"
+      : property !== "none" ? "owner" : "retiree";
+    const resident = ["pensionado", "rentista", "inversionista", "permanent", "temporary", "expired"].includes(residency);
 
-    // Profile
-    const retiree = persona === "retiree";
-    const age = retiree ? rng.int(60, 75) : persona === "remote" ? rng.int(40, 52) : rng.int(45, 70);
+    // Join date: more recent joins (growth); fixed roles keep every state present.
+    let activatedAt = NOW - Math.round(Math.max(0.25, cfg.windowDays * (1 - Math.sqrt(rng.next()))) * DAY);
+    const monthsBack = (anchor: number, n: number) => addMonths(anchor, -n);
+    const maxMonths = Math.max(2, Math.floor((cfg.windowDays - 10) / 30.4));
+    if (i === ROLE.complete) activatedAt = NOW - Math.min(48, cfg.windowDays - 5) * DAY;
+    if (i === ROLE.joined1d) activatedAt = NOW - Math.round(1.2 * DAY);
+    if (i === ROLE.joinedToday) activatedAt = Math.max(today0 + 5 * MIN, NOW - 3 * HOUR);
+    if (i === ROLE.longFull) activatedAt = monthsBack(NOW - 20 * DAY, Math.min(4, maxMonths));
+    if (i === ROLE.cancelled) activatedAt = monthsBack(NOW - 10 * DAY, Math.min(3, maxMonths));
+    if (i === ROLE.pastDue) activatedAt = monthsBack(NOW - 4 * DAY, 2);
+    if (i === ROLE.cancelPending) activatedAt = monthsBack(NOW + 9 * DAY, 2);
+    if (i === ROLE.noCalls) activatedAt = monthsBack(NOW - 12 * DAY, Math.min(3, maxMonths));
+    const renewAt = Math.max(NOW + 5 * MIN, Math.min(NOW + 3 * HOUR, today0 + DAY - MIN));
+    if (i === ROLE.renewToday) activatedAt = monthsBack(renewAt, 2);
+    if (i === ROLE.unassigned) activatedAt = NOW - 3 * DAY;
+    if (pendingIdx.has(i)) activatedAt = NOW - (rng.int(1, 3) - 0.5) * DAY;
+    const joinedDaysAgo = (NOW - activatedAt) / DAY;
+
+    // Age 28-82, consistent with the residency category.
+    let age = residency === "digital_nomad" ? rng.int(28, 48) : residency === "pensionado" ? rng.int(58, 82)
+      : residency === "rentista" ? rng.int(45, 78) : rng.int(33, 74);
+    // The age range ends are always present: the first nomad is 28, the first pensionado 82.
+    if (residency === "digital_nomad" && !members.some((m) => m.situation.residency === "digital_nomad")) age = 28;
+    if (residency === "pensionado" && i > 0 && !members.slice(1).some((m) => m.situation.residency === "pensionado")) age = 82;
     const dob = `${new Date(NOW).getUTCFullYear() - age}-${pad(rng.int(1, 12), 2)}-${pad(rng.int(1, 28), 2)}`;
-    const residencyStatus = persona === "retiree" ? rng.weighted([["pensionado", 70], ["rentista", 15], ["permanent", 15]] as const)
-      : persona === "remote" ? rng.weighted([["digital_nomad", 70], ["tourist", 30]] as const)
-      : persona === "applicant" ? rng.weighted([["applying", 70], ["rentista", 15], ["inversionista", 15]] as const)
-      : rng.weighted([["tourist", 50], ["inversionista", 25], ["permanent", 25]] as const);
-    const resident = ["pensionado", "rentista", "permanent", "inversionista"].includes(residencyStatus);
-    const ownsProperty = persona === "owner" || persona === "business" || (persona === "retiree" ? rng.chance(0.6) : rng.chance(0.25));
-    const company = persona === "business" ? rng.pick(["S.A.", "S.R.L."] as const)
-      : persona === "owner" ? (rng.chance(0.55) ? "S.A." : null)
-      : rng.chance(0.15) ? "S.A." : null;
-    const ownsVehicle = persona === "remote" ? rng.chance(0.35) : rng.chance(0.6);
-    const hasEmployees = (persona === "owner" || persona === "business") ? rng.chance(0.45) : rng.chance(0.15);
-    const residencyExpiresAt = resident ? ymd(NOW + rng.int(45, 700) * DAY) : undefined;
+    const residencyExpiresAt = residency === "expired" ? ymd(NOW - rng.int(10, 90) * DAY)
+      : resident ? ymd(NOW + rng.int(45, 700) * DAY) : undefined;
+    const kids = household === "blended" ? [rng.int(6, 12), rng.int(13, 17)] : ["married", "same_sex_married", "unmarried_partners", "divorced"].includes(household) && rng.chance(0.3) ? [rng.int(1, 17)] : [];
+    const companies = companyKind === "none" ? [] : companyKind === "multiple_sa"
+      ? [1, 2, 3].map((k) => ({ type: "S.A.", id: `PH-3-101-${pad(rng.int(100000, 999999), 6)}`, status: k === 3 ? "dormant" : "active" }))
+      : [{
+        type: companyKind === "srl" ? "S.R.L." : companyKind === "foreign_llc" ? "LLC (foreign, owns Costa Rica property)" : "S.A.",
+        id: companyKind === "foreign_llc" ? `PH-LLC-${pad(rng.int(1000, 9999), 4)}` : `PH-3-10${companyKind === "srl" ? 2 : 1}-${pad(rng.int(100000, 999999), 6)}`,
+        status: companyKind === "dormant_sa" ? "dormant" : companyKind === "delinquent_sa" ? "corporation tax overdue" : "active",
+      }];
     const profile: Doc = {
-      fullName: `${first} ${last}`,
+      fullName,
       email,
       phone,
-      nationality: ca ? "CA" : "US",
+      nationality,
+      ...(second ? { secondNationality: second } : {}),
       dateOfBirth: dob,
-      maritalStatus: rng.weighted([["married", 55], ["single", 15], ["divorced", 15], ["widowed", 10], ["partnered", 5]] as const),
-      dependents: rng.weighted([[0, 70], [1, 15], [2, 15]] as const),
-      residencyStatus,
+      ...(rng.chance(0.9) || i < 20 ? { pronouns: PRONOUNS[gender] } : {}),
+      preferredLanguage: language,
+      ...(i > 0 && (i <= ACCESSIBILITY.length || rng.chance(0.12)) ? { accessibilityNotes: ACCESSIBILITY[(i - 1) % ACCESSIBILITY.length] } : {}),
+      maritalStatus: MARITAL[household],
+      householdType: household,
+      dependents: kids.length,
+      ...(kids.length ? { dependentsDetail: kids.map((a) => ({ relation: "child", age: a })) } : {}),
+      ...(rng.chance(0.3) || household === "widowed" ? { adultChildrenAbroad: rng.int(1, 3) } : {}),
+      ...(household === "blended" || rng.chance(0.06) ? { elderlyParentInCare: true } : {}),
+      pets: [...PETS[cover(perms.pets, PETS.map((_, k) => [k, k === 0 ? 40 : 12] as [number, number]), slot)]],
+      residencyStatus: residency === "tourist_overstay_risk" ? "tourist" : residency === "in_process" ? "applying" : residency,
+      ...(residency === "tourist_overstay_risk" ? { overstayRisk: true } : {}),
       ...(residencyExpiresAt ? { residencyExpiresAt } : {}),
       ...(resident ? { dimexNumber: `PH-DIMEX-${pad(rng.int(100000, 999999), 6)}` } : {}),
-      ownsProperty,
-      ...(ownsProperty ? { propertyLocation: `${loc.place}, ${loc.province}` } : {}),
-      hasCompany: !!company,
-      ...(company ? { companyType: company, companyId: `PH-3-10${company === "S.A." ? 1 : 2}-${pad(rng.int(100000, 999999), 6)}` } : {}),
-      ownsVehicle,
-      hasEmployees,
+      ownsProperty: property !== "none",
+      ...(property !== "none" ? { propertyLocation: `${loc.place}, ${loc.province}`, propertyType: property, propertyLabel: PROPERTY_LABEL[property] } : {}),
+      hasCompany: companies.length > 0,
+      ...(companies.length ? { companyType: companies[0].type, companyId: companies[0].id, companies } : {}),
+      ownsVehicle: vehicle !== "none",
+      ...(vehicle !== "none" ? { vehicleType: vehicle } : {}),
+      hasEmployees: employees !== "none",
+      ...(employees !== "none" ? { employeeType: employees } : {}),
     };
-    // Recent joiners (and a few others) have not finished their profile yet.
-    if (joinedDaysAgo < 7 || rng.chance(0.08)) {
+    // Recent joiners (and a few others) have not finished their profile yet; the
+    // member who joined today has only filled in their email.
+    if (i === ROLE.joinedToday) {
+      for (const k of Object.keys(profile)) if (k !== "email") delete profile[k];
+    } else if (i !== ROLE.complete && (joinedDaysAgo < 7 || rng.chance(0.08))) {
       for (const k of rng.shuffle(["dateOfBirth", "maritalStatus", "dependents", "residencyStatus", "phone", "ownsVehicle"]).slice(0, rng.int(3, 5))) {
         delete profile[k];
       }
     }
     const answers: CheckAnswers = {
       country: "CR",
-      residencyStatus: resident ? "resident" : residencyStatus === "applying" ? "applying" : "visitor",
+      residencyStatus: resident ? "resident" : residency === "in_process" ? "applying" : residency === "refused" ? "unsure" : "visitor",
       ...(resident && residencyExpiresAt ? { residencyExpiresAt } : {}),
-      ...(!resident && residencyStatus !== "applying" ? { lastEntryDate: ymd(activatedAt - rng.int(15, 150) * DAY) } : {}),
-      ownsProperty,
-      ...(ownsProperty ? { propertyLocation: loc.province } : {}),
-      companyType: company === "S.A." ? "SA" : company === "S.R.L." ? "SRL" : "none",
-      hasCompany: !!company,
-      ownsVehicle,
-      hasEmployees,
+      ...(!resident && ["tourist", "tourist_overstay_risk", "digital_nomad"].includes(residency)
+        ? { lastEntryDate: ymd(activatedAt - (residency === "tourist_overstay_risk" ? 168 : rng.int(15, 150)) * DAY) } : {}),
+      ownsProperty: property !== "none",
+      ...(property !== "none" ? { propertyLocation: loc.province } : {}),
+      companyType: companyKind === "srl" ? "SRL" : companyKind === "none" ? "none" : companyKind === "foreign_llc" ? "unsure" : "SA",
+      ...(companyKind === "none" ? { hasCompany: false } : companyKind === "foreign_llc" ? {} : { hasCompany: true }),
+      ownsVehicle: vehicle !== "none",
+      hasEmployees: employees !== "none",
     };
 
     // Membership status
@@ -959,10 +1059,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     let cancelAt: number | undefined;
     const monthsIn = Math.floor(joinedDaysAgo / 30.4);
     if (pendingIdx.has(i)) status = "pending";
-    else if (i > 3 && monthsIn >= 2 && churnNow(joinedDaysAgo)) {
+    else if (i === ROLE.cancelled) {
+      status = "cancelled";
+      cancelAt = addMonths(activatedAt, Math.max(1, monthsIn - 1));
+    } else if (i === ROLE.pastDue) status = "past_due";
+    else if (i > 10 && monthsIn >= 2 && churnNow(joinedDaysAgo)) {
       status = "cancelled";
       cancelAt = addMonths(activatedAt, rng.int(1, monthsIn - 1));
-    } else if (i > 3 && monthsIn >= 1 && rng.chance(0.07)) status = "past_due";
+    } else if (i > 10 && monthsIn >= 1 && rng.chance(0.07)) status = "past_due";
 
     const periods: number[] = [];
     for (let p = activatedAt; p <= NOW; p = addMonths(p, 1)) periods.push(p);
@@ -980,7 +1084,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       minutesUsed: 0,
       callsIncluded: PLAN_STANDARD.callsIncluded,
       callsUsed: 0,
-      csmEmail: csms[i % csms.length].email,
+      csmEmail: csmFor(),
       paymentRef: "manual",
       createdAt: iso(activatedAt - rng.int(5, 30) * MIN),
       updatedAt: iso(NOW - rng.int(1, 72) * HOUR),
@@ -1014,7 +1118,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     } else {
       periodStart = periods[periods.length - 1];
       periodEnd = addMonths(periodStart, 1);
-      if (i > 3 && monthsIn >= 1 && rng.chance(0.05)) {
+      if (i === ROLE.cancelPending || (i > 10 && monthsIn >= 1 && rng.chance(0.05))) {
         const reasonKey = rng.pick(["not_used", "not_worth_cost", "leaving_country"] as const);
         Object.assign(m, {
           cancelAtPeriodEnd: true,
@@ -1026,6 +1130,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     }
     m.periodStart = iso(periodStart);
     m.periodEnd = iso(periodEnd);
+    // Renews today, whatever month-end arithmetic did to the anniversary.
+    if (i === ROLE.renewToday && status === "active") m.periodEnd = iso(renewAt);
     if (status !== "pending") {
       m.activatedAt = iso(activatedAt);
       m.activationPaidAt = iso(activatedAt);
@@ -1034,7 +1140,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       i, id, first, last, email, phone, persona, loc, profile, answers,
       csm: m.csmEmail as string,
       status, activatedAt, periods, membership: m, cancelAt,
-      aiConsent: rng.chance(0.65),
+      aiConsent: i === ROLE.complete || rng.chance(0.65),
+      situation: { background: bg.key, residency, property, company: companyKind, vehicle, employees, household, language, age, nationalities: second ? [nationality, second] : [nationality], province },
     };
     if (status !== "pending" && rng.chance(0.04)) member.recordingWithdrawnAt = activatedAt + rng.int(3, 20) * DAY;
     members.push(member);
@@ -1092,8 +1199,9 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const extraLeads = checkMembers * cfg.leadsPerCheckMember;
   for (let k = 0; k < extraLeads; k++) {
     rng.reseed("lead", k);
-    const first = rng.pick(FIRST);
-    const last = rng.pick(LAST);
+    const lbg = rng.weighted(bgWeights);
+    const first = rng.pick(lbg.firsts)[0];
+    const last = rng.pick(lbg.lasts);
     const createdAt = NOW - Math.round(cfg.windowDays * (1 - Math.sqrt(rng.next())) * DAY);
     const owns = rng.chance(0.5);
     const company = rng.weighted([["SA", 25], ["SRL", 10], ["none", 55], ["unsure", 10]] as const);
@@ -1104,7 +1212,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       ...(res === "resident" ? { residencyExpiresAt: ymd(createdAt + rng.int(30, 600) * DAY) } : {}),
       ...(res === "visitor" ? { lastEntryDate: ymd(createdAt - rng.int(5, 170) * DAY) } : {}),
       ownsProperty: owns,
-      ...(owns ? { propertyLocation: rng.pick(LOCATIONS).province } : {}),
+      ...(owns ? { propertyLocation: rng.pick(PROVINCES) } : {}),
       companyType: company,
       ...(company === "SA" || company === "SRL" ? { hasCompany: true } : company === "none" ? { hasCompany: false } : {}),
       ownsVehicle: rng.chance(0.5),
@@ -1137,21 +1245,31 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   for (const mem of members) {
     rng.reseed("members-2", mem.i);
     if (mem.status === "pending") continue;
-    const n = mem.i === 0 ? 2 : rng.weighted([[1, 55], [2, 35], [3, 10]] as const);
-    const areas = PERSONA_AREAS[mem.persona];
+    const n = mem.i === ROLE.longFull ? 5 : mem.i === 0 ? 2 : rng.weighted([[1, 55], [2, 35], [3, 10]] as const);
+    // Persona areas plus what the member's situation implies.
+    const areas: Area[] = [...new Set<Area>([
+      ...PERSONA_AREAS[mem.persona],
+      ...(mem.situation.vehicle !== "none" ? ["vehicle" as const] : []),
+      ...(mem.situation.employees !== "none" ? ["labor" as const] : []),
+      ...(mem.situation.property === "inherited" || mem.situation.household === "widowed" ? ["family_estate" as const] : []),
+      ...(mem.situation.company !== "none" ? ["corporate" as const] : []),
+    ])];
+    if (mem.i === ROLE.longFull) areas.splice(0, areas.length, "corporate", "real_estate", "tax", "family_estate", "labor", "vehicle", "immigration");
     const recs: MatterRec[] = [];
     const usedTitles = new Set<string>();
     const end = mem.cancelAt ?? NOW;
     for (let j = 0; j < n; j++) {
-      const area: Area = j === 0 ? (rng.chance(0.7) ? areas[0] : areas[1]) : rng.pick(areas);
+      const area: Area = mem.i === ROLE.longFull ? areas[j] : j === 0 ? (rng.chance(0.7) ? areas[0] : areas[1]) : rng.pick(areas);
       const options = SCRIPTS[area].filter((s) => !usedTitles.has(s.title));
       const script = rng.pick(options.length ? options : SCRIPTS[area]);
       usedTitles.add(script.title);
-      const openedAt = j === 0 ? mem.activatedAt + rng.int(1, 30) * HOUR : mem.activatedAt + Math.round(rng.next() * (end - mem.activatedAt));
+      // The first matter opens right after joining (never in the future, so re-runs keep its id).
+      const openedAt = j === 0 ? Math.min(mem.activatedAt + rng.int(1, 30) * HOUR, Math.max(mem.activatedAt + MIN, NOW - 10 * MIN)) : mem.activatedAt + Math.round(rng.next() * (end - mem.activatedAt));
       if (openedAt > NOW) continue;
-      const lawyer = lawyerFor(area);
+      // One member waits for a lawyer to be assigned (Needs attention → Unassigned).
+      const lawyer = mem.i === ROLE.unassigned ? null : lawyerFor(area);
       const commercial = !!script.opportunity && rng.chance(0.5);
-      const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+      const vars = { loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
       const id = `${PLACEHOLDER_PREFIX}mat_${pad(mem.i + 1)}_${j + 1}`;
       const doc: Doc = {
         id,
@@ -1161,7 +1279,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         country: "CR",
         stage: "intake",
         stageEnteredAt: iso(openedAt),
-        assignedProviderId: lawyer.id,
+        ...(lawyer ? { assignedProviderId: lawyer.id } : {}),
         openedAt: iso(openedAt),
       };
       recs.push({ doc: add(COLLECTIONS.matters, doc), script, area, commercial, openedAt });
@@ -1231,7 +1349,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     2: ["The call started late and felt short."],
     1: ["The lawyer did not seem to have read my profile."],
   };
-  const makeCon = (mem: Member, rec: MatterRec, t: number, status: "completed" | "no_show" | "cancelled" | "booked", today = false): Doc => {
+  const makeCon = (mem: Member, rec: MatterRec, t: number, status: "completed" | "no_show" | "cancelled" | "booked" | "in_progress", today = false, minutes?: number): Doc => {
     const n = (conCount.get(mem.id) ?? 0) + 1;
     conCount.set(mem.id, n);
     const id = `${PLACEHOLDER_PREFIX}con_${pad(mem.i + 1)}_${pad(n, 2)}`;
@@ -1258,7 +1376,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       createdAt: iso(createdAt),
     };
     if (status === "completed") {
-      const ended = scheduled + rng.pick([20, 20, 20, 18, 15]) * MIN;
+      const ended = scheduled + (minutes ?? rng.pick([20, 20, 20, 18, 15])) * MIN;
       c.endedAt = iso(ended);
       c.minutesUsed = Math.round((ended - scheduled) / MIN);
       c.chargedAt = iso(ended);
@@ -1314,9 +1432,27 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   for (const mem of members) {
     rng.reseed("members-3", mem.i);
     const recs = mattersBy.get(mem.id) ?? [];
-    if (!recs.length) continue;
+    // No calls at all for months (and none possible without a lawyer).
+    if (!recs.length || mem.i === ROLE.noCalls || mem.i === ROLE.unassigned) continue;
     mem.periods.forEach((start, p) => {
       const end = Math.min(addMonths(start, 1), NOW - 3 * HOUR, mem.cancelAt ?? Infinity);
+      if (mem.i === ROLE.longFull && p === mem.periods.length - 1) {
+        // Used every call and all 60 minutes this period.
+        const span = (end - start - 4 * HOUR) / 3;
+        for (let k = 0; k < PLAN_STANDARD.callsIncluded; k++) {
+          const t = bizTime(start + 2 * HOUR + k * span, start + 2 * HOUR + (k + 1) * span) ?? start + 2 * HOUR + k * span;
+          makeCon(mem, recs[k % recs.length], t, "completed", false, PLAN_STANDARD.callLengthMin);
+        }
+        return;
+      }
+      if (p === mem.periods.length - 1 && mem.i === ROLE.pastDue) {
+        const t = bizTime(start + 2 * HOUR, end);
+        if (t !== null) makeCon(mem, recs[0], t, "no_show");
+      }
+      if (p === mem.periods.length - 1 && mem.i === ROLE.cancelPending) {
+        const t = bizTime(start + 2 * HOUR, end);
+        if (t !== null) makeCon(mem, recs[0], t, "cancelled");
+      }
       const n = p === 0 ? rng.weighted([[1, 50], [2, 25], [0, 15], [3, 10]] as const) : rng.weighted([[0, 35], [1, 35], [2, 20], [3, 10]] as const);
       let done = 0;
       for (let k = 0; k < n; k++) {
@@ -1330,13 +1466,16 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     });
   }
   // Today: every lawyer has calls (morning ones finished and waiting for the summary).
-  const activeMembers = members.filter((m) => m.status === "active" && (mattersBy.get(m.id)?.length ?? 0) > 0);
+  const activeMembers = members.filter((m) => m.status === "active" && (mattersBy.get(m.id)?.length ?? 0) > 0 && m.i !== ROLE.noCalls && m.i !== ROLE.unassigned && m.i !== ROLE.longFull);
+  /** Completed calls in the member's current period (a fourth one is never added). */
+  const usedThisPeriod = (mem: Member) => consultations.filter((c) => c.clientId === mem.id && c.status === "completed" &&
+    String(c.scheduledAt) >= String(mem.membership.periodStart) && String(c.scheduledAt) < String(mem.membership.periodEnd)).length;
   const todayUsed = new Set<string>();
   const todayHours = [8, 9, 10, 11, 13, 14, 15, 16];
   for (const [li, l] of lawyers.entries()) {
     rng.reseed("today", li);
     const want = li === 0 ? 3 : 2;
-    const mine = rng.shuffle(activeMembers.filter((m) => !todayUsed.has(m.id) && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId === l.id && !r.doc.closedAt)));
+    const mine = rng.shuffle(activeMembers.filter((m) => !todayUsed.has(m.id) && usedThisPeriod(m) < PLAN_STANDARD.callsIncluded && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId === l.id && !r.doc.closedAt)));
     if (li === 0 && aliasClientId && !mine.some((m) => m.id === aliasClientId)) {
       const a = activeMembers.find((m) => m.id === aliasClientId);
       if (a && !todayUsed.has(a.id)) mine.unshift(a);
@@ -1353,11 +1492,56 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   for (const mem of activeMembers) {
     rng.reseed("upcoming", mem.i);
     if (todayUsed.has(mem.id) && mem.id !== aliasClientId) continue;
+    if (mem.i === ROLE.noCalls || mem.i === ROLE.unassigned || mem.i === ROLE.longFull) continue;
     if (!(mem.id === aliasClientId || mem.i === 0 || rng.chance(0.35))) continue;
     const t = bizTime(NOW + 3 * HOUR, Math.min(NOW + 14 * DAY, Date.parse(String(mem.membership.periodEnd)) + 10 * DAY));
     if (t === null) continue;
     const recs = mattersBy.get(mem.id)!;
     makeCon(mem, recs.find((r) => !r.doc.closedAt) ?? recs[0], t, "booked");
+  }
+  // A call happening right now (the newest member's first call).
+  {
+    const mem = members[ROLE.joined1d];
+    const recs = mattersBy.get(mem.id) ?? [];
+    if (recs.length && mem.status === "active") makeCon(mem, recs[0], NOW - 7 * MIN, "in_progress");
+  }
+  // A fully booked lawyer: every slot of the next three working days is taken.
+  if (lawyers.length > 1) {
+    rng.reseed("fully-booked");
+    const l = lawyers[1];
+    const theirs = activeMembers.filter((m) => m.i !== ROLE.longFull && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId === l.id));
+    let day = today0 + DAY;
+    let filled = 0;
+    for (let k = 0; theirs.length && filled < 3; k++, day += DAY) {
+      const dow = crDow(day + 12 * HOUR);
+      if (dow === 0 || dow === 6) continue;
+      filled++;
+      [9, 11, 14].forEach((h, n) => {
+        const mem = theirs[(filled * 3 + n) % theirs.length];
+        const rec = (mattersBy.get(mem.id) ?? []).find((r) => r.doc.assignedProviderId === l.id)!;
+        makeCon(mem, rec, crAt(day, h), "booked");
+      });
+    }
+  }
+  // Coverage: consent pending/declined and a suggested summary always exist.
+  rng.reseed("consult-cover");
+  {
+    const booked = consultations.filter((c) => c.status === "booked");
+    if (booked.length && !booked.some((c) => (c.consent as Doc).recording === "pending")) booked[booked.length - 1].consent = { recording: "pending" };
+    const done = consultations.filter((c) => c.status === "completed").sort((a, b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt)));
+    if (!done.some((c) => (c.consent as Doc).recording === "declined")) {
+      const c = done.find((x) => (x.consent as Doc).recording === "granted");
+      if (c) {
+        c.consent = { recording: "declined", at: c.createdAt, by: "client", where: "booking" };
+        for (const k of ["transcript", "transcriptSource", "transcriptFetchedAt", "transcriptFetchAttempts"]) delete c[k];
+      }
+    }
+    if (!done.some((c) => (c.summary as Doc | undefined)?.status === "suggested") && done.length) {
+      const c = done[done.length - 1];
+      const rec = mattersBy.get(String(c.clientId))!.find((r) => r.doc.id === c.matterId)!;
+      c.summary = { text: rec.script.summary, status: "suggested" };
+      c.suggestedNextSteps = rec.script.steps.map((s, k) => ({ ...s, dueAt: iso(Date.parse(String(c.endedAt)) + (rec.script.dueInDays[k] ?? 14) * DAY) }));
+    }
   }
   // Minutes and calls used this period.
   for (const mem of members) {
@@ -1381,8 +1565,10 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     "Price higher than expected; member will revisit.",
     "Matter resolved without paid work.",
   ];
-  const buildQuote = (mem: Member, rec: MatterRec, o: Opportunity & Doc, lawyer: (typeof lawyers)[number], sentAt: number): Doc => {
-    const spec = rec.script.opportunity!;
+  // Both stored spellings appear (staff flow vs. member flow); schemas/quoteStatus.ts reads both.
+  let spelling = 0;
+  const buildQuote = (mem: Member, rec: MatterRec, o: Opportunity & Doc, lawyer: (typeof lawyers)[number], sentAt: number, specIn?: MatterScript["opportunity"]): Doc => {
+    const spec = specIn ?? rec.script.opportunity ?? SCRIPTS.corporate[0].opportunity!;
     const qid = `${PLACEHOLDER_PREFIX}q_${pad(mem.i + 1)}_${String(rec.doc.id).split("_").pop()}`;
     const price = (o.valueCents ?? 100000) / 100;
     const weights = spec.lines.map((_, k) => (k === 0 ? 3 : 1));
@@ -1421,7 +1607,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       optionGroupId: null,
       providerIds: [lawyer.id],
       providerSnapshots: [{ providerId: lawyer.id, name: lawyer.name }],
-      status: "sent",
+      status: spelling++ % 2 ? "sent_to_client" : "sent",
       approvers: [admin.email],
       approvals: [{ by: admin.email, status: "approved", at: iso(sentAt - 2 * HOUR) }],
       comments: [],
@@ -1494,7 +1680,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         const acceptedAt = sentAt + rng.int(2, 10) * DAY;
         if (acceptedAt > NOW) stage = "negotiating";
         else {
-          Object.assign(q, { status: "accepted", clientAcceptedAt: iso(acceptedAt), acceptedAt: iso(acceptedAt), clientAcceptedBy: mem.email, updatedAt: iso(acceptedAt) });
+          Object.assign(q, { status: q.status === "sent_to_client" ? "client_accepted" : "accepted", clientAcceptedAt: iso(acceptedAt), acceptedAt: iso(acceptedAt), clientAcceptedBy: mem.email, updatedAt: iso(acceptedAt) });
           (q.changeLog as Doc[]).push({ at: iso(acceptedAt), by: mem.email, type: "client_accepted", summary: "Accepted by the member" });
           o.outcome = `Member accepted the quote "${o.title}".`;
           o.closedAt = iso(acceptedAt);
@@ -1524,11 +1710,15 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // A few opportunities that start from an obligation or a CSM conversation.
   let oppN = 0;
+  // At least one obligation-sourced and one manual opportunity at every size.
+  const oppEligible = members.filter((m) => m.status !== "pending" && m.status !== "cancelled");
+  const oblForced = oppEligible.find((m) => m.answers.hasCompany === true);
+  const manualForced = oppEligible.find((m) => m !== oblForced && (mattersBy.get(m.id) ?? []).length > 0);
   for (const mem of members) {
     rng.reseed("members-5", mem.i);
     if (mem.status === "pending" || mem.status === "cancelled") continue;
     const recs = mattersBy.get(mem.id) ?? [];
-    if (mem.profile.hasCompany && rng.chance(0.12)) {
+    if (mem.answers.hasCompany === true && (rng.chance(0.12) || mem === oblForced)) {
       const created = Math.max(mem.activatedAt + DAY, NOW - rng.int(1, 20) * DAY);
       add(COLLECTIONS.opportunities, {
         id: `${PLACEHOLDER_PREFIX}opp_obl_${pad(++oppN, 3)}`,
@@ -1543,7 +1733,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         createdAt: iso(created),
         updatedAt: iso(created),
       } as Opportunity & Doc);
-    } else if (recs.length && rng.chance(0.04)) {
+    } else if (recs.length && (rng.chance(0.04) || mem === manualForced)) {
       const created = Math.max(mem.activatedAt + DAY, NOW - rng.int(1, 30) * DAY);
       add(COLLECTIONS.opportunities, {
         id: `${PLACEHOLDER_PREFIX}opp_man_${pad(++oppN, 3)}`,
@@ -1559,6 +1749,67 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         createdAt: iso(created),
         updatedAt: iso(created),
       } as Opportunity & Doc);
+    }
+  }
+
+  // Coverage: every opportunity stage, and one opportunity that starts from a consultation.
+  rng.reseed("opp-cover");
+  {
+    const opps = collections[COLLECTIONS.opportunities] ?? [];
+    const spare = members
+      .filter((m) => m.status === "active" && m.i !== ROLE.unassigned)
+      .flatMap((m) => (mattersBy.get(m.id) ?? []).filter((r) => !oppByMatter.has(String(r.doc.id)) && r.doc.assignedProviderId).map((rec) => ({ mem: m, rec })))
+      // Matters with a completed call first, so a consultation-sourced opportunity is possible.
+      .sort((a, b) => Number(consultations.some((c) => c.matterId === b.rec.doc.id && c.status === "completed")) - Number(consultations.some((c) => c.matterId === a.rec.doc.id && c.status === "completed")));
+    const needs: Opportunity["stage"][] = (["identified", "quoted", "negotiating", "won", "lost"] as const).filter((s) => !opps.some((o) => o.stage === s));
+    if (!opps.some((o) => (o.source as Doc).kind === "consultation") && !needs.includes("quoted")) needs.push("quoted");
+    // Two won quotes at least, so both stored spellings (accepted / client_accepted) appear.
+    while (opps.filter((o) => o.stage === "won").length + needs.filter((s) => s === "won").length < 2) needs.push("won");
+    let k = 0;
+    for (const stage of needs) {
+      const pick = spare[k++];
+      if (!pick) break;
+      const { mem, rec } = pick;
+      const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
+      const con = consultations.find((c) => c.matterId === rec.doc.id && c.status === "completed");
+      const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
+      const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+      const created = Math.min(NOW - 25 * DAY, Math.max(rec.openedAt + DAY, NOW - 40 * DAY));
+      const o = {
+        id: `${PLACEHOLDER_PREFIX}opp_cov_${stage}_${k}`,
+        clientId: mem.id,
+        matterId: rec.doc.id,
+        source: con ? { kind: "consultation", id: con.id } : { kind: "manual" },
+        title: fill(spec.title, vars),
+        area: rec.area,
+        stage,
+        valueCents: Math.round(rng.int(spec.min / 50, spec.max / 50) * 50) * 100,
+        providerId: lawyer.id,
+        ownerEmail: mem.csm,
+        createdAt: iso(created),
+        updatedAt: iso(created),
+      } as unknown as Opportunity & Doc;
+      if (stage !== "identified") {
+        const sentAt = created + 2 * DAY;
+        const q = buildQuote(mem, rec, o, lawyer, sentAt, spec);
+        o.quoteId = String(q.id);
+        if (stage === "won") {
+          const acceptedAt = sentAt + 4 * DAY;
+          Object.assign(q, { status: q.status === "sent_to_client" ? "client_accepted" : "accepted", clientAcceptedAt: iso(acceptedAt), acceptedAt: iso(acceptedAt), clientAcceptedBy: mem.email, updatedAt: iso(acceptedAt) });
+          Object.assign(o, { outcome: `Member accepted the quote "${o.title}".`, closedAt: iso(acceptedAt), valueCents: Math.round(Number(q.total) * 100) });
+          wonQuotes.push({ q, mem, lawyer, acceptedAt });
+        } else if (stage === "lost") {
+          const lostAt = sentAt + 9 * DAY;
+          Object.assign(q, { status: "declined", declinedAt: iso(lostAt), updatedAt: iso(lostAt) });
+          Object.assign(o, { outcome: rng.pick(LOST), closedAt: iso(lostAt) });
+        } else {
+          if (stage === "negotiating") (q.comments as Doc[]).push({ id: `${q.id}_c1`, by: mem.email, body: "¿Podemos pagar en dos partes?", at: iso(sentAt + 2 * DAY) });
+          o.nextAction = { what: stage === "quoted" ? "Follow up on the proposal" : "Agree the payment schedule with the member", dueAt: iso(NOW + rng.int(1, 6) * DAY) };
+        }
+        (quotesBy.get(mem.id) ?? quotesBy.set(mem.id, []).get(mem.id)!).push(q);
+      } else o.nextAction = { what: TASK_RULES["handoff.opportunity"].title, dueAt: iso(NOW + DAY) };
+      o.updatedAt = String(o.closedAt ?? iso(created + 2 * DAY));
+      oppByMatter.set(String(rec.doc.id), add(COLLECTIONS.opportunities, o));
     }
   }
 
@@ -1604,7 +1855,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         d.closedAt = d.stageEnteredAt;
       }
       if (!d.closedAt) {
-        const vars = { loc: mem.loc.place, L: lawyerById.get(String(d.assignedProviderId))!.first, M: mem.first };
+        const vars = { loc: mem.loc.place, L: lawyerById.get(String(d.assignedProviderId))?.first ?? "your lawyer", M: mem.first };
         const base = Date.parse(String(d.stageEnteredAt));
         const step = d.stage === "quote_sent"
           ? { what: "Review and answer the proposal", who: "client" as const }
@@ -1617,6 +1868,15 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         const dueAt = rng.chance(0.9) ? Math.max(base + rng.int(5, 12) * DAY, NOW + rng.int(2, 14) * DAY) : NOW - rng.int(1, 6) * DAY;
         d.nextStep = { ...step, dueAt: iso(dueAt) };
       }
+    }
+  }
+
+  // Coverage: next steps owned by the member, the lawyer and the ILP team.
+  {
+    const open = (collections[COLLECTIONS.matters] ?? []).filter((d) => !d.closedAt && d.nextStep);
+    if (!open.some((d) => (d.nextStep as Doc).who === "ilp")) {
+      const d = open.find((x) => x.stage === "legal_review" || x.stage === "scoping");
+      if (d) d.nextStep = { what: "ILP to book the Migración appointment and send the confirmation", who: "ilp", dueAt: iso(NOW + 5 * DAY) };
     }
   }
 
@@ -1732,8 +1992,33 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     }
     obligationsBy.set(mem.id, list);
   }
+  // Coverage: every obligation status appears.
+  rng.reseed("obligation-cover");
+  {
+    const all = collections[COLLECTIONS.obligations] ?? [];
+    for (const status of ["upcoming", "asked", "handled", "dismissed"]) {
+      if (all.some((o) => o.status === status)) continue;
+      const o = all.find((x) => x.status === "upcoming" && all.filter((y) => y.status === "upcoming").length > 1);
+      if (o) o.status = status;
+    }
+  }
 
   // ── Membership tasks, feedback, consents ──
+  const monthlySlots: Array<{ mem: Member; t: number }> = [];
+  // The first answered months take every score 0-10 once, so the full range always exists.
+  rng.reseed("monthly-queue");
+  const coverScores = rng.shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const addMonthly = (mem: Member, t: number, score: number) => {
+    const month = iso(t).slice(0, 7);
+    const fid = `${PLACEHOLDER_PREFIX}fb_m_${pad(mem.i + 1)}_${month}`;
+    if ((collections[COLLECTIONS.feedback] ?? []).some((f) => f.id === fid)) return false; // one answer per month
+    add(COLLECTIONS.feedback, {
+      id: fid, clientId: mem.id, kind: "monthly", score, month, at: iso(t),
+      ...(score <= 6 ? { comment: rng.pick(["Hard to get a call slot this month.", "Not sure I'm using it enough.", "Took a while to hear back.", "No me quedó claro el siguiente paso."]) } : score >= 9 && rng.chance(0.4) ? { comment: rng.pick(["Peace of mind for our house.", "The deadline reminders alone are worth it.", "Mariana is fantastic.", "Super útil 🙌"]) } : {}),
+    });
+    if (score <= 6) mkTask("feedback.low_score", { clientId: mem.id, sourceId: fid, dedupeKey: fid, detail: `monthly score ${score}/10` }, t);
+    return true;
+  };
   for (const mem of members) {
     rng.reseed("members-8", mem.i);
     const m = mem.membership;
@@ -1765,16 +2050,15 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       for (let k = 1; ; k++) {
         const t = addMonths(mem.activatedAt, k) + rng.int(1, 4) * DAY;
         if (t > end) break;
-        if (!rng.chance(0.45)) continue;
-        const score = rng.weighted([[10, 30], [9, 25], [8, 15], [7, 12], [6, 7], [5, 5], [4, 3], [3, 2], [1, 1]] as const);
-        const month = iso(t).slice(0, 7);
-        const fid = `${PLACEHOLDER_PREFIX}fb_m_${pad(mem.i + 1)}_${month}`;
-        if ((collections[COLLECTIONS.feedback] ?? []).some((f) => f.id === fid)) continue; // one answer per month
-        add(COLLECTIONS.feedback, {
-          id: fid, clientId: mem.id, kind: "monthly", score, month, at: iso(t),
-          ...(score <= 6 ? { comment: rng.pick(["Hard to get a call slot this month.", "Not sure I'm using it enough.", "Took a while to hear back."]) } : score >= 9 && rng.chance(0.4) ? { comment: rng.pick(["Peace of mind for our house.", "The deadline reminders alone are worth it.", "Mariana is fantastic."]) } : {}),
-        });
-        if (score <= 6) mkTask("feedback.low_score", { clientId: mem.id, sourceId: fid, dedupeKey: fid, detail: `monthly score ${score}/10` }, t);
+        if (coverScores.length && mem.status !== "cancelled") {
+          if (addMonthly(mem, t, coverScores[coverScores.length - 1])) coverScores.pop();
+          continue;
+        }
+        if (!rng.chance(opts.size === "demo" ? 0.6 : 0.45)) {
+          monthlySlots.push({ mem, t });
+          continue;
+        }
+        addMonthly(mem, t, opts.size === "demo" ? rng.pick([9, 10, 10]) : rng.weighted([[10, 30], [9, 25], [8, 15], [7, 12], [6, 7], [5, 5], [4, 3], [3, 2], [2, 1], [1, 1], [0, 1]] as const));
       }
     }
     // Consents: terms + privacy at join, optional marketing, AI notice, recording.
@@ -1800,6 +2084,27 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (mem.aiConsent && mem.status !== "pending") cons("ai_assistant", true, mem.activatedAt + rng.int(1, 20) * DAY, rng.pick(["lily", "settings"]));
     if (mem.recordingWithdrawnAt && mem.recordingWithdrawnAt < NOW) cons("recording", false, mem.recordingWithdrawnAt, "privacy_page");
   }
+  // Every monthly score 0-10 appears at least once (unanswered months take the missing ones).
+  rng.reseed("monthly-cover");
+  {
+    const have = new Set((collections[COLLECTIONS.feedback] ?? []).filter((f) => f.kind === "monthly").map((f) => Number(f.score)));
+    const slots = rng.shuffle(monthlySlots);
+    for (let s = 0; s <= 10; s++) {
+      while (!have.has(s) && slots.length) {
+        const slot = slots.pop()!;
+        if (addMonthly(slot.mem, slot.t, s)) have.add(s);
+      }
+    }
+    // Keep NPS plausible (≥ +30) after covering the low scores, using more unanswered months.
+    const nps = () => {
+      const m = (collections[COLLECTIONS.feedback] ?? []).filter((f) => f.kind === "monthly").map((f) => Number(f.score));
+      return ((m.filter((x) => x >= 9).length - m.filter((x) => x <= 6).length) / Math.max(1, m.length)) * 100;
+    };
+    while (nps() < 30 && slots.length) {
+      const slot = slots.pop()!;
+      addMonthly(slot.mem, slot.t, rng.chance(0.6) ? 10 : 9);
+    }
+  }
   for (const c of consultations) {
     rng.reseed("after-call", String(c.id));
     const consent = c.consent as { recording: string; at?: string };
@@ -1819,6 +2124,17 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       at: consent.at,
     });
   }
+  // Every post-call score 1-5 appears at least once.
+  rng.reseed("rating-cover");
+  for (const score of [1, 2, 3, 4, 5] as const) {
+    if (ratings.some((r) => r.score === score)) continue;
+    const c = consultations.find((x) => x.status === "completed" && !x.rating && Date.parse(String(x.endedAt)) < NOW - 12 * HOUR);
+    if (!c) break;
+    const ratedAt = Math.min(NOW, Date.parse(String(c.endedAt)) + 5 * HOUR);
+    const comment = rng.pick(RATING_COMMENTS[score]);
+    c.rating = { score, comment, at: iso(ratedAt) };
+    ratings.push({ c, mem: memberById.get(String(c.clientId))!, score, comment, at: ratedAt });
+  }
   // Post-call ratings → member_feedback (+ low-score follow-ups).
   for (const r of ratings) {
     rng.reseed("rating", String(r.c.id));
@@ -1831,16 +2147,18 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
 
   // ── Privacy requests (one export done, one deletion in review, …) ──
-  const prMembers = rng.shuffle(members.filter((m) => m.status !== "pending" && m.i > 0)).slice(0, opts.size === "demo" ? 2 : opts.size === "pilot" ? 3 : 5);
+  // Every kind and every status at every size (large adds two more completed ones).
+  const PR = [["export", "completed"], ["delete", "in_review"], ["access", "received"], ["rectify", "completed"], ["restrict", "refused"], ["export", "completed"], ["access", "completed"]] as const;
+  const prMembers = rng.shuffle(members.filter((m) => m.status !== "pending" && m.i > 0)).slice(0, opts.size === "large" ? 7 : 5);
   prMembers.forEach((mem, k) => {
-    const kind = (["export", "delete", "access", "rectify", "export"] as const)[k];
-    const status = (["completed", "in_review", "received", "completed", "completed"] as const)[k];
+    const [kind, status] = PR[k];
     const created = kind === "delete" && mem.cancelAt ? Math.min(NOW - 2 * DAY, mem.cancelAt + 5 * DAY) : NOW - rng.int(3, 40) * DAY;
     const id = `${PLACEHOLDER_PREFIX}prq_${pad(k + 1, 3)}`;
     const dueAt = created + 14 * DAY;
     add(COLLECTIONS.privacyRequests, {
       id, clientId: mem.id, email: mem.email, kind, status,
-      note: kind === "delete" ? "Member asked to delete their data after cancelling." : kind === "rectify" ? "Correct date of birth." : undefined,
+      note: kind === "delete" ? "Member asked to delete their data after cancelling." : kind === "rectify" ? "Correct date of birth."
+        : kind === "restrict" ? "Restriction refused: the data is needed for an open legal matter; explained to the member." : undefined,
       dueAt: iso(dueAt), createdAt: iso(created),
       ...(status === "completed" ? { completedAt: iso(created + rng.int(1, 6) * DAY), updatedBy: admin.email } : {}),
     });
@@ -1886,6 +2204,37 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     });
   }
 
+  // Both stored spellings for "with the member" and "accepted" (schemas/quoteStatus.ts reads both).
+  {
+    const all = [...quotesBy.values()].flat();
+    for (const [a, b] of [["sent", "sent_to_client"], ["accepted", "client_accepted"]] as const) {
+      const group = all.filter((q) => q.status === a || q.status === b);
+      if (group.length >= 2 && !group.some((q) => q.status === a)) group[0].status = a;
+      if (group.length >= 2 && !group.some((q) => q.status === b)) group[0].status = b;
+    }
+  }
+  // Staff-side quotes still in preparation (never shown to the member): every internal status.
+  rng.reseed("internal-quotes");
+  {
+    const who = [0, ROLE.longFull, ROLE.renewToday, ROLE.missingDoc].map((i) => members[i]).filter((m) => m && m.status === "active");
+    (["draft", "pending_approval", "changes_requested", "approved"] as const).forEach((status, k) => {
+      const mem = who[k % Math.max(1, who.length)];
+      const rec = mem ? (mattersBy.get(mem.id) ?? []).find((r) => r.doc.assignedProviderId) : undefined;
+      if (!mem || !rec) return;
+      const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
+      const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
+      const q = buildQuote(mem, rec, { title: `${fill(spec.title, { loc: mem.loc.place, L: lawyer.first, M: mem.first })} (draft)`, valueCents: spec.min * 100 } as unknown as Opportunity & Doc, lawyer, NOW - (k + 1) * DAY, spec);
+      const qid = `${String(q.id)}_int${k + 1}`;
+      Object.assign(q, {
+        id: qid, quoteId: qid, status, clientVisible: false, sentAt: null, sentToClientAt: null,
+        approvals: status === "approved" ? q.approvals : [],
+        comments: status === "changes_requested" ? [{ id: `${qid}_c1`, by: admin.email, body: "Split the government fees into their own line, please.", at: iso(NOW - DAY) }] : [],
+        changeLog: [(q.changeLog as Doc[])[0]],
+      });
+      (quotesBy.get(mem.id) ?? quotesBy.set(mem.id, []).get(mem.id)!).push(q);
+    });
+  }
+
   // ── Client records (person doc with the embedded arrays the portals read) ──
   const clients: Doc[] = [];
   for (const mem of members) {
@@ -1899,6 +2248,9 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const charges: Doc[] = [];
     if (mem.status !== "pending") {
       charges.push({ id: `${PLACEHOLDER_PREFIX}ch_${pad(mem.i + 1)}_act`, label: "Activation fee", amountMinor: PLAN_STANDARD.activationCents, currency: "USD", status: "paid", createdAt: iso(mem.activatedAt), paidAt: iso(mem.activatedAt) });
+      if (mem.i === ROLE.longFull) {
+        charges.push({ id: `${PLACEHOLDER_PREFIX}ch_${pad(mem.i + 1)}_dup`, label: "Activation fee (duplicate, voided)", amountMinor: PLAN_STANDARD.activationCents, currency: "USD", status: "void", createdAt: iso(mem.activatedAt + 10 * MIN) });
+      }
       mem.periods.forEach((p, k) => charges.push({ id: `${PLACEHOLDER_PREFIX}ch_${pad(mem.i + 1)}_m${k + 1}`, label: `Membership, month ${k + 1}`, amountMinor: PLAN_STANDARD.monthlyCents, currency: "USD", status: "paid", createdAt: iso(p), paidAt: iso(p) }));
       if (mem.status === "past_due") {
         charges.push({ id: `${PLACEHOLDER_PREFIX}ch_${pad(mem.i + 1)}_m${mem.periods.length + 1}`, label: `Membership, month ${mem.periods.length + 1}`, amountMinor: PLAN_STANDARD.monthlyCents, currency: "USD", status: "pending", createdAt: String(m.pastDueSince), dueDate: String(m.pastDueSince) });
@@ -1921,12 +2273,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     }
     // Missing document → pendingActions (the daily sweep turns them into tasks).
     const pendingActions: Doc[] = [];
-    if (mem.status === "active" && rng.chance(0.12)) {
+    if (mem.i === ROLE.missingDoc && mem.status === "active") {
+      pendingActions.push({ id: `${PLACEHOLDER_PREFIX}pa_${pad(mem.i + 1)}`, label: "Upload apostilled birth certificate", dueAt: iso(NOW - 6 * DAY) });
+    } else if (mem.status === "active" && rng.chance(0.12)) {
       pendingActions.push({ id: `${PLACEHOLDER_PREFIX}pa_${pad(mem.i + 1)}`, label: rng.pick(["Upload apostilled birth certificate", "Upload passport copy (scan)", "Upload the property deed (escritura)", "Upload the CCSS certificate"]), dueAt: iso(NOW - rng.int(-3, 9) * DAY) });
     }
     // Messages: team ↔ member, and the AI assistant (labelled AI in the portal).
     const statusComments: Doc[] = [];
-    const commentCount = mem.status === "pending" ? 0 : rng.int(1, 4);
+    const commentCount = mem.status === "pending" ? 0 : mem.i === 0 ? 3 : rng.int(1, 4);
     for (let k = 0; k < commentCount; k++) {
       const t = Math.min(NOW - HOUR, mem.activatedAt + (k + 1) * rng.int(2, 9) * DAY);
       const team = k % 2 === 0;
@@ -1934,7 +2288,11 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         id: `${PLACEHOLDER_PREFIX}cmt_${pad(mem.i + 1)}_${k + 1}`,
         author: team ? mem.csm : mem.email,
         authorType: team ? "staff" : "client",
-        body: fill(team ? TEAM_MESSAGES[Math.min(k, TEAM_MESSAGES.length - 1)] : rng.pick(MEMBER_MESSAGES), vars),
+        body: mem.i === 0 && k === 1
+          ? "Thank you so much, this is exactly what I needed! 🙏🌴"
+          : mem.situation.language === "es"
+          ? fill(team ? TEAM_MESSAGES_ES[Math.min(k, TEAM_MESSAGES_ES.length - 1)] : rng.pick(MEMBER_MESSAGES_ES), vars)
+          : fill(team ? TEAM_MESSAGES[Math.min(k, TEAM_MESSAGES.length - 1)] : rng.pick(MEMBER_MESSAGES), vars),
         createdAt: iso(t),
       });
     }
@@ -1945,12 +2303,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         statusChatThread.push({ role: "user", content: q, createdAt: iso(t) }, { role: "assistant", content: a, createdAt: iso(t + 8000), aiGenerated: true });
       }
     }
-    const notes = mem.status === "pending" ? [] : rng.shuffle(CSM_NOTES).slice(0, rng.int(1, 3)).map((n, k) => ({
-      text: fill(n, vars), author: mem.csm, createdAt: iso(Math.min(NOW - HOUR, mem.activatedAt + (k + 1) * rng.int(1, 12) * DAY)),
+    const noteTexts = mem.i === 0 ? [LONG_NOTE, CSM_NOTES[0]] : mem.i === ROLE.joined1d ? [SHORT_NOTES[0]] : mem.i === ROLE.missingDoc ? [SHORT_NOTES[1], SHORT_NOTES[2]]
+      : rng.shuffle(CSM_NOTES).slice(0, rng.int(1, 3));
+    const notes = mem.status === "pending" ? [] : noteTexts.map((n, k) => ({
+      text: fill(n, vars), author: mem.csm, createdAt: iso(Math.min(NOW - HOUR, mem.activatedAt + (k + 1) * rng.int(1, 12) * HOUR)),
     }));
     const activityLog: Doc[] = [
       { type: "membership_started", actor: "system", timestamp: iso(mem.activatedAt), note: mem.status === "pending" ? "Join started, payment pending." : "Membership activated." },
-      ...recs.map((r) => ({ type: "stage_changed", actor: lawyerById.get(String(r.doc.assignedProviderId))!.email, timestamp: String(r.doc.stageEnteredAt), note: `${r.doc.title}: ${r.doc.stage}` })),
+      ...recs.map((r) => ({ type: "stage_changed", actor: lawyerById.get(String(r.doc.assignedProviderId))?.email ?? mem.csm, timestamp: String(r.doc.stageEnteredAt), note: `${r.doc.title}: ${r.doc.stage}` })),
       ...notes.map((n) => ({ type: "note_added", actor: n.author, timestamp: n.createdAt })),
     ].sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
     const stageRatings = primary && rng.chance(0.25)
@@ -1994,6 +2354,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       createdAt: iso(mem.activatedAt - 10 * MIN),
       updatedAt: iso(NOW - rng.int(1, 96) * HOUR),
       ...(mem.id === aliasClientId ? { placeholderAlias: true } : {}),
+      placeholderMeta: { ...mem.situation },
     };
     clients.push(add(COLLECTIONS.clients, client));
   }
@@ -2025,6 +2386,26 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const t = mkTask("call.link_failed", { clientId: String(failed.clientId), sourceId: String(failed.id), dedupeKey: `${failed.id}_${failed.scheduledAt}`, detail: "calendar invite failed" },
       Date.parse(String(failed.createdAt)), "done", "Sent the Meet link to the member and the lawyer by email.");
     if (t) failed.calendarError = null;
+  }
+  // Manual tasks (source "manual"), and every status incl. cancelled and overdue.
+  rng.reseed("task-cover");
+  {
+    const a = members[0];
+    const b = members[Math.min(ROLE.missingDoc, members.length - 1)];
+    const manual: Array<CsmTask & Doc> = [
+      { id: `${PLACEHOLDER_PREFIX}task_manual_001`, clientId: a.id, ownerEmail: a.csm, type: "follow_up", title: "Call back about the spouse's residency question", dueAt: iso(NOW + DAY), status: "open", source: { kind: "manual" }, createdAt: iso(NOW - 2 * HOUR) },
+      { id: `${PLACEHOLDER_PREFIX}task_manual_002`, clientId: b.id, ownerEmail: b.csm, type: "follow_up", title: "Send the Spanish glossary of registry terms", dueAt: iso(NOW - 8 * DAY), status: "done", outcome: "Sent by email; member said it helped.", source: { kind: "manual" }, createdAt: iso(NOW - 10 * DAY), closedAt: iso(NOW - 9 * DAY) },
+      { id: `${PLACEHOLDER_PREFIX}task_manual_003`, clientId: b.id, ownerEmail: b.csm, type: "follow_up", title: "Chase the bank letter", dueAt: iso(NOW - 2 * DAY), status: "open", source: { kind: "manual" }, createdAt: iso(NOW - 5 * DAY) },
+    ];
+    for (const t of manual) tasks.set(t.id, t);
+    const list = [...tasks.values()];
+    if (!list.some((t) => t.status === "cancelled")) {
+      const t = list.find((x) => x.status === "done" && x.type === "follow_up");
+      if (t) {
+        t.status = "cancelled";
+        delete t.outcome;
+      }
+    }
   }
   for (const t of [...tasks.values()].sort((a, b) => a.id.localeCompare(b.id))) add(COLLECTIONS.csmTasks, t);
 
@@ -2146,6 +2527,78 @@ export function countDocs(data: SeedData): Array<[string, number]> {
   }
   for (const [k, v] of subs) rows.push([k, v]);
   return rows.sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/** Counts per diversity / lifecycle category (dry-run "diversity report" and tests). */
+export function diversityReport(data: SeedData): Array<[string, Record<string, number>]> {
+  const C = data.collections;
+  const tally = (list: Doc[] | undefined, key: (d: Doc) => unknown | unknown[]): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const d of list ?? []) {
+      const v = key(d);
+      for (const x of Array.isArray(v) ? v : [v]) {
+        if (x === undefined || x === null || x === "") continue;
+        out[String(x)] = (out[String(x)] ?? 0) + 1;
+      }
+    }
+    return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
+  };
+  const meta = (d: Doc) => (d.placeholderMeta ?? {}) as Record<string, unknown>;
+  const ageBucket = (d: Doc) => {
+    const a = Number(meta(d).age);
+    return Number.isFinite(a) && a > 0 ? `${Math.floor(a / 10) * 10}s` : "not given";
+  };
+  const nameShape = (d: Doc) => {
+    const n = `${d.name ?? ""} ${d.surname ?? ""}`.trim();
+    const tags: string[] = [];
+    if (!String(d.surname ?? "")) tags.push("single name");
+    if (n.length >= 30) tags.push("very long");
+    if (n.length <= 6) tags.push("very short");
+    if (/[^\x00-\x7F]/.test(n)) tags.push("diacritics");
+    if (n.includes("'")) tags.push("apostrophe");
+    if (/-/.test(n)) tags.push("hyphen");
+    if (String(d.surname ?? "").trim().split(/\s+/).length > 1) tags.push("multi-part surname");
+    return tags.length ? tags : ["plain"];
+  };
+  const clients = C.clients;
+  return [
+    ["background", tally(clients, (d) => meta(d).background)],
+    ["name shape", tally(clients, nameShape)],
+    ["nationality (incl. second)", tally(clients, (d) => meta(d).nationalities as string[])],
+    ["dual citizens", tally(clients, (d) => ((meta(d).nationalities as string[]).length > 1 ? "dual" : "single"))],
+    ["preferred language", tally(clients, (d) => meta(d).language)],
+    ["pronouns", tally(clients, (d) => d.pronouns ?? "not stated")],
+    ["age", tally(clients, ageBucket)],
+    ["accessibility notes", tally(clients, (d) => (d.accessibilityNotes ? "yes" : "none"))],
+    ["household", tally(clients, (d) => meta(d).household)],
+    ["household extras", tally(clients, (d) => [d.dependents ? "dependents" : null, d.adultChildrenAbroad ? "adult children abroad" : null, d.elderlyParentInCare ? "elderly parent in care" : null, Array.isArray(d.pets) && d.pets.length ? "pets" : null])],
+    ["residency", tally(clients, (d) => meta(d).residency)],
+    ["property", tally(clients, (d) => meta(d).property)],
+    ["company", tally(clients, (d) => meta(d).company)],
+    ["vehicle", tally(clients, (d) => meta(d).vehicle)],
+    ["employees", tally(clients, (d) => meta(d).employees)],
+    ["province (where they live or own)", tally(clients, (d) => meta(d).province)],
+    ["membership status", tally(C.memberships, (d) => (d.cancelAtPeriodEnd && d.status === "active" ? "active (cancel at period end)" : d.status))],
+    ["matter area", tally(C.matters, (d) => d.area)],
+    ["matter stage", tally(C.matters, (d) => d.stage)],
+    ["next step owner", tally(C.matters, (d) => (d.nextStep as Doc | undefined)?.who)],
+    ["consultation status", tally(C.consultations, (d) => d.status)],
+    ["recording consent", tally(C.consultations, (d) => (d.consent as Doc).recording)],
+    ["summary", tally(C.consultations, (d) => (d.summary as Doc | undefined)?.status)],
+    ["opportunity stage", tally(C.opportunities, (d) => d.stage)],
+    ["opportunity source", tally(C.opportunities, (d) => (d.source as Doc).kind)],
+    ["quote status (stored)", tally(clients, (d) => ((d.quotes as Doc[]) ?? []).map((q) => q.status))],
+    ["charge status", tally(clients, (d) => ((d.charges as Doc[]) ?? []).map((c) => c.status))],
+    ["csm task type", tally(C.csm_tasks, (d) => d.type)],
+    ["csm task status", tally(C.csm_tasks, (d) => (d.status === "open" && String(d.dueAt) < data.now ? "open (overdue)" : d.status))],
+    ["csm task source", tally(C.csm_tasks, (d) => (d.source as Doc).kind)],
+    ["csm task owner", tally(C.csm_tasks.filter((t) => t.status === "open"), (d) => d.ownerEmail)],
+    ["obligation status", tally(C.obligations, (d) => d.status)],
+    ["privacy request", tally(C.privacy_requests, (d) => `${d.kind} / ${d.status}`)],
+    ["feedback", tally(C.member_feedback, (d) => (d.kind === "cancel" ? "cancel" : `${d.kind} ${d.score}`))],
+    ["consent kind", tally(C.consents, (d) => `${d.kind} ${d.granted ? "granted" : "declined"}`)],
+    ["funnel step", tally(C.funnel_events, (d) => d.step)],
+  ];
 }
 
 /** Ready-share of active members (for the summary and tests). */

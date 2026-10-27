@@ -59,7 +59,7 @@ import { clean } from "../db/records.ts";
 import { getProjectId } from "../db/projectId.ts";
 import { putObject } from "../helper/storage.ts";
 import { assertPlaceholderDoc, assertPlaceholderId, isPlaceholderDoc, isReservedEmail } from "../helper/placeholder.ts";
-import { buildPlaceholderData, countDocs, type Doc, readyShare, type SeedData, type SeedSize, SIZES } from "./placeholderData.ts";
+import { buildPlaceholderData, countDocs, diversityReport, type Doc, readyShare, type SeedData, type SeedSize, SIZES } from "./placeholderData.ts";
 import { pool, printTable, selectForDeletion } from "./placeholderOps.ts";
 
 export interface CliOptions {
@@ -192,6 +192,10 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   if (o.dryRun) {
     printTable(counts.map(([k, n]) => [k, n]), ["collection", "docs"]);
     console.log(`  total: ${counts.reduce((s, [, n]) => s + n, 0)} documents; ${data.files.length} files with --with-files; consultation-ready share of active members ${(readyShare(data) * 100).toFixed(0)}%`);
+    console.log("\nDiversity report (counts per category):");
+    for (const [cat, counts] of diversityReport(data)) {
+      console.log(`  ${cat}: ${Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(", ")}`);
+    }
     for (const [col, list] of [...Object.entries(data.collections), ...Object.entries(data.config).map(([k, v]) => [`${k} (config)`, v] as const)]) {
       console.log(`\n── ${col}: 2 of ${list.length}`);
       for (const d of list.slice(0, 2)) console.log(JSON.stringify(preview(d), null, 1));

@@ -1,5 +1,7 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.192.0/testing/asserts.ts";
-import { buildPlaceholderData, countDocs, readyShare } from "../scripts/placeholderData.ts";
+import { buildPlaceholderData, countDocs, diversityReport, readyShare } from "../scripts/placeholderData.ts";
+import { TASK_RULES } from "../schemas/contracts.ts";
+import { BACKGROUNDS, COMPANIES, EMPLOYEES, HOUSEHOLDS, LANGUAGES, NATIONALITIES, PROPERTIES, PROVINCES, RESIDENCIES, VEHICLES } from "../scripts/placeholderPeople.ts";
 import { checkWrites, parseArgs, plannedWrites, tinyPdf } from "../scripts/seedPlaceholdersFull.ts";
 import { selectForDeletion } from "../scripts/removePlaceholders.ts";
 import { PlaceholderGuardError } from "../helper/placeholder.ts";
@@ -50,6 +52,9 @@ Deno.test("seed: only reserved emails, 555-01xx phones and PH- identifiers", () 
   const phones = text.match(/\+1 \d{3} \d{3} \d{4}/g) ?? [];
   assertEquals(phones.length > 0, true);
   assertEquals(phones.filter((p) => !/ 555 01\d\d$/.test(p)), []);
+  for (const c of pilot.collections.clients) {
+    if (typeof c.phone === "string") assertEquals(/^\+1 \d{3} 555 01\d\d$|^\+44 7700 900\d{3}$/.test(c.phone), true, String(c.phone));
+  }
   for (const c of pilot.collections.clients) {
     for (const k of ["dimexNumber", "companyId"]) if (c[k]) assertEquals(String(c[k]).startsWith("PH-"), true, `${c.id}.${k}`);
   }
@@ -164,3 +169,92 @@ Deno.test("cli: flags, env and the placeholder PDF", () => {
   assertEquals(demo.files.length > 0, true);
   for (const f of demo.files) assertEquals(f.objectName, `members/${f.clientId}/${f.docId}`);
 });
+
+/** Every enum value of every contract type, and every diversity dimension, at demo and pilot size. */
+for (const size of ["demo", "pilot"] as const) {
+  Deno.test(`seed (${size}): every contract enum value and every diversity value appears`, () => {
+    const d = size === "pilot" ? pilot : buildPlaceholderData({ size, seed: 7, now: NOW });
+    const C = d.collections;
+    const has = (label: string, values: readonly unknown[], seen: unknown[]) => {
+      const set = new Set(seen.map(String));
+      assertEquals(values.filter((v) => !set.has(String(v))), [], `${size} ${label}`);
+    };
+    has("membership status", ["pending", "active", "past_due", "cancelled"], C.memberships.map((m) => m.status));
+    assertEquals(C.memberships.some((m) => m.status === "active" && m.cancelAtPeriodEnd === true), true, "cancelAtPeriodEnd");
+    has("consultation status", ["booked", "in_progress", "completed", "no_show", "cancelled"], C.consultations.map((c) => c.status));
+    has("consent", ["pending", "granted", "declined"], C.consultations.map((c) => (c.consent as { recording: string }).recording));
+    has("summary", ["suggested", "confirmed"], C.consultations.map((c) => (c.summary as { status?: string } | undefined)?.status));
+    has("opportunity stage", ["identified", "quoted", "negotiating", "won", "lost"], C.opportunities.map((o) => o.stage));
+    has("opportunity source", ["handoff", "consultation", "obligation", "manual"], C.opportunities.map((o) => (o.source as { kind: string }).kind));
+    has("task type", ["onboarding", "follow_up", "missing_document", "proposal", "renewal", "escalation", "privacy"], C.csm_tasks.map((t) => t.type));
+    has("task status", ["open", "done", "cancelled"], C.csm_tasks.map((t) => t.status));
+    has("task source", ["membership", "consultation", "handoff", "quote", "document", "privacy_request", "manual"], C.csm_tasks.map((t) => (t.source as { kind: string }).kind));
+    assertEquals(C.csm_tasks.some((t) => t.status === "open" && String(t.dueAt) < NOW.toISOString()), true, "overdue task");
+    has("task rule events", Object.keys(TASK_RULES).filter((k) => !["call.link_failed"].includes(k)).map((k) => k.replace(/[^a-z0-9]+/gi, "_")),
+      [...new Set(C.csm_tasks.map((t) => String(t.id).replace(/^ph_task_/, "").split("__")[0]))]);
+    has("obligation status", ["upcoming", "asked", "handled", "dismissed"], C.obligations.map((o) => o.status));
+    has("privacy kind", ["access", "export", "rectify", "delete", "restrict"], C.privacy_requests.map((p) => p.kind));
+    has("privacy status", ["received", "in_review", "completed", "refused"], C.privacy_requests.map((p) => p.status));
+    has("feedback kind", ["post_call", "monthly", "cancel"], C.member_feedback.map((f) => f.kind));
+    has("post-call score", [1, 2, 3, 4, 5], C.member_feedback.filter((f) => f.kind === "post_call").map((f) => f.score));
+    has("monthly score", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], C.member_feedback.filter((f) => f.kind === "monthly").map((f) => f.score));
+    has("consent kind", ["terms", "privacy", "recording", "marketing_email", "ai_assistant"], C.consents.map((c) => c.kind));
+    has("funnel step", ["check_started", "check_completed", "check_email_given", "join_started", "join_paid"], C.funnel_events.map((f) => f.step));
+    has("next step owner", ["client", "lawyer", "ilp"], C.matters.map((m) => (m.nextStep as { who?: string } | undefined)?.who));
+    const quotes = C.clients.flatMap((c) => (c.quotes as Array<{ status: string }>) ?? []);
+    has("quote status", ["draft", "pending_approval", "changes_requested", "approved", "sent", "sent_to_client", "accepted", "client_accepted", "declined"], quotes.map((q) => q.status));
+    has("charge status", ["pending", "paid", "void"], C.clients.flatMap((c) => ((c.charges as Array<{ status: string }>) ?? []).map((x) => x.status)));
+    // People and situations
+    const meta = (k: string) => C.clients.map((c) => (c.placeholderMeta as Record<string, unknown>)[k]);
+    has("background", BACKGROUNDS.map((b) => b.key), meta("background"));
+    has("nationality", NATIONALITIES, meta("nationalities").flat());
+    has("language", LANGUAGES, meta("language"));
+    has("household", HOUSEHOLDS, meta("household"));
+    has("residency", RESIDENCIES, meta("residency"));
+    has("property", PROPERTIES, meta("property"));
+    has("company", COMPANIES, meta("company"));
+    has("vehicle", VEHICLES, meta("vehicle"));
+    has("employees", EMPLOYEES, meta("employees"));
+    has("province", PROVINCES, meta("province"));
+    has("pronouns", ["she/her", "he/him", "they/them"], C.clients.map((c) => c.pronouns));
+    const ages = meta("age").map(Number);
+    assertEquals([Math.min(...ages), Math.max(...ages)], [28, 82], `${size} age range`);
+    const names = C.clients.map((c) => `${c.name} ${c.surname}`.trim());
+    for (const re of [/[^\x00-\x7F]/, /'/, /-/]) assertEquals(names.some((n) => re.test(n)), true, `${size} name ${re}`);
+    assertEquals(C.clients.some((c) => !c.surname), true, "single-name member");
+    assertEquals(names.some((n) => n.length >= 30) && names.some((n) => n.length <= 6), true, "long and short names");
+    assertEquals(C.clients.some((c) => c.accessibilityNotes), true, "accessibility");
+    // Edge cases
+    const PF = ["fullName", "phone", "nationality", "dateOfBirth", "maritalStatus", "dependents", "residencyStatus", "residencyExpiresAt", "ownsProperty", "propertyLocation", "hasCompany", "companyType", "ownsVehicle"];
+    assertEquals(C.clients.some((c) => PF.every((k) => c[k] === undefined)), true, "empty profile");
+    assertEquals(C.clients.some((c) => PF.every((k) => c[k] !== undefined)), true, "100% profile");
+    const perClient = (list: Array<Record<string, unknown>>) => list.reduce((m, x) => m.set(String(x.clientId), (m.get(String(x.clientId)) ?? 0) + 1), new Map<string, number>());
+    assertEquals([...perClient(C.matters).values()].some((n) => n >= 5), true, "5+ matters");
+    assertEquals(C.memberships.some((m) => m.callsUsed === 3 && m.minutesUsed === 60), true, "all calls used");
+    const withCalls = new Set(C.consultations.map((c) => c.clientId));
+    assertEquals(C.memberships.some((m) => m.status === "active" && Date.parse(String(m.activatedAt)) < NOW.getTime() - 60 * 86_400_000 && !withCalls.has(m.clientId)), true, "zero calls in months");
+    const crDay = (v: unknown) => new Date(Date.parse(String(v)) - 6 * 3_600_000).toISOString().slice(0, 10);
+    assertEquals(C.memberships.some((m) => m.activatedAt && crDay(m.activatedAt) === crDay(NOW.toISOString())), true, "joined today");
+    assertEquals(C.memberships.some((m) => m.status === "active" && crDay(m.periodEnd) === crDay(NOW.toISOString())), true, "renewing today");
+    assertEquals(C.clients.some((c) => C.memberships.some((m) => m.clientId === c.id && m.status === "active") && !c.assignedProviderId), true, "unassigned member");
+    const texts = C.clients.flatMap((c) => [...((c.notes as Array<{ text: string }>) ?? []).map((n) => n.text), ...((c.statusComments as Array<{ body: string }>) ?? []).map((m) => m.body)]);
+    assertEquals(texts.some((t) => t.length > 400) && texts.some((t) => t.length <= 3), true, "long and short notes");
+    assertEquals(texts.some((t) => /\p{Extended_Pictographic}/u.test(t)), true, "emoji");
+    assertEquals(texts.some((t) => /[¿¡]|Gracias|Hola/.test(t)), true, "Spanish message");
+    // Lawyers and staff
+    const lawyers = C.providers.map((p) => String(p.id));
+    const avail = new Map(C.lawyer_availability.map((a) => [String(a.id), a]));
+    assertEquals(lawyers.some((id) => !avail.has(id)), true, "lawyer without availability");
+    assertEquals(C.lawyer_availability.some((a) => (a.blackoutDates as string[]).length > 3), true, "vacation blackout");
+    const booked = C.consultations.filter((c) => c.status === "booked");
+    const fully = [...avail.values()].some((a) => {
+      const days = new Map<string, number>();
+      for (const c of booked.filter((x) => x.providerId === a.id)) days.set(String(c.scheduledAt).slice(0, 10), (days.get(String(c.scheduledAt).slice(0, 10)) ?? 0) + 1);
+      return [...days.values()].some((n) => n >= Number(a.maxCallsPerDay));
+    });
+    assertEquals(fully, true, "a fully booked lawyer");
+    const owners = new Set(C.csm_tasks.filter((t) => t.status === "open").map((t) => t.ownerEmail));
+    assertEquals(owners.has("sofia.herrera@example.com"), false, "a CSM with an empty queue");
+    assertEquals(diversityReport(d).length > 30, true);
+  });
+}
