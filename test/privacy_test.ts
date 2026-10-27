@@ -244,7 +244,7 @@ Deno.test("retention: deletes only what is past its period", async () => {
   assertEquals([c1.transcript, c1.summary, c1.minutesUsed, typeof c1.transcriptRemovedAt], [undefined, undefined, 20, "string"]);
   assertEquals(st.db.get("consultations")!.get("c2")!.transcript, "t"); // came back: still a member
   assertEquals(counts["transcripts after membership end"], 1);
-  assertEquals(retentionTargets(RETENTION_DEFAULTS, NOW).length, 12);
+  assertEquals(retentionTargets(RETENTION_DEFAULTS, NOW).length, 13); // + download_tickets (AUTH)
   assertEquals(transcriptExpired([], new Date()), false);
 });
 

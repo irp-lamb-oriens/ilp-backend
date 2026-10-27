@@ -58,6 +58,7 @@ import privacyRouter from "./API/privacy/privacyRouter.ts"; // P6
 import opportunitiesRouter from "./API/opportunities/opportunitiesRouter.ts"; // P5
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
+import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
 import { documentAccessRouter } from "./helper/storage.ts";
 import { securityHeaders } from "./helper/auth/securityHeaders.ts";
 import { errorHandler, installProcessErrorHandlers, registerHealthRoutes } from "./helper/errorReporter.ts";
@@ -102,9 +103,12 @@ function createServer() {
         if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
         cb(null, false);
       },
-      // Cookies (HttpOnly sessions) need credentials; the header tokens still work.
+      // AUTH: sessions travel as `Authorization: Bearer` (legacy role headers
+      // still accepted). credentials stays true only for AUTH_COOKIES=true.
       credentials: true,
-      allowedHeaders: ["Content-Type", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "Authorization"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id"],
+      // Lets the front end read the file name of a blob download.
+      exposedHeaders: ["Content-Disposition"],
     }));
 
     app.use((req: Request, _res: Response, next: NextFunction) => {
@@ -144,6 +148,8 @@ function createServer() {
     registerSessionHooks();
     app.use(loginHooks);
     sessionRoutes(app);
+    // AUTH: POST /api/download-ticket, and ?ticket= on file routes only.
+    downloadTicketRoutes(app);
     // Staff and assigned-lawyer document downloads (private bucket, audited).
     documentAccessRouter(app);
 

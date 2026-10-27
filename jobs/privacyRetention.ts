@@ -10,7 +10,8 @@
  *   error_log            errors and CSP reports                  RETENTION_ERROR_LOG_DAYS (90)
  *   funnel_events        anonymous funnel beacons                RETENTION_FUNNEL_MONTHS (13)
  *   *_otps, *_sessions,  expired login codes, sessions and       RETENTION_SESSION_GRACE_DAYS (1)
- *   join_sessions        join hand-off tokens
+ *   join_sessions,       join hand-off tokens, unused download
+ *   download_tickets     tickets (60 s, single use; AUTH)
  *   email_queue          sent / failed email copies              RETENTION_EMAIL_QUEUE_DAYS (90)
  *   ilp_chatbot_threads  public website chatbot threads          RETENTION_CHATBOT_MONTHS (6)
  *   consultations        transcript, summary text removed N      RETENTION_TRANSCRIPT_MONTHS (24)
@@ -55,6 +56,7 @@ export function retentionTargets(cfg: RetentionConfig, now: Date): RetentionTarg
     "provider_sessions",
     "client_status_sessions",
     "join_sessions",
+    "download_tickets",
   ].map((c) => ({ name: `expired ${c}`, collection: c, field: "expiresAt", cutoff: expired }));
   return [
     {

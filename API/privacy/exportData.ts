@@ -60,7 +60,7 @@ export function buildExport(
     about: [
       "This file holds the personal data International Legal Partner (ILP) keeps about you in its member systems.",
       "Not included: internal staff notes, commercial notes and pricing margins, which are ILP business records; security logs, available on request; copies held by Stripe, Google, your lawyer or email providers (see the Privacy Policy).",
-      "Documents are listed with a link. Open each link while signed in to download the file.",
+      "Documents are listed with their file name and API link. To download a file, sign in and use the Documents section of your ILP account (the link alone does not sign you in).",
     ],
     policyVersion: LEGAL_VERSIONS.privacy,
     profile: profileOf(b.client),
