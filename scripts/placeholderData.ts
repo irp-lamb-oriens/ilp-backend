@@ -91,6 +91,27 @@ export interface SeedOptions {
   csmEmail?: string;
   /** Object names for tiny placeholder PDFs (--with-files). */
   withFiles?: boolean;
+  /** Account seed (scripts/seedAccounts.ts): centre the story on real login accounts. */
+  focus?: FocusOptions;
+}
+
+/**
+ * Account seed: lawyer 0 takes the real providers doc id, member 0 the real
+ * clients doc id; lawyer 0 gets a larger book (`lawyerShare` of the members),
+ * a scripted "today" (six calls in every state) and fee history over the
+ * window; member 0 gets every money state, a long message thread and more
+ * documents. Without `focus` the output is unchanged.
+ */
+export interface FocusOptions {
+  lawyerId: string;
+  lawyerName?: string;
+  lawyerAreas?: Area[];
+  memberId: string;
+  memberName?: { first: string; last: string };
+  /** Share of the other members whose matters all go to lawyer 0 (default 0.4). */
+  lawyerShare?: number;
+  /** Share of members owned by the first CSM (the staff account); default 0.65, account seed 0.35. */
+  csmShare?: number;
 }
 
 export interface SeedData {
@@ -693,6 +714,37 @@ const MEMBER_MESSAGES_ES = [
   "Subí el escaneo del pasaporte, ¿me confirman que les llegó?",
   "¿Podemos mover la llamada a la próxima semana?",
 ];
+/**
+ * Account seed: the member account's message thread, oldest first.
+ * [who, days ago, text]; "ask"/"ai" go to the AI assistant thread (labelled AI in the portal).
+ */
+const FOCUS_THREAD: Array<["csm" | "lawyer" | "member" | "ask" | "ai", number, string]> = [
+  ["csm", 46, "Hi {M}, welcome to ILP! I'm your member success manager. I've set up your profile from the check you took; when you have a minute, please finish the household and property sections so {L} has everything before your first call."],
+  ["member", 45.8, "Thank you! Quick question before I start: do you need my spouse's documents too, or only mine?"],
+  ["csm", 45.6, "Only yours for now. If your spouse applies as your dependent later, we'll ask for their birth and marriage certificates then."],
+  ["ask", 44, "How long is a DIMEX valid?"],
+  ["ai", 44, "Temporary residency cards are commonly valid for one or two years and permanent ones for longer. This is general information from the AI assistant; your ILP team will confirm what applies to you."],
+  ["member", 40, "I uploaded my passport scan and the pension letter (PDF) to Documents. The bank letter is still on its way from Vermont."],
+  ["csm", 39.9, "Got both, thank you. The passport scan is clear; the pension letter needs the apostille page too. Could you upload that page as a separate file when you have it?"],
+  ["lawyer", 35, "Hello {M}, I'm {L}. I read your profile before our call. Please have the property deed (escritura) for the house in {loc} at hand; we'll go through the registry details together."],
+  ["member", 34.5, "Will do. I've attached the deed and the cadastral plan (plano catastrado) as JPGs, sorry they're photos and not scans 📎"],
+  ["lawyer", 34.4, "Photos are fine for now. For the filing itself we'll need a certified copy, which I can request from the Registro Nacional."],
+  ["ask", 28, "Do I need to file anything for my S.A. this year?"],
+  ["ai", 28, "Most corporations pay the annual corporation tax by January 31 and file the beneficial-owner (RTBF) declaration in April. This is general information from the AI assistant; your ILP team will confirm what applies to you."],
+  ["member", 27.9, "The assistant mentioned the RTBF filing. Is that something ILP handles?"],
+  ["csm", 27.5, "Yes. {L} can quote the annual corporate upkeep (corporation tax + RTBF). I've added it to your proposals so you can review it under Money."],
+  ["member", 20, "Hola, ¿pueden confirmarme si el pago de la Caja de mi empleada doméstica está al día? Mi contadora dice que falta un mes."],
+  ["csm", 19.8, "¡Hola {M}! Lo revisé con {L}: falta el mes de agosto. Te dejé los pasos en tu tarjeta de próximo paso. Cualquier duda me escribes."],
+  ["member", 12, "I accepted the proposal for the corporate work. When is the second payment due?"],
+  ["csm", 11.8, "Thanks {M}! The deposit is received ✅. The balance is due on completion; you'll see it under Money with the due date."],
+  ["lawyer", 6, "Filing update: the registry accepted the corporate documents. I'll confirm the new personería jurídica as soon as it's issued (usually 5-8 business days)."],
+  ["member", 5.9, "Fantastic news, thank you so much! 🙏🌴"],
+  ["ask", 3, "Is there property tax in Costa Rica?"],
+  ["ai", 3, "Yes, municipal property tax (bienes inmuebles) is generally 0.25% of the registered value, paid to the municipality. This is general information from the AI assistant; your ILP team will confirm what applies to you."],
+  ["csm", 1, "Reminder: your next call with {L} is booked (Google Meet link on your home page). If you'd like to add the property tax question to that call, use \"Ask my lawyer\" on the obligation card."],
+  ["member", 0.2, "Perfect, see you then. I'll have the municipal receipt ready 🧾"],
+];
+
 /** A very long free-text note and a very short one (layout edge cases). */
 const LONG_NOTE =
   "Long welcome call with {M}. Background: bought the {loc} property in 2019 through an S.A. set up by the developer's lawyer, never received the legal books, and is not sure who the current legal representative is. " +
@@ -808,11 +860,18 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const admin = staff.find((s) => s.role === "admin") ?? staff[0];
 
   const lawyers = LAWYERS.slice(0, cfg.lawyers).map((l, i) => {
-    const id = `${PLACEHOLDER_PREFIX}prov_${pad(i + 1, 2)}`;
+    const focus0 = i === 0 && opts.focus ? opts.focus : null;
+    const id = focus0 ? focus0.lawyerId : `${PLACEHOLDER_PREFIX}prov_${pad(i + 1, 2)}`;
     const email = i === 0 && opts.lawyerEmail
       ? opts.lawyerEmail.toLowerCase().trim()
       : `${slug(l.first)}.${slug(l.last.split(" ")[0])}@example.com`;
-    return { ...l, id, email, name: `${l.first} ${l.last}`, load: 0 };
+    if (!focus0) return { ...l, id, email, name: `${l.first} ${l.last}`, load: 0 };
+    // The real lawyer account: their own name and specialties.
+    const words = (focus0.lawyerName ?? "").trim().split(/\s+/).filter(Boolean);
+    const first = words[0] ?? l.first;
+    const last = words.length ? words.slice(1).join(" ") : l.last;
+    const areas = focus0.lawyerAreas?.length ? [...focus0.lawyerAreas] : l.areas;
+    return { ...l, first, last, areas, id, email, name: last ? `${first} ${last}` : first, load: 0 };
   });
   for (const [i, l] of lawyers.entries()) {
     rng.reseed("lawyer", i);
@@ -849,7 +908,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     // One lawyer is on vacation in about two weeks (blackout days).
     const vacation = i === (cfg.lawyers >= 4 ? 2 : 0)
       ? Array.from({ length: 7 }, (_, k) => ymd(today0 + (15 + k) * DAY + 12 * HOUR))
-      : [];
+      : i === 0 && opts.focus ? [ymd(today0 + 24 * DAY + 12 * HOUR), ymd(today0 + 25 * DAY + 12 * HOUR)] : []; // account lawyer: a long weekend off
     add(COLLECTIONS.availability, {
       id: l.id,
       providerId: l.id,
@@ -866,9 +925,11 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       updatedAt: iso(NOW - rng.int(2, 60) * DAY),
     });
   }
+  // Account seed: lawyer 0's book is chosen per member (focusMember), never by load.
+  const pickable = opts.focus && lawyers.length > 1 ? lawyers.slice(1) : lawyers;
   const lawyerFor = (area: Area): (typeof lawyers)[number] => {
-    const cands = lawyers.filter((l) => l.areas.includes(area));
-    const pool = cands.length ? cands : lawyers;
+    const cands = pickable.filter((l) => l.areas.includes(area));
+    const pool = cands.length ? cands : pickable;
     const min = Math.min(...pool.map((l) => l.load));
     const best = pool.filter((l) => l.load === min);
     const l = rng.pick(best);
@@ -914,7 +975,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   // CSM load: the first CSM carries the most members; a third CSM (new hire) has none yet.
   const emptyCsm = csms.length >= 3 ? csms[2].email : null;
   const csmPool = csms.filter((c) => c.email !== emptyCsm);
-  const csmFor = () => (csmPool.length === 1 || rng.chance(0.65) ? csmPool[0].email : rng.pick(csmPool.slice(1)).email);
+  const csmFor = () => (csmPool.length === 1 || rng.chance(opts.focus?.csmShare ?? 0.65) ? csmPool[0].email : rng.pick(csmPool.slice(1)).email);
   const bgWeights: Array<[Background, number]> = BACKGROUNDS.map((b) => [b, b.key === "anglo" ? 30 : b.key === "hispanic" ? 10 : 4]);
 
   for (let i = 0; i < cfg.members; i++) {
@@ -934,6 +995,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         if (!used.has(full) && !BLOCKED_NAMES.has(full)) break;
       }
     }
+    if (i === 0 && opts.focus?.memberName?.first) ({ first, last } = { first: opts.focus.memberName.first, last: opts.focus.memberName.last ?? "" });
     const fullName = last ? `${first} ${last}` : first;
     used.add(fullName);
     const alias = i === 0 && !!opts.memberEmail;
@@ -941,7 +1003,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     for (let n = 2; usedEmails.has(local); n++) local = `${last ? `${slug(first)}.${slug(last)}` : slug(first)}${n}`;
     usedEmails.add(local);
     const email = alias ? opts.memberEmail!.toLowerCase().trim() : `${local}@example.com`;
-    const id = alias ? email.replace(/[@.]/g, "_") : `${PLACEHOLDER_PREFIX}cli_${pad(i + 1)}`;
+    const id = i === 0 && opts.focus ? opts.focus.memberId : alias ? email.replace(/[@.]/g, "_") : `${PLACEHOLDER_PREFIX}cli_${pad(i + 1)}`;
     const nationality = spec?.nat ?? rng.pick(bg.nationalities);
     const second = spec?.dual ?? (rng.chance(0.12) ? rng.pick(NATIONALITIES.filter((n) => n !== nationality)) : undefined);
     const language = spec?.lang ?? (rng.chance(0.85) ? bg.languages[bg.languages.length - 1] === "en" ? "en" : bg.languages[0] : rng.pick(LANGUAGES));
@@ -1084,7 +1146,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       minutesUsed: 0,
       callsIncluded: PLAN_STANDARD.callsIncluded,
       callsUsed: 0,
-      csmEmail: csmFor(),
+      csmEmail: i === 0 && opts.focus ? csmPool[0].email : csmFor(),
       paymentRef: "manual",
       createdAt: iso(activatedAt - rng.int(5, 30) * MIN),
       updatedAt: iso(NOW - rng.int(1, 72) * HOUR),
@@ -1146,7 +1208,15 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (status !== "pending" && rng.chance(0.04)) member.recordingWithdrawnAt = activatedAt + rng.int(3, 20) * DAY;
     members.push(member);
   }
-  const aliasClientId = opts.memberEmail ? members[0].id : null;
+  const aliasClientId = opts.memberEmail || opts.focus ? members[0].id : null;
+  // Account seed: which members' matters all go to lawyer 0 (own stream, so the rest of the story keeps its draws).
+  const frng = new Rng(opts.seed * 31 + 1);
+  const focusMember = (mem: Member): boolean => {
+    if (!opts.focus || mem.i === ROLE.unassigned) return false;
+    if (mem.i === 0) return true;
+    frng.reseed("focus", mem.i);
+    return frng.chance(opts.focus.lawyerShare ?? 0.4);
+  };
   for (const mem of members) add(COLLECTIONS.memberships, mem.membership);
 
   // ── Leads (free check) and funnel ──
@@ -1245,7 +1315,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   for (const mem of members) {
     rng.reseed("members-2", mem.i);
     if (mem.status === "pending") continue;
-    const n = mem.i === ROLE.longFull ? 5 : mem.i === 0 ? 2 : rng.weighted([[1, 55], [2, 35], [3, 10]] as const);
+    const n = mem.i === ROLE.longFull ? 5 : mem.i === 0 ? (opts.focus ? 4 : 2) : rng.weighted([[1, 55], [2, 35], [3, 10]] as const);
+    const toFocus = focusMember(mem);
     // Persona areas plus what the member's situation implies.
     const areas: Area[] = [...new Set<Area>([
       ...PERSONA_AREAS[mem.persona],
@@ -1267,7 +1338,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       const openedAt = j === 0 ? Math.min(mem.activatedAt + rng.int(1, 30) * HOUR, Math.max(mem.activatedAt + MIN, NOW - 10 * MIN)) : mem.activatedAt + Math.round(rng.next() * (end - mem.activatedAt));
       if (openedAt > NOW) continue;
       // One member waits for a lawyer to be assigned (Needs attention → Unassigned).
-      const lawyer = mem.i === ROLE.unassigned ? null : lawyerFor(area);
+      const lawyer = mem.i === ROLE.unassigned ? null : toFocus ? lawyers[0] : lawyerFor(area);
       const commercial = !!script.opportunity && rng.chance(0.5);
       const vars = { loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
       const id = `${PLACEHOLDER_PREFIX}mat_${pad(mem.i + 1)}_${j + 1}`;
@@ -1435,7 +1506,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     // No calls at all for months (and none possible without a lawyer).
     if (!recs.length || mem.i === ROLE.noCalls || mem.i === ROLE.unassigned) continue;
     mem.periods.forEach((start, p) => {
-      const end = Math.min(addMonths(start, 1), NOW - 3 * HOUR, mem.cancelAt ?? Infinity);
+      // (Account seed: history stops before today, so the lawyer's day is only the scripted one.)
+      const end = Math.min(addMonths(start, 1), opts.focus ? Math.min(NOW - 3 * HOUR, today0) : NOW - 3 * HOUR, mem.cancelAt ?? Infinity);
       if (mem.i === ROLE.longFull && p === mem.periods.length - 1) {
         // Used every call and all 60 minutes this period.
         const span = (end - start - 4 * HOUR) / 3;
@@ -1472,8 +1544,53 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     String(c.scheduledAt) >= String(mem.membership.periodStart) && String(c.scheduledAt) < String(mem.membership.periodEnd)).length;
   const todayUsed = new Set<string>();
   const todayHours = [8, 9, 10, 11, 13, 14, 15, 16];
+  /**
+   * Account seed: lawyer 0's day, relative to now in Costa Rica: a call done
+   * this morning waiting for the summary to be confirmed (member 0 when
+   * possible), a no-show candidate, one in progress, and three booked later
+   * (recording consent pending, granted, declined).
+   */
+  const focusToday = (l: (typeof lawyers)[number]) => {
+    rng.reseed("today-focus");
+    const open = (m: Member) => (mattersBy.get(m.id) ?? []).find((r) => r.doc.assignedProviderId === l.id);
+    const pool = activeMembers.filter((m) => !todayUsed.has(m.id) && usedThisPeriod(m) < PLAN_STANDARD.callsIncluded - 1 && open(m));
+    const first = pool.find((m) => m.i === 0);
+    const live = pool.find((m) => m.i === ROLE.joined1d);
+    const rest = rng.shuffle(pool.filter((m) => m !== first && m !== live));
+    const STORY: Array<{ off: number; status: "completed" | "booked" | "in_progress"; consent: "granted" | "pending" | "declined"; who?: Member }> = [
+      { off: -150, status: "completed", consent: "granted", who: first },
+      { off: -45, status: "booked", consent: "granted" }, // no-show candidate: started 45 minutes ago, nobody joined
+      { off: -7, status: "in_progress", consent: "granted", who: live },
+      { off: 50, status: "booked", consent: "pending" },
+      { off: 110, status: "booked", consent: "granted" },
+      { off: 170, status: "booked", consent: "declined" },
+    ];
+    for (const s of STORY) {
+      const mem = s.who ?? rest.shift();
+      if (!mem) break;
+      todayUsed.add(mem.id);
+      const t = Math.min(Math.max(NOW + s.off * MIN, today0 + 5 * MIN), today0 + DAY - 25 * MIN);
+      const c = makeCon(mem, open(mem)!, Math.round(t / (5 * MIN)) * 5 * MIN, s.status, true);
+      if (s.consent === "pending") {
+        c.consent = { recording: "pending" };
+      } else {
+        c.consent = { recording: s.consent, at: c.createdAt, by: "client", where: "booking" };
+      }
+      if (s.status === "completed" && !c.transcript) {
+        const rec = open(mem)!;
+        c.transcript = rec.script.dialogue.map((x) => fill(x, { loc: mem.loc.place, L: l.first, M: mem.first })).join("\n");
+        c.transcriptSource = "meet_transcript";
+        c.transcriptFetchedAt = iso(Date.parse(String(c.endedAt)) + 12 * MIN);
+        c.transcriptFetchAttempts = 1;
+      }
+    }
+  };
   for (const [li, l] of lawyers.entries()) {
     rng.reseed("today", li);
+    if (li === 0 && opts.focus) {
+      focusToday(l);
+      continue;
+    }
     const want = li === 0 ? 3 : 2;
     const mine = rng.shuffle(activeMembers.filter((m) => !todayUsed.has(m.id) && usedThisPeriod(m) < PLAN_STANDARD.callsIncluded && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId === l.id && !r.doc.closedAt)));
     if (li === 0 && aliasClientId && !mine.some((m) => m.id === aliasClientId)) {
@@ -1503,7 +1620,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   {
     const mem = members[ROLE.joined1d];
     const recs = mattersBy.get(mem.id) ?? [];
-    if (recs.length && mem.status === "active") makeCon(mem, recs[0], NOW - 7 * MIN, "in_progress");
+    // (Account seed: already on lawyer 0's day when it is theirs.)
+    if (recs.length && mem.status === "active" && !(opts.focus && todayUsed.has(mem.id))) makeCon(mem, recs[0], NOW - 7 * MIN, "in_progress");
   }
   // A fully booked lawyer: every slot of the next three working days is taken.
   if (lawyers.length > 1) {
@@ -1752,6 +1870,48 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     }
   }
 
+  // Coverage: one opportunity at a given stage on a free matter (quote, acceptance, settlement via wonQuotes).
+  const coverOpp = (mem: Member, rec: MatterRec, stage: Opportunity["stage"], id: string, created: number, acceptDays = 4, lostDays = 9) => {
+    const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
+    const con = consultations.find((c) => c.matterId === rec.doc.id && c.status === "completed");
+    const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
+    const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+    const o = {
+      id,
+      clientId: mem.id,
+      matterId: rec.doc.id,
+      source: con ? { kind: "consultation", id: con.id } : { kind: "manual" },
+      title: fill(spec.title, vars),
+      area: rec.area,
+      stage,
+      valueCents: Math.round(rng.int(spec.min / 50, spec.max / 50) * 50) * 100,
+      providerId: lawyer.id,
+      ownerEmail: mem.csm,
+      createdAt: iso(created),
+      updatedAt: iso(created),
+    } as unknown as Opportunity & Doc;
+    if (stage !== "identified") {
+      const sentAt = created + 2 * DAY;
+      const q = buildQuote(mem, rec, o, lawyer, sentAt, spec);
+      o.quoteId = String(q.id);
+      if (stage === "won") {
+        const acceptedAt = sentAt + acceptDays * DAY;
+        Object.assign(q, { status: q.status === "sent_to_client" ? "client_accepted" : "accepted", clientAcceptedAt: iso(acceptedAt), acceptedAt: iso(acceptedAt), clientAcceptedBy: mem.email, updatedAt: iso(acceptedAt) });
+        Object.assign(o, { outcome: `Member accepted the quote "${o.title}".`, closedAt: iso(acceptedAt), valueCents: Math.round(Number(q.total) * 100) });
+        wonQuotes.push({ q, mem, lawyer, acceptedAt });
+      } else if (stage === "lost") {
+        const lostAt = sentAt + lostDays * DAY;
+        Object.assign(q, { status: "declined", declinedAt: iso(lostAt), updatedAt: iso(lostAt) });
+        Object.assign(o, { outcome: rng.pick(LOST), closedAt: iso(lostAt) });
+      } else {
+        if (stage === "negotiating") (q.comments as Doc[]).push({ id: `${q.id}_c1`, by: mem.email, body: "¿Podemos pagar en dos partes?", at: iso(sentAt + 2 * DAY) });
+        o.nextAction = { what: stage === "quoted" ? "Follow up on the proposal" : "Agree the payment schedule with the member", dueAt: iso(NOW + rng.int(1, 6) * DAY) };
+      }
+      (quotesBy.get(mem.id) ?? quotesBy.set(mem.id, []).get(mem.id)!).push(q);
+    } else o.nextAction = { what: TASK_RULES["handoff.opportunity"].title, dueAt: iso(NOW + DAY) };
+    o.updatedAt = String(o.closedAt ?? iso(created + 2 * DAY));
+    oppByMatter.set(String(rec.doc.id), add(COLLECTIONS.opportunities, o));
+  };
   // Coverage: every opportunity stage, and one opportunity that starts from a consultation.
   rng.reseed("opp-cover");
   {
@@ -1770,47 +1930,40 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       const pick = spare[k++];
       if (!pick) break;
       const { mem, rec } = pick;
-      const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
-      const con = consultations.find((c) => c.matterId === rec.doc.id && c.status === "completed");
-      const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
-      const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
-      const created = Math.min(NOW - 25 * DAY, Math.max(rec.openedAt + DAY, NOW - 40 * DAY));
-      const o = {
-        id: `${PLACEHOLDER_PREFIX}opp_cov_${stage}_${k}`,
-        clientId: mem.id,
-        matterId: rec.doc.id,
-        source: con ? { kind: "consultation", id: con.id } : { kind: "manual" },
-        title: fill(spec.title, vars),
-        area: rec.area,
-        stage,
-        valueCents: Math.round(rng.int(spec.min / 50, spec.max / 50) * 50) * 100,
-        providerId: lawyer.id,
-        ownerEmail: mem.csm,
-        createdAt: iso(created),
-        updatedAt: iso(created),
-      } as unknown as Opportunity & Doc;
-      if (stage !== "identified") {
-        const sentAt = created + 2 * DAY;
-        const q = buildQuote(mem, rec, o, lawyer, sentAt, spec);
-        o.quoteId = String(q.id);
-        if (stage === "won") {
-          const acceptedAt = sentAt + 4 * DAY;
-          Object.assign(q, { status: q.status === "sent_to_client" ? "client_accepted" : "accepted", clientAcceptedAt: iso(acceptedAt), acceptedAt: iso(acceptedAt), clientAcceptedBy: mem.email, updatedAt: iso(acceptedAt) });
-          Object.assign(o, { outcome: `Member accepted the quote "${o.title}".`, closedAt: iso(acceptedAt), valueCents: Math.round(Number(q.total) * 100) });
-          wonQuotes.push({ q, mem, lawyer, acceptedAt });
-        } else if (stage === "lost") {
-          const lostAt = sentAt + 9 * DAY;
-          Object.assign(q, { status: "declined", declinedAt: iso(lostAt), updatedAt: iso(lostAt) });
-          Object.assign(o, { outcome: rng.pick(LOST), closedAt: iso(lostAt) });
-        } else {
-          if (stage === "negotiating") (q.comments as Doc[]).push({ id: `${q.id}_c1`, by: mem.email, body: "¿Podemos pagar en dos partes?", at: iso(sentAt + 2 * DAY) });
-          o.nextAction = { what: stage === "quoted" ? "Follow up on the proposal" : "Agree the payment schedule with the member", dueAt: iso(NOW + rng.int(1, 6) * DAY) };
-        }
-        (quotesBy.get(mem.id) ?? quotesBy.set(mem.id, []).get(mem.id)!).push(q);
-      } else o.nextAction = { what: TASK_RULES["handoff.opportunity"].title, dueAt: iso(NOW + DAY) };
-      o.updatedAt = String(o.closedAt ?? iso(created + 2 * DAY));
-      oppByMatter.set(String(rec.doc.id), add(COLLECTIONS.opportunities, o));
+      coverOpp(mem, rec, stage, `${PLACEHOLDER_PREFIX}opp_cov_${stage}_${k}`, Math.min(NOW - 25 * DAY, Math.max(rec.openedAt + DAY, NOW - 40 * DAY)));
     }
+  }
+  // Account seed: member 0 sees every money state; lawyer 0 has fee history across the window.
+  if (opts.focus) {
+    rng.reseed("focus-opps");
+    const l0 = lawyers[0].id;
+    const free = (m: Member) => (mattersBy.get(m.id) ?? [])
+      .filter((r) => !oppByMatter.has(String(r.doc.id)) && r.doc.assignedProviderId === l0)
+      .sort((a, b) => a.openedAt - b.openedAt);
+    const m0 = members[0];
+    // [stage, quote created days ago]: accepted with a balance still due, declined, under discussion, waiting to be accepted.
+    const plan0: Array<[Opportunity["stage"], number]> = [["won", 14], ["lost", 30], ["negotiating", 9], ["quoted", 5]];
+    for (const [stage, days] of plan0) {
+      if ([...oppByMatter.values()].some((o) => o.clientId === m0.id && o.stage === stage)) continue;
+      const rec = free(m0)[0];
+      if (!rec) break;
+      const created = Math.max(NOW - days * DAY, rec.openedAt + DAY);
+      if (created + 7 * DAY > NOW && (stage === "won" || stage === "lost")) continue;
+      coverOpp(m0, rec, stage, `${PLACEHOLDER_PREFIX}opp_acc_${stage}`, created, 4, 9);
+    }
+    // Lawyer 0: accepted legal work spread over the window (paid, pending and upcoming payouts).
+    const AGES = [170, 150, 128, 105, 84, 62, 45, 30, 18, 9].filter((d) => d < cfg.windowDays - 5);
+    const usedM = new Set<string>();
+    AGES.forEach((age, k) => {
+      const created = NOW - age * DAY;
+      const pick = members
+        .filter((m) => m !== m0 && (m.status === "active" || m.status === "past_due") && !usedM.has(m.id) && m.activatedAt < created - DAY)
+        .flatMap((m) => free(m).map((rec) => ({ mem: m, rec })))
+        .find((p) => p.rec.openedAt < created - DAY);
+      if (!pick) return;
+      usedM.add(pick.mem.id);
+      coverOpp(pick.mem, pick.rec, "won", `${PLACEHOLDER_PREFIX}opp_fee_${pad(k + 1, 2)}`, created, rng.int(2, 6), 9);
+    });
   }
 
   // ── Matter stages and next steps, consistent with calls and opportunities ──
@@ -2001,6 +2154,11 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       const o = all.find((x) => x.status === "upcoming" && all.filter((y) => y.status === "upcoming").length > 1);
       if (o) o.status = status;
     }
+    // Account member: one obligation already sent to the lawyer ("Ask my lawyer"), the rest upcoming.
+    if (opts.focus) {
+      const mine = all.filter((x) => x.clientId === members[0].id && x.status === "upcoming");
+      if (mine.length > 1 && !all.some((x) => x.clientId === members[0].id && x.status === "asked")) mine[mine.length - 1].status = "asked";
+    }
   }
 
   // ── Membership tasks, feedback, consents ──
@@ -2183,7 +2341,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (mem.status === "pending") continue;
     const recs = mattersBy.get(mem.id) ?? [];
     const eligible = DOCS.filter((d) => d[3](mem));
-    const n = Math.min(eligible.length, rng.int(0, 4));
+    let n = Math.min(eligible.length, rng.int(0, 4));
+    if (opts.focus && mem.i === 0) n = Math.min(eligible.length, 6); // account member: a full documents list
     rng.shuffle(eligible).slice(0, n).forEach(([category, name, type], k) => {
       // With real files every placeholder is a tiny PDF.
       const contentType = opts.withFiles ? "application/pdf" : type;
@@ -2302,6 +2461,27 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         const t = Math.min(NOW - 2 * HOUR, mem.activatedAt + rng.int(2, 60) * DAY);
         statusChatThread.push({ role: "user", content: q, createdAt: iso(t) }, { role: "assistant", content: a, createdAt: iso(t + 8000), aiGenerated: true });
       }
+    }
+    if (opts.focus && mem.i === 0) {
+      // Account member: the long, realistic thread (team, lawyer, member in English and Spanish, AI replies).
+      statusComments.length = 0;
+      statusChatThread.length = 0;
+      const l0 = lawyers[0];
+      FOCUS_THREAD.forEach(([who, daysAgo, text], k) => {
+        const t = Math.min(NOW - 10 * MIN, Math.max(mem.activatedAt + HOUR, NOW - daysAgo * DAY)) + (who === "ai" ? 9000 : 0);
+        const body = fill(text, { ...vars, L: l0.first });
+        if (who === "ask" || who === "ai") {
+          statusChatThread.push({ role: who === "ai" ? "assistant" : "user", content: body, createdAt: iso(t), ...(who === "ai" ? { aiGenerated: true } : {}) });
+        } else {
+          statusComments.push({
+            id: `${PLACEHOLDER_PREFIX}cmt_${pad(mem.i + 1)}_${pad(k + 1, 2)}`,
+            author: who === "csm" ? mem.csm : who === "lawyer" ? l0.email : mem.email,
+            authorType: who === "member" ? "client" : "staff",
+            body,
+            createdAt: iso(t),
+          });
+        }
+      });
     }
     const noteTexts = mem.i === 0 ? [LONG_NOTE, CSM_NOTES[0]] : mem.i === ROLE.joined1d ? [SHORT_NOTES[0]] : mem.i === ROLE.missingDoc ? [SHORT_NOTES[1], SHORT_NOTES[2]]
       : rng.shuffle(CSM_NOTES).slice(0, rng.int(1, 3));
@@ -2478,6 +2658,22 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   });
 
   // ── Config / catalog entries (written only where the collection is empty, see SEED.md) ──
+  // Account seed: the staff account's queue holds every task type (open, overdue and due
+  // today), and it owns most opportunities (every fifth stays with a colleague).
+  if (opts.focus) {
+    const me = csmPool[0].email;
+    const tasks = collections[COLLECTIONS.csmTasks] ?? [];
+    const TYPES: CsmTask["type"][] = ["onboarding", "follow_up", "missing_document", "proposal", "renewal", "escalation", "privacy"];
+    for (const type of TYPES) {
+      if (tasks.some((t) => t.status === "open" && t.ownerEmail === me && t.type === type)) continue;
+      const t = tasks.find((x) => x.status === "open" && x.type === type);
+      if (t) t.ownerEmail = me;
+    }
+    (collections[COLLECTIONS.opportunities] ?? []).forEach((o, k) => {
+      if (k % 5 !== 4) o.ownerEmail = me;
+    });
+  }
+
   const cfgAt = iso(NOW - (cfg.windowDays + 20) * DAY);
   const config: Record<string, Doc[]> = {
     quote_service_types: [
