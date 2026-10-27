@@ -3,6 +3,7 @@ import query from "../db/query.ts";
 import patch from "../db/patch.ts";
 import { sendEmailTransport, type EmailMessage } from "../config/integrations.ts";
 import log from "./log.ts";
+import { deliverableRecipients, logSkipped } from "./placeholder.ts";
 
 /**
  * A Firestore-backed outbound email queue. Enqueue is cheap and idempotent;
@@ -18,8 +19,20 @@ export async function enqueueEmail(
   email: EmailMessage,
   dedupeKey?: string,
 ): Promise<string> {
+  // Placeholder guard: never queue mail about seed records or to reserved
+  // domains (example.com, .test, .invalid …). Returns the id it would have had.
+  const to = deliverableRecipients(email.to);
+  if (email.placeholder || !to.kept.length) {
+    logSkipped("queued email", email.placeholder ? "placeholder record" : "reserved-domain recipient");
+    return dedupeKey ? `dedupe_${dedupeKey}` : "skipped_placeholder";
+  }
+  const cc = deliverableRecipients(email.cc).kept;
+  const bcc = deliverableRecipients(email.bcc).kept;
   const payload = {
     ...email,
+    to: to.kept.join(", "),
+    ...(email.cc ? { cc } : {}),
+    ...(email.bcc ? { bcc } : {}),
     status: "pending",
     attempts: 0,
     createdAt: new Date().toISOString(),

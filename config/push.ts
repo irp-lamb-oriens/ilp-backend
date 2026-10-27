@@ -20,6 +20,7 @@
  */
 
 import log from "../helper/log.ts";
+import { isReservedEmail, logSkipped } from "../helper/placeholder.ts";
 
 const VAPID_SUBJECT =
   Deno.env.get("VAPID_SUBJECT") ?? "mailto:admin@internationallegalpartner.com";
@@ -267,7 +268,13 @@ async function encryptPayload(
 export async function sendPushNotification(
   subscription: PushSubscription,
   payload: { title: string; body: string; url?: string },
+  context?: { placeholder?: boolean; email?: string | null },
 ): Promise<{ ok: boolean; gone: boolean }> {
+  // Placeholder guard: no push about seed members or to reserved-domain accounts.
+  if (context?.placeholder || isReservedEmail(context?.email)) {
+    logSkipped("push", context?.placeholder ? "placeholder record" : "reserved-domain account");
+    return { ok: false, gone: false };
+  }
   const keyPair = await getVapidKeyPair();
   const audience = new URL(subscription.endpoint).origin;
 

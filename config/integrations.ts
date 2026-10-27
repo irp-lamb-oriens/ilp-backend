@@ -15,6 +15,7 @@ import {
   createCalendarEvent as createCalendarEventImpl,
 } from "../helper/calendar.ts";
 import { transcribeAudio as transcribeAudioWhisper } from "../API/chatbot/intelligence/transcription.ts";
+import { deliverableRecipients, logSkipped } from "../helper/placeholder.ts";
 
 export interface EmailAttachment {
   filename: string;
@@ -32,6 +33,11 @@ export interface EmailMessage {
   cc?: string[];
   /** Optional BCC recipients (team copy). */
   bcc?: string[];
+  /**
+   * The record this email is about is placeholder (seed) data: never deliver.
+   * Senders set it where the record is at hand (calls, member emails).
+   */
+  placeholder?: boolean;
 }
 
 export interface CalendarSlot {
@@ -52,6 +58,18 @@ async function notImplemented(service: string): Promise<never> {
 
 /** Email delivery via SMTP (nodemailer). */
 export async function sendEmailTransport(message: EmailMessage): Promise<void> {
+  // Placeholder guard (helper/placeholder.ts): nothing about seed data, and
+  // nothing to a reserved domain (example.com, .test, .invalid …), leaves here.
+  if (message.placeholder) {
+    logSkipped("email", "placeholder record");
+    return;
+  }
+  const to = deliverableRecipients(message.to);
+  const cc = deliverableRecipients(message.cc);
+  const bcc = deliverableRecipients(message.bcc);
+  const dropped = to.dropped.length + cc.dropped.length + bcc.dropped.length;
+  if (dropped) logSkipped("email recipients", `${dropped} reserved-domain address(es)`);
+  if (!to.kept.length) return;
   const host = Deno.env.get("SMTP_HOST");
   const port = Number(Deno.env.get("SMTP_PORT") ?? "587");
   const user = Deno.env.get("SMTP_USER");
@@ -71,9 +89,9 @@ export async function sendEmailTransport(message: EmailMessage): Promise<void> {
 
   await transporter.sendMail({
     from,
-    to: message.to,
-    cc: message.cc,
-    bcc: message.bcc,
+    to: to.kept.join(", "),
+    cc: cc.kept.length ? cc.kept : undefined,
+    bcc: bcc.kept.length ? bcc.kept : undefined,
     subject: message.subject,
     html: message.html,
     text: message.text,
