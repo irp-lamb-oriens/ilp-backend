@@ -69,8 +69,9 @@ export function isTaskEvent(name: string): name is EventName {
 /** Deterministic task id: one task per (event, source). */
 export function taskIdFor(name: string, payload: Pick<EventPayload, "clientId" | "sourceId" | "dedupeKey">): string {
   const src = (payload.dedupeKey || payload.sourceId || payload.clientId).replace(/[^A-Za-z0-9_-]/g, "_");
-  // Tasks about placeholder (seed) members get the ph_ prefix, so removePlaceholders clears them too.
-  const prefix = isPlaceholderId(payload.clientId) ? PLACEHOLDER_PREFIX : "";
+  // Tasks about placeholder (seed) members, or raised by a placeholder record on a real
+  // member (account seed), get the ph_ prefix, so removePlaceholders clears them too.
+  const prefix = isPlaceholderId(payload.clientId) || isPlaceholderId(payload.sourceId) ? PLACEHOLDER_PREFIX : "";
   return `${prefix}task_${name.replace(/[^a-z0-9]+/gi, "_")}__${src}`.slice(0, 1400);
 }
 
@@ -99,7 +100,7 @@ export function buildTask(
     createdAt: now.toISOString(),
   };
   if (payload.matterId) task.matterId = payload.matterId;
-  if (isPlaceholderId(payload.clientId)) Object.assign(task, derivedStamp());
+  if (isPlaceholderId(payload.clientId) || isPlaceholderId(payload.sourceId)) Object.assign(task, derivedStamp());
   const owner = payload.ownerEmail || defaultOwner;
   if (owner) task.ownerEmail = owner;
   return task;

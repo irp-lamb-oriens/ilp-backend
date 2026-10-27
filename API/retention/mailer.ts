@@ -33,7 +33,12 @@ export interface MemberContact {
   placeholder?: boolean;
 }
 
-export async function memberContact(clientId: string): Promise<MemberContact | null> {
+/**
+ * `record` = the membership (or other record) the message is about: a
+ * placeholder record on a real member (account seed, scripts/seedAccounts.ts)
+ * never produces an email either.
+ */
+export async function memberContact(clientId: string, record?: unknown): Promise<MemberContact | null> {
   const c = (await get("clients", clientId).catch(() => null)) as Record<string, unknown> | null;
   const email = typeof c?.email === "string" ? c.email.trim() : "";
   if (!c || !email) return null;
@@ -43,7 +48,7 @@ export async function memberContact(clientId: string): Promise<MemberContact | n
     email,
     firstName: full.trim().split(/\s+/)[0] ?? "",
     optOut: c.emailOptOut === true,
-    placeholder: isPlaceholderDoc({ ...c, id: clientId }),
+    placeholder: isPlaceholderDoc({ ...c, id: clientId }) || isPlaceholderDoc(record),
   };
 }
 

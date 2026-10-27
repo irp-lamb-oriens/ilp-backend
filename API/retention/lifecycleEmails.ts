@@ -46,7 +46,7 @@ export function dunningStage(days: number | null): DunningStage | null {
 const episode = (m: MembershipDoc) => String(m.pastDueSince ?? m.periodEnd).slice(0, 10);
 
 export async function sendDunning(m: MembershipDoc, stage: DunningStage): Promise<boolean> {
-  const to = await memberContact(m.clientId);
+  const to = await memberContact(m.clientId, m);
   if (!to) return false;
   const key = `dunning_${m.id}_${episode(m)}_d${stage}`;
   if (stage === 7) {
@@ -77,7 +77,7 @@ export async function dunningSweep(now: Date = new Date()): Promise<number> {
 }
 
 export async function sendCancelConfirmed(m: MembershipDoc): Promise<boolean> {
-  const to = await memberContact(m.clientId);
+  const to = await memberContact(m.clientId, m);
   if (!to) return false;
   return sendOnce(
     `cancel_confirmed_${m.id}_${String(m.periodEnd).slice(0, 10)}`,
@@ -88,7 +88,7 @@ export async function sendCancelConfirmed(m: MembershipDoc): Promise<boolean> {
 }
 
 export async function sendRenewalReceipt(m: MembershipDoc): Promise<boolean> {
-  const to = await memberContact(m.clientId);
+  const to = await memberContact(m.clientId, m);
   if (!to) return false;
   const amount = `US$${(PLAN_STANDARD.monthlyCents / 100).toFixed(2)}`;
   return sendOnce(
@@ -126,7 +126,7 @@ export function joinConfirmation(m: Pick<MembershipDoc, "periodEnd" | "minutesIn
 }
 
 export async function sendJoinConfirmed(m: MembershipDoc): Promise<boolean> {
-  const to = await memberContact(m.clientId);
+  const to = await memberContact(m.clientId, m);
   if (!to) return false;
   return sendOnce(`join_confirmed_${m.id}`, to, joinConfirmation(m, to.firstName), { transactional: true });
 }

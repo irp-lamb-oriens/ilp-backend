@@ -20,6 +20,7 @@
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import log from "../../helper/log.ts";
+import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import { findRecords, updateRecord } from "../../db/records.ts";
 import {
   bookingNudgeEmail,
@@ -92,7 +93,7 @@ const WHO: Record<string, string> = { client: "You", lawyer: "Your lawyer", ilp:
 
 async function obligationsStep(to: MemberContact, now: Date): Promise<number> {
   const obls = (await findRecords<Obligation & { remindersSent?: string[] }>(COLLECTIONS.obligations, { clientId: to.clientId }))
-    .filter((o) => o.status === "upcoming" && o.dueAt);
+    .filter((o) => o.status === "upcoming" && o.dueAt && !isPlaceholderDoc(o));
   const reached: Array<{ o: Obligation & { remindersSent?: string[] }; stage: "30" | "7"; days: number }> = [];
   for (const o of obls) {
     const days = crDaysUntil(o.dueAt!, now);
@@ -149,10 +150,11 @@ async function nudgeStep(to: MemberContact, m: Membership, now: Date): Promise<n
 }
 
 async function nextStepStep(to: MemberContact, now: Date): Promise<number> {
-  const [matters, handoffs] = await Promise.all([
+  // Placeholder records on a real member (account seed) never produce an email.
+  const [matters, handoffs] = (await Promise.all([
     findRecords<Matter>(COLLECTIONS.matters, { clientId: to.clientId }),
     findRecords<Handoff>(COLLECTIONS.handoffs, { clientId: to.clientId }),
-  ]);
+  ])).map((list) => list.filter((x) => !isPlaceholderDoc(x))) as [Matter[], Handoff[]];
   let n = 0;
   for (const matter of matters.filter((x) => !x.closedAt)) {
     const step = nextStepFor(matter, handoffs);
@@ -188,7 +190,7 @@ export async function retentionMessagesSweep(now: Date = new Date()): Promise<Re
   ]);
   for (const m of [...active, ...pastDue]) {
     try {
-      const to = await memberContact(m.clientId);
+      const to = await memberContact(m.clientId, m);
       if (!to) continue;
       if (to.optOut) {
         out.skippedOptOut++;
