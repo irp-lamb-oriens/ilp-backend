@@ -4,8 +4,8 @@
  * Staff and CSM home (W6). Builds on W1's /api/staff/* routes; these add the
  * cross-member views the Today page and member page need.
  *
- *   GET  /api/dashboard/staff/summary                         KPI strip + "Needs attention" rail
- *   GET  /api/dashboard/staff/queue                           ?owner=me|all|<email>: open csm_tasks by due date, with member names
+ *   GET  /api/dashboard/staff/summary                         KPI strip + "Needs attention" rail (?excludePlaceholder=1)
+ *   GET  /api/dashboard/staff/queue                           ?owner=me|all|<email>&excludePlaceholder=1: open csm_tasks by due date, with member names
  *   GET  /api/dashboard/staff/members                         ?status&csm&ready&country&q&sort&dir&page&pageSize
  *   GET  /api/dashboard/staff/members/:clientId/timeline      consultations, handoffs, tasks, quotes, notes, audit
  *   POST /api/dashboard/staff/members/:clientId/assign-lawyer { providerId, matterId? }
@@ -24,6 +24,7 @@ import getAll from "../../../db/getAll.ts";
 import patch from "../../../db/patch.ts";
 import query from "../../../db/query.ts";
 import auditLog from "../../../helper/auditLog.ts";
+import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
 import { type AuthedRequest, requireDashboardAuth } from "../../../helper/auth/session.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../../db/records.ts";
 import {
@@ -89,7 +90,7 @@ export default function staffHomeRouter(app: Express): void {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const me = (req as AuthedRequest).dashboardUser ?? "";
-      const [memberships, openTasks, handoffs, matters, upcoming, asked] = await Promise.all([
+      const all = await Promise.all([
         findRecords<Membership>(COLLECTIONS.memberships),
         findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open" }),
         findRecords<Handoff>(COLLECTIONS.handoffs),
@@ -97,6 +98,13 @@ export default function staffHomeRouter(app: Express): void {
         findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }),
         findRecords<Obligation>(COLLECTIONS.obligations, { status: "asked" }),
       ]);
+      // Placeholder (seed) data counts by default; ?excludePlaceholder=1 leaves it out.
+      const placeholderMembers = all[0].filter((m) => isPlaceholderDoc(m)).length;
+      const exclude = qs(req, "excludePlaceholder") === "1";
+      const keep = <T>(list: T[]) => (exclude ? list.filter((d) => !isPlaceholderDoc(d)) : list);
+      const [memberships, openTasks, handoffs, matters, upcoming, asked] = [
+        keep(all[0]), keep(all[1]), keep(all[2]), keep(all[3]), keep(all[4]), keep(all[5]),
+      ] as [Membership[], CsmTask[], Handoff[], Matter[], Obligation[], Obligation[]];
       const [clients, consultations] = await Promise.all([
         clientsById(memberships.map((m) => m.clientId)),
         Promise.all(handoffs.map((h) => getRecord<Consultation>(COLLECTIONS.consultations, h.consultationId))),
@@ -110,7 +118,13 @@ export default function staffHomeRouter(app: Express): void {
         me,
       });
       const attention = computeAttention({ memberships, clients, matters, obligations: [...upcoming, ...asked] });
-      res.json({ me, role: (req as AuthedRequest).dashboardRole ?? "staff", kpis, attention });
+      res.json({
+        me,
+        role: (req as AuthedRequest).dashboardRole ?? "staff",
+        kpis,
+        attention,
+        placeholder: { members: placeholderMembers, excluded: exclude },
+      });
     }),
   );
 
@@ -122,7 +136,8 @@ export default function staffHomeRouter(app: Express): void {
       const me = (req as AuthedRequest).dashboardUser ?? "";
       const ownerQ = qs(req, "owner");
       const owner = ownerQ === "all" ? undefined : ownerQ && ownerQ !== "me" ? ownerQ : me;
-      const tasks = await findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open", ownerEmail: owner }, { sortBy: "dueAt" });
+      const found = await findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open", ownerEmail: owner }, { sortBy: "dueAt" });
+      const tasks = qs(req, "excludePlaceholder") === "1" ? found.filter((t) => !isPlaceholderDoc(t)) : found;
       const ids = [...new Set(tasks.map((t) => t.clientId))];
       const [clients, memberships] = await Promise.all([
         clientsById(ids),

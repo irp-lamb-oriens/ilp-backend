@@ -9,6 +9,7 @@
  * (accepted quotes, "legal GMV") are always reported apart (docs/PLAN.md).
  */
 
+import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
 import {
   type Consultation,
   type CsmTask,
@@ -370,6 +371,8 @@ export interface MemberRow {
   completeness: number;
   consultationReady: boolean;
   openTasks: number;
+  /** Placeholder (seed) member: staff UI shows a "Placeholder" pill. */
+  placeholder: boolean;
 }
 
 /** One row per member: the active membership wins, else the newest. */
@@ -415,6 +418,7 @@ export function memberRows(
       completeness: Math.round(comp.score * 1000) / 1000,
       consultationReady: comp.consultationReady,
       openTasks: openByClient.get(m.clientId) ?? 0,
+      placeholder: isPlaceholderDoc(m) || isPlaceholderDoc(c),
     };
   });
 }
