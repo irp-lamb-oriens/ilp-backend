@@ -51,7 +51,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
             to: "member", kind: send, greetingName: who.member.firstName, otherName: who.lawyer.name,
             whenLabel: when, meetUrl: c.meetUrl, question: c.question?.split("\n")[0], portalUrl: memberHomeUrl(),
           });
-          await enqueueEmail({ to: who.member.email, ...m }, `call_reminder_${c.id}_${send}_member`);
+          await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_member`);
           sent++;
         }
         if (who.lawyer.email) {
@@ -59,7 +59,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
             to: "lawyer", kind: send, greetingName: who.lawyer.name, otherName: who.member.name,
             whenLabel: when, meetUrl: c.meetUrl, question: c.question, briefUrl: lawyerBriefUrl(c.id),
           });
-          await enqueueEmail({ to: who.lawyer.email, ...l }, `call_reminder_${c.id}_${send}_lawyer`);
+          await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_lawyer`);
           sent++;
         }
       }

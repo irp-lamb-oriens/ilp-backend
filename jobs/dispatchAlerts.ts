@@ -1,6 +1,7 @@
 import query from "../db/query.ts";
 import patch from "../db/patch.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
+import { isPlaceholderClient, isPlaceholderDoc, logSkipped } from "../helper/placeholder.ts";
 import { complianceAlertEmail } from "../helper/emailTemplates.ts";
 import log from "../helper/log.ts";
 
@@ -26,6 +27,11 @@ export async function dispatchDueAlerts(): Promise<void> {
     .sort((a, b) => Number(a.deadlineTs) - Number(b.deadlineTs));
 
   for (const alert of due) {
+    // Placeholder (seed) alerts are never mailed.
+    if (isPlaceholderDoc(alert) || await isPlaceholderClient(alert.clientId)) {
+      logSkipped("alert email", String(alert.id));
+      continue;
+    }
     await enqueueEmail(
       {
         to: alert.email as string,

@@ -26,6 +26,7 @@ import { priorityById, countryCodeFromName } from "../API/countries/countryCatal
 import { sendPushNotification, type PushSubscription } from "../config/push.ts";
 import { emailToDocId } from "../helper/auth/otp.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
+import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
 import { addPendingAction } from "../API/dashboard/pendingActions.ts";
 
@@ -121,6 +122,8 @@ export async function deadlineReminderSweep(): Promise<void> {
 
     const email = resolveClientEmail(doc as Record<string, unknown>, String(doc.id));
     if (!email) continue;
+    // Placeholder (seed) members: dates are still tracked, nothing is sent.
+    const placeholder = isPlaceholderDoc(doc);
 
     const subDoc = await get(SUBSCRIPTIONS_COLLECTION, emailToDocId(email)).catch(() => null);
     const subscription = subDoc?.subscription as PushSubscription | undefined;
@@ -186,7 +189,7 @@ export async function deadlineReminderSweep(): Promise<void> {
           };
           const { subject, bodyHtml } = renderLegalEmail(EMAIL_TYPE, emailData);
           await enqueueEmail(
-            { to: email, subject, html: bodyHtml },
+            { to: email, subject, html: bodyHtml, placeholder },
             `deadline_${String(doc.id)}_${entry.priorityId}_${entry.date}_${bucket}`,
           );
           remindedEmail.push(bucket);
@@ -206,7 +209,7 @@ export async function deadlineReminderSweep(): Promise<void> {
           title: "Deadline reminder",
           body,
           url: `${FRONTEND_URL}/status`,
-        }).catch((err) => {
+        }, { placeholder, email }).catch((err) => {
           log(
             `[deadlineReminder] push error for ${email}: ${err instanceof Error ? err.message : err}`,
             "deadlineReminder",

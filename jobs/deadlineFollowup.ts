@@ -21,6 +21,7 @@ import getAll from "../db/getAll.ts";
 import patch from "../db/patch.ts";
 import log from "../helper/log.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
+import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
 import {
   resolveEmailCc,
@@ -95,6 +96,8 @@ export async function deadlineFollowupSweep(): Promise<void> {
   for (const doc of clients) {
     const followup = doc.deadlineFollowup as DeadlineFollowupState | undefined;
     if (!followup || followup.status !== "active") continue;
+    // Placeholder (seed) members never get follow-up emails.
+    if (isPlaceholderDoc(doc)) continue;
 
     const deadlineStr =
       typeof followup.deadline === "string" && followup.deadline

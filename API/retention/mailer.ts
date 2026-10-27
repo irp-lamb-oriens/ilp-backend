@@ -13,6 +13,7 @@
 import get from "../../db/get.ts";
 import log from "../../helper/log.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
+import { isPlaceholderDoc, logSkipped } from "../../helper/placeholder.ts";
 import type { MemberEmail } from "../../helper/emailTemplates.ts";
 
 const QUEUE = "email_queue";
@@ -28,6 +29,8 @@ export interface MemberContact {
   email: string;
   firstName: string;
   optOut: boolean;
+  /** Placeholder (seed) member: every message is skipped (helper/placeholder.ts). */
+  placeholder?: boolean;
 }
 
 export async function memberContact(clientId: string): Promise<MemberContact | null> {
@@ -35,7 +38,13 @@ export async function memberContact(clientId: string): Promise<MemberContact | n
   const email = typeof c?.email === "string" ? c.email.trim() : "";
   if (!c || !email) return null;
   const full = typeof c.fullName === "string" ? c.fullName : typeof c.name === "string" ? c.name : "";
-  return { clientId, email, firstName: full.trim().split(/\s+/)[0] ?? "", optOut: c.emailOptOut === true };
+  return {
+    clientId,
+    email,
+    firstName: full.trim().split(/\s+/)[0] ?? "",
+    optOut: c.emailOptOut === true,
+    placeholder: isPlaceholderDoc({ ...c, id: clientId }),
+  };
 }
 
 /** Pure: the queue doc key for a message key. */
@@ -52,6 +61,10 @@ export async function sendOnce(
   opts: { transactional: boolean },
 ): Promise<boolean> {
   if (!opts.transactional && to.optOut) return false;
+  if (to.placeholder) {
+    logSkipped("member email", key);
+    return false;
+  }
   const k = queueKey(key);
   const existing = await get(QUEUE, `dedupe_${k}`).catch(() => null);
   if (existing) return false;

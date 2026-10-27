@@ -2,6 +2,7 @@ import query from "../db/query.ts";
 import post from "../db/post.ts";
 import patch from "../db/patch.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
+import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { escalationEmail } from "../helper/emailTemplates.ts";
 import log from "../helper/log.ts";
 
@@ -21,6 +22,7 @@ export async function runEscalationWorkflow(): Promise<void> {
   for (const alert of needingHelp) {
     const taskId = alert.taskId as string | undefined;
     if (taskId) continue; // already escalated
+    if (isPlaceholderDoc(alert)) continue; // placeholder (seed) data is never escalated
 
     const newTaskId = await post("tasks", {
       type: "follow_up",
