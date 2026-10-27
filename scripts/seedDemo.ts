@@ -8,9 +8,10 @@
  * Dates are relative to the moment you run it, so "today's calls" are today.
  * Every id starts with `demo_`, every doc carries `seed: true`, and re-running
  * overwrites the same ids (a reset), so it is safe to run before each demo.
- * Sessions are printed at the end so each portal can be opened with a header
- * token without waiting for an OTP email (header tokens are accepted only
- * when the API runs with AUTH_HEADER_TOKENS=true; otherwise sign in by code).
+ * Sessions are printed at the end so each portal can be called with a Bearer
+ * token (`Authorization: Bearer <token>`) without waiting for an OTP email.
+ * To use one in a browser, store it under the role's localStorage key
+ * (ilp_staff_token / ilp_lawyer_token / ilp_client_token) and reload.
  *
  * Env (optional):
  *   DEMO_CSM_EMAIL     owner of seeded CSM tasks (default csm@internationallegalpartner.com)
@@ -745,10 +746,10 @@ async function main() {
   const staffToken = generateSessionToken();
   await put("dashboard_sessions", staffToken, { email: CSM, role: "csm", createdAt: NOW.toISOString(), expiresAt: exp, seed: true });
 
-  console.log("\nDone. Header tokens (7 days; only work when the API runs with AUTH_HEADER_TOKENS=true, otherwise sign in by email code):");
-  console.log(`  staff  (${CSM})  x-dashboard-token: ${staffToken}`);
-  console.log(`  lawyer (${providers[0].email})  x-provider-token: ${lawyerToken}`);
-  console.log(`  member (${hayes.email}, clientId ${hayes.id})  x-client-token: ${memberToken}`);
+  console.log("\nDone. Bearer tokens (7 days; send as Authorization: Bearer <token>, or store under the localStorage key shown):");
+  console.log(`  staff  (${CSM})  ilp_staff_token: ${staffToken}`);
+  console.log(`  lawyer (${providers[0].email})  ilp_lawyer_token: ${lawyerToken}`);
+  console.log(`  member (${hayes.email}, clientId ${hayes.id})  ilp_client_token: ${memberToken}`);
 }
 
 if (import.meta.main) await main();
