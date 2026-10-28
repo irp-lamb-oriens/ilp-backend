@@ -17,6 +17,7 @@ import {
   type Dir,
   firestorePages,
   type ListParams,
+  matchesWhere,
   type ListProducer,
   type ListSpec,
   pageProducer,
@@ -143,7 +144,10 @@ export function pageRecords<T extends Doc>(
     };
   }
   const otherPreds = Object.entries(others).map(([k, v]) => [spec.filters?.[k], v] as const).filter(([f]) => !!f);
-  const keep = otherPreds.length ? (row: T) => otherPreds.every(([f, v]) => f!(row, v)) : undefined;
+  // FILTERS: schema filters run in the page window of the indexed query.
+  const keep = otherPreds.length || p.where?.length
+    ? (row: T) => otherPreds.every(([f, v]) => f!(row, v)) && matchesWhere(row, p, spec)
+    : undefined;
   return withFallback(
     firestorePages<T>({ collection, where, sortField: NATIVE[collection]!.sortField }, p, { keep }),
     memory,

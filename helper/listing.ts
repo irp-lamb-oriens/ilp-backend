@@ -27,11 +27,30 @@
  *     (the other words are checked in memory inside the page window).
  *   - pageRows(): the same contract over rows a route already holds in memory
  *     (joined views: members, capacity, timeline). Only the page is enriched.
+ *
+ * FILTERS: a spec may carry a `schema` (schemas/listSchemas.ts, the same file
+ * the browser uses). Its `f.<key>=<op>:<value>` params are validated (unknown
+ * field or operator → 400) and applied to every row: in pageRows, and in the
+ * page window of a Firestore query (the `keep` of db/recordLists.ts). The
+ * first page's meta carries the schema with option counts when the rows were
+ * in memory (`schema` in the meta line).
  */
 
 import type { Request, Response } from "express";
 import { documentName, runStructuredQuery, type FirestoreDocument } from "./firestore/firestoreService.ts";
 import { toFirestoreValue } from "./firestore/toFirestoreValue.ts";
+import {
+  facetCounts,
+  fieldValue,
+  type ListSchema,
+  ListSchemaError,
+  type ParsedFilter,
+  parseFilterParams,
+  publicSchema,
+  rowMatches,
+  searchValues,
+  type ValueReader,
+} from "../schemas/listSchemas.ts";
 
 export type Dir = "asc" | "desc";
 export type SortValue = string | number | boolean | null | undefined;
@@ -56,6 +75,10 @@ export interface ListSpec<T> {
   /** Row id for the cursor tie-break. Default: row.id. */
   id?: (row: T) => string;
   defaultLimit?: number;
+  /** FILTERS: the list's field schema; `f.*` params are checked against it. */
+  schema?: ListSchema;
+  /** How a schema field is read from a row when the row does not hold it under its key or path. */
+  read?: ValueReader<T>;
 }
 
 export interface CursorKey {
@@ -73,6 +96,10 @@ export interface ListParams {
   q: string;
   qTokens: string[];
   filters: Record<string, string>;
+  /** FILTERS: validated schema filters (`f.*` params). */
+  where: ParsedFilter[];
+  /** Filled while the page is built: option counts for the meta line (shared by copies of these params). */
+  out: { facets?: Record<string, Record<string, number>> };
 }
 
 export interface ListTail {
@@ -214,7 +241,35 @@ export function parseListParams<T>(query: Record<string, unknown>, spec: ListSpe
     if (v) filters[key] = v.slice(0, 200);
   }
   const q = str(query.q).trim().slice(0, 200);
-  return { limit, cursor, sort, dir, q, qTokens: spec.search ? queryTokens(q) : [], filters };
+  let where: ParsedFilter[] = [];
+  try {
+    if (spec.schema) where = parseFilterParams(spec.schema, query);
+    else if (Object.keys(query).some((k) => k.startsWith("f."))) throw new ListSchemaError("This list has no filters of that kind.");
+  } catch (e) {
+    if (e instanceof ListSchemaError) throw new ListParamError(e.message);
+    throw e;
+  }
+  const searchable = !!spec.search || !!spec.schema?.fields.some((f) => f.searchable);
+  return { limit, cursor, sort, dir, q, qTokens: searchable ? queryTokens(q) : [], filters, where, out: {} };
+}
+
+/** How the spec reads a schema field from a row. */
+export function readerOf<T>(spec: ListSpec<T>): ValueReader<T> {
+  return spec.read ?? ((row, field) => fieldValue(row, field));
+}
+
+/** The row passes the request's schema filters. */
+export function matchesWhere<T>(row: T, p: Pick<ListParams, "where">, spec: ListSpec<T>): boolean {
+  return !p.where?.length || rowMatches(row, p.where, readerOf(spec));
+}
+
+/** Search values: the route's own, else the schema's searchable fields. */
+function searchOf<T>(spec: ListSpec<T>): ((row: T) => unknown[]) | undefined {
+  if (spec.search) return spec.search;
+  const schema = spec.schema;
+  if (!schema?.fields.some((f) => f.searchable)) return undefined;
+  const read = readerOf(spec);
+  return (row) => searchValues(schema, row, read);
 }
 
 // ── In-memory pages ─────────────────────────────────────────────────────────
@@ -241,8 +296,13 @@ const idOf = <T>(spec: ListSpec<T>, row: T): string => (spec.id ? spec.id(row) :
 export function pageRows<T>(rows: readonly T[], p: ListParams, spec: ListSpec<T>): ListPage<T> & { total: number } {
   const filters = Object.entries(p.filters).map(([k, v]) => [spec.filters?.[k], v] as const).filter(([f]) => !!f);
   const keyOf = spec.sorts[p.sort] ?? spec.sorts[spec.defaultSort];
+  const search = searchOf(spec);
+  const read = readerOf(spec);
+  if (spec.schema && !p.cursor && p.out) p.out.facets = facetCounts(spec.schema, rows, read);
   const matched = rows.filter((r) =>
-    filters.every(([f, v]) => f!(r, v)) && (!p.qTokens.length || !spec.search || matchesQuery(spec.search(r), p.qTokens))
+    filters.every(([f, v]) => f!(r, v)) &&
+    (!p.where?.length || rowMatches(r, p.where, read)) &&
+    (!p.qTokens.length || !search || matchesQuery(search(r), p.qTokens))
   );
   const keyed = matched.map((r) => ({ r, t: [keyOf(r), idOf(spec, r)] as [SortValue, string] }));
   keyed.sort((a, b) => compareTuple(a.t, b.t, p.dir));
@@ -461,8 +521,15 @@ interface StreamResponse {
  * Send a list as JSON (all batches collected) or NDJSON (each batch written as
  * it arrives). Stops the producer when the client goes away.
  */
-export async function sendList<T>(req: Request, res: Response, produce: ListProducer<T>, meta: Record<string, unknown> = {}): Promise<void> {
+export async function sendList<T>(
+  req: Request,
+  res: Response,
+  produce: ListProducer<T>,
+  metaIn: Record<string, unknown> | (() => Record<string, unknown>) = {},
+): Promise<void> {
   const ac = new AbortController();
+  // A function is read after the first batch, when the page has been built (FILTERS: option counts).
+  const metaOf = () => (typeof metaIn === "function" ? metaIn() : metaIn);
   res.on("close", () => ac.abort());
   const it = produce(ac.signal);
   if (!wantsStream(req)) {
@@ -473,7 +540,7 @@ export async function sendList<T>(req: Request, res: Response, produce: ListProd
       n = await it.next();
     }
     const tail = n.value;
-    res.json({ items, nextCursor: tail.nextCursor, hasMore: tail.hasMore, ...(tail.total !== undefined ? { total: tail.total } : {}), ...meta });
+    res.json({ items, nextCursor: tail.nextCursor, hasMore: tail.hasMore, ...(tail.total !== undefined ? { total: tail.total } : {}), ...metaOf() });
     return;
   }
   // First batch before the headers: an early failure still becomes a normal error response.
@@ -484,6 +551,7 @@ export async function sendList<T>(req: Request, res: Response, produce: ListProd
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Accel-Buffering", "no");
   out.flushHeaders?.();
+  const meta = metaOf();
   if (Object.keys(meta).length) out.write(JSON.stringify({ type: "meta", ...meta }) + "\n");
   try {
     while (!n.done) {
@@ -524,5 +592,7 @@ export async function respondList<T, U = T>(
     throw e;
   }
   const { produce, meta } = await build(p);
-  await sendList(req, res, produce, meta);
+  const schema = spec.schema;
+  if (!schema || p.cursor) return sendList(req, res, produce, meta ?? {});
+  await sendList(req, res, produce, () => ({ ...(meta ?? {}), schema: publicSchema(schema, p.out.facets) }));
 }
