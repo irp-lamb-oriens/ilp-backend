@@ -18,6 +18,7 @@ import asyncHandler from "../../helper/asyncHandler.ts";
 import auditLog from "../../helper/auditLog.ts";
 import log from "../../helper/log.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import patch from "../../db/patch.ts";
@@ -128,6 +129,8 @@ export default function applyRouter(app: Express) {
           filters: { appStatus: (d, v) => d.status === v },
           search: (d) => [d.name, d.email, d.legalAreas, d.jurisdictions, d.firmName],
           id: (d) => String(d.id ?? ""),
+          schema: LIST_SCHEMAS.lawyerApplications,
+          read: (d, f) => (f.key === "submittedAt" ? submitted(d) : fieldValue(d, f)),
         };
         return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(items, p, spec)) }));
       }

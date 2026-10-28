@@ -18,6 +18,7 @@
 
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -92,6 +93,7 @@ export default function assignmentRouter(app: Express) {
           defaultSort: "lastUpdated",
           defaultDir: "desc",
           search: (c) => [c.name, c.surname, c.email, c.legalArea, c.jurisdiction],
+          schema: LIST_SCHEMAS.assignmentQueue,
         };
         return respondList(req, res, spec, (p) => ({
           produce: pageProducer(pageRows(unassigned, p, spec)),

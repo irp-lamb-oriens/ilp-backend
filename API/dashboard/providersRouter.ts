@@ -31,6 +31,7 @@
 
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -347,6 +348,8 @@ export default function providersRouter(app: Express) {
             active: (p, v) => (v === "1" ? p.active !== false : v === "0" ? p.active === false : true),
           },
           search: (p) => [p.name, p.email, p.firmName, p.legalAreas, p.jurisdictions],
+          schema: LIST_SCHEMAS.providers,
+          read: (p, f) => (f.key === "active" ? p.active !== false : fieldValue(p, f)),
         };
         return respondList(req, res, spec, (lp) => ({ produce: pageProducer(pageRows(providers, lp, spec)) }));
       }

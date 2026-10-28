@@ -50,6 +50,7 @@ import {
 } from "./logic.ts";
 import { createOpportunityFromHandoff, getOpportunity, listOpportunities, memberCsm, saveOpportunity } from "./store.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 
 type Doc = Record<string, unknown>;
 
@@ -173,6 +174,8 @@ export default function opportunitiesRouter(app: Express) {
           defaultSort: "updatedAt",
           defaultDir: "desc",
           search: (o) => [o.title, o.area, names.get(o.clientId), o.ownerEmail],
+          schema: LIST_SCHEMAS.opportunities,
+          read: (o, f) => (f.key === "memberName" ? names.get(o.clientId) : fieldValue(o, f)),
         };
         const owners = [...new Set(items.map((o) => o.ownerEmail).filter(Boolean))].sort();
         const areas = [...new Set(items.map((o) => o.area).filter(Boolean))].sort();

@@ -77,6 +77,18 @@ import { isListRequest, type ListSpec, mapProducer, respondList } from "../../he
 import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
 import type { RecordCollection } from "../../db/records.ts";
 import { ensureStageConfig } from "../dashboard/automation/stageConfig.ts";
+import { fieldValue, LIST_SCHEMAS, type ListSchema } from "../../schemas/listSchemas.ts";
+
+/** FILTERS: the field schema of each record list (schemas/listSchemas.ts). */
+const SLUG_SCHEMA: Record<string, ListSchema> = {
+  leads: LIST_SCHEMAS.recordLeads,
+  memberships: LIST_SCHEMAS.recordMemberships,
+  matters: LIST_SCHEMAS.staffMatters,
+  consultations: LIST_SCHEMAS.recordConsultations,
+  handoffs: LIST_SCHEMAS.recordHandoffs,
+  "csm-tasks": LIST_SCHEMAS.recordTasks,
+  obligations: LIST_SCHEMAS.recordObligations,
+};
 
 /** Query-string keys accepted as equality filters on staff lists. */
 const FILTER_KEYS = [
@@ -129,7 +141,7 @@ const slugEqKeys = (slug: string) => FILTER_KEYS.filter((k) => !(slug === "matte
 
 function slugSpec(slug: string, dir?: "asc" | "desc"): ListSpec<Rec> {
   const cfg = SLUG_SORTS[slug];
-  return recordSpec<Rec>(SLUG_TO_COLLECTION[slug as keyof typeof SLUG_TO_COLLECTION] as RecordCollection, {
+  const base = recordSpec<Rec>(SLUG_TO_COLLECTION[slug as keyof typeof SLUG_TO_COLLECTION] as RecordCollection, {
     sorts: cfg.sorts,
     defaultSort: cfg.sorts[0],
     defaultDir: dir ?? cfg.dir,
@@ -139,6 +151,11 @@ function slugSpec(slug: string, dir?: "asc" | "desc"): ListSpec<Rec> {
       ...(slug === "matters" ? { country: (r: Rec, v: string) => String(r.country ?? "CR") === v } : {}),
     },
   });
+  return {
+    ...base,
+    schema: SLUG_SCHEMA[slug],
+    read: (r, f) => (f.type === "country" ? r[f.key] ?? "CR" : fieldValue(r, f)),
+  };
 }
 
 const CLIENT_SLUGS = new Set(["memberships", "matters", "consultations", "handoffs", "obligations"]);

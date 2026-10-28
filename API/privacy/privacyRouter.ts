@@ -71,6 +71,7 @@ import { buildExport, loadExportBundle } from "./exportData.ts";
 import { erasureBlocker, firestoreStore, planErasure, runErasure, subjectFor } from "./erasure.ts";
 import { registerCspReport } from "./cspReport.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 
 type Doc = Record<string, unknown>;
 const env = (k: string) => Deno.env.get(k);
@@ -385,6 +386,9 @@ export default function privacyRouter(app: Express): void {
             kind: (r, v) => r.kind === v,
           },
           search: (r) => [r.id, r.kind, r.email, r.clientId],
+          schema: LIST_SCHEMAS.privacyRequests,
+          read: (r, f) =>
+            f.key === "overdue" ? (r.status === "received" || r.status === "in_review") && Date.parse(r.dueAt) < Date.now() : fieldValue(r, f),
         };
         const scoped = all || typeof req.query.status === "string" ? rows : rows.filter((r) => r.status === "received" || r.status === "in_review");
         return respondList(req, res, spec, (p) => ({

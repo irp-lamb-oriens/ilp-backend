@@ -16,6 +16,7 @@
 
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -103,6 +104,8 @@ export default function vendorRouter(app: Express) {
           sorts: { companyName: (v) => (v.companyName || "").toLowerCase() },
           defaultSort: "companyName",
           search: (v) => [v.companyName, v.contactName, v.email, v.legalAreas, v.jurisdictions],
+          schema: LIST_SCHEMAS.vendors,
+          read: (v, f) => (f.key === "active" ? v.active !== false : fieldValue(v, f)),
         };
         return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(vendors, p, spec)) }));
       }

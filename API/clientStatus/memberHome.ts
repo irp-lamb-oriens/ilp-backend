@@ -24,6 +24,7 @@
 import { isQuoteAccepted, isQuoteAwaitingClient, quoteKey } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -429,6 +430,7 @@ export function registerMemberHomeRoutes(app: Express) {
           defaultDir: "desc",
           filters: { category: (d, v) => d.category === v, matterId: (d, v) => d.matterId === v },
           search: (d) => [d.fileName, d.category],
+          schema: LIST_SCHEMAS.memberDocuments,
         };
         return respondList(req, res, spec, (p) => ({
           produce: pageProducer(pageRows(items, p, spec), (chunk) => forClient(chunk)),
@@ -585,6 +587,7 @@ export function registerMemberHomeRoutes(app: Express) {
           defaultDir: "desc",
           filters: { kind: (m, v) => m.kind === v },
           search: (m) => [m.body, m.author],
+          schema: LIST_SCHEMAS.memberMessages,
         };
         return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(mergeThread(doc, memberName(doc)), p, spec)) }));
       }

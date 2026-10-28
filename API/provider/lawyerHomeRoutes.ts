@@ -43,6 +43,7 @@ import {
 } from "../members/service.ts";
 import { onRecordUpdated } from "../members/events.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import { ensureStageConfig, getStageLabel, isValidStage } from "../dashboard/automation/stageConfig.ts";
 import { getStageIds, getStageLabels } from "../dashboard/clientHelpers.ts";
 import { callLLMWithFallback } from "../chatbot/intelligence/llm.ts";
@@ -421,6 +422,8 @@ export default function lawyerHomeRoutes(app: Express) {
           defaultSort: "stageEnteredAt",
           filters: { stage: (m, v) => m.stage === v, area: (m, v) => m.area === v, country: (m, v) => String(m.country ?? "CR") === v },
           search: (m) => [m.title, m.area, clientName(names.get(m.clientId) ?? null, ""), m.country],
+          schema: LIST_SCHEMAS.lawyerBoard,
+          read: (m, f) => (f.key === "country" ? m.country ?? "CR" : fieldValue(m, f)),
         };
         const area = typeof req.query.area === "string" ? req.query.area : "";
         const counts: Record<string, number> = {};
@@ -549,6 +552,7 @@ export default function lawyerHomeRoutes(app: Express) {
           defaultDir: "desc",
           filters: { paid: (p, v) => (v === "1" ? p.paid === true : v === "0" ? p.paid !== true : true), matter: (p, v) => String(p.matterId ?? p.quoteId ?? "") === v },
           search: (p) => [p.clientName, p.matterTitle, p.quoteTitle, p.note],
+          schema: LIST_SCHEMAS.lawyerFinance,
         };
         return respondList(req, res, spec, (lp) => ({
           produce: pageProducer(pageRows(payments, lp, spec)),

@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import log from "../../helper/log.ts";
@@ -336,6 +337,7 @@ export default (app: Express) => {
             pending: (c, v) => v !== "1" || Number(c.pendingCount ?? 0) > 0,
           },
           search: (c) => [c.name, c.surname, c.email, c.phone, c.legalArea, c.legalMatter, c.jurisdiction],
+          schema: LIST_SCHEMAS.crmClients,
         };
         return respondList(req, res, spec, (p) => ({
           produce: pageProducer(pageRows(clients, p, spec)),
@@ -784,6 +786,8 @@ export default (app: Express) => {
           defaultSort: "scheduledFor",
           filters: { emailType: (r, v) => String(r.emailType ?? r.type ?? "") === v },
           search: (r) => [r.to, r.subject, r.emailType, r.type, r.clientName, r.clientId],
+          schema: LIST_SCHEMAS.emailQueue,
+          read: (r, f) => (f.key === "emailType" ? r.emailType ?? r.type : f.key === "scheduledFor" ? at(r) : fieldValue(r, f)),
         };
         return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(rows as Row[], p, spec)) }));
       }

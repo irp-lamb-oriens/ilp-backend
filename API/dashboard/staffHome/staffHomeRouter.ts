@@ -55,20 +55,26 @@ import {
 } from "./compute.ts";
 import { isListRequest, type ListSpec, mapProducer, pageProducer, pageRows, respondList } from "../../../helper/listing.ts";
 import { pageRecords, recordSpec } from "../../../db/recordLists.ts";
+import { fieldValue, LIST_SCHEMAS } from "../../../schemas/listSchemas.ts";
 
 // ── LISTS: paged specs (helper/listing.ts) ──────────────────────────────────
 
 type TaskRec = CsmTask & Doc & { id: string };
 
-const QUEUE_SPEC: ListSpec<TaskRec> = recordSpec<TaskRec>(COLLECTIONS.csmTasks, {
-  sorts: ["dueAt", "createdAt", "title"],
-  defaultSort: "dueAt",
-  eqFilters: ["type", "clientId"],
-  filters: {
-    excludePlaceholder: (t, v) => v !== "1" || !isPlaceholderDoc(t),
-    overdue: (t, v) => v !== "1" || t.dueAt < new Date().toISOString(),
-  },
-});
+const QUEUE_SPEC: ListSpec<TaskRec> = {
+  ...recordSpec<TaskRec>(COLLECTIONS.csmTasks, {
+    sorts: ["dueAt", "createdAt", "title"],
+    defaultSort: "dueAt",
+    eqFilters: ["type", "clientId"],
+    filters: {
+      excludePlaceholder: (t, v) => v !== "1" || !isPlaceholderDoc(t),
+      overdue: (t, v) => v !== "1" || t.dueAt < new Date().toISOString(),
+    },
+  }),
+  schema: LIST_SCHEMAS.staffQueue,
+  read: (t, f) =>
+    f.key === "overdue" ? t.dueAt < new Date().toISOString() : f.key === "placeholder" ? isPlaceholderDoc(t) : fieldValue(t, f),
+};
 
 export const MEMBERS_SPEC: ListSpec<MemberRow> = {
   sorts: {
@@ -87,6 +93,7 @@ export const MEMBERS_SPEC: ListSpec<MemberRow> = {
   },
   search: (r) => [r.name, r.email, r.clientId],
   id: (r) => r.clientId,
+  schema: LIST_SCHEMAS.staffMembers,
 };
 
 export const TIMELINE_SPEC: ListSpec<TimelineEntry> = {
@@ -95,6 +102,7 @@ export const TIMELINE_SPEC: ListSpec<TimelineEntry> = {
   defaultDir: "desc",
   filters: { kind: (e, v) => e.kind === v },
   search: (e) => [e.title, e.body, e.actor],
+  schema: LIST_SCHEMAS.staffTimeline,
 };
 
 interface CapacityRow {
@@ -113,6 +121,7 @@ export const LAWYERS_SPEC: ListSpec<CapacityRow> = {
   defaultDir: "desc",
   filters: { area: (r, v) => r.legalAreas.map(String).includes(v) },
   search: (r) => [r.name, r.email, r.legalAreas],
+  schema: LIST_SCHEMAS.staffLawyers,
 };
 
 type Doc = Record<string, unknown>;
