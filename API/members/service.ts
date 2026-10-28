@@ -20,6 +20,7 @@ import {
   COLLECTIONS,
   type Consultation,
   type CountryCode,
+  toCountryCode,
   type CsmTask,
   type Handoff,
   type LegalNextStep,
@@ -64,7 +65,7 @@ export function missingFields(slug: Slug, body: Record<string, unknown>): string
 /** Fill contract defaults so partial POST bodies become valid records. */
 export function withDefaults(slug: Slug, body: Record<string, unknown>): Record<string, unknown> {
   const now = nowIso();
-  const country = (body.country as CountryCode) ?? "CR";
+  const country: CountryCode = toCountryCode(body.country) ?? "CR";
   switch (slug) {
     case "leads":
       return { answers: {}, findings: [], source: "deadline_check", createdAt: now, ...body };

@@ -12,7 +12,7 @@ const m: MembershipDoc = {
 };
 
 Deno.test("cancel reason: label plus comment, or a default", () => {
-  assertEquals(cancelReasonText("leaving_country", " Moving to Portugal "), "I am leaving Costa Rica — Moving to Portugal");
+  assertEquals(cancelReasonText("leaving_country", " Moving to Portugal "), "I am leaving the country — Moving to Portugal");
   assertEquals(cancelReasonText("bogus", ""), "No reason given");
   assertEquals(cancelReasonText(undefined, "Too busy"), "Too busy");
 });

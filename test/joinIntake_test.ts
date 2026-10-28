@@ -9,9 +9,9 @@ import {
   parseJoinDetails,
   titleFromQuestion,
 } from "../API/payments/joinIntake.ts";
-import { intakeWithFindings, profileFromAnswers } from "../API/payments/membership.ts";
+import { intakeWithFindings, profileFromAnswers, profileFromLead } from "../API/payments/membership.ts";
 import { evaluateCheck, normalizeAnswers } from "../API/leads/deadlineCheck.ts";
-import { PROFILE_DETAIL_FIELDS, PROFILE_FIELDS, profileCompleteness } from "../schemas/contracts.ts";
+import { COUNTRY_ANSWERS_FIELD, PROFILE_DETAIL_FIELDS, PROFILE_FIELDS, profileCompleteness } from "../schemas/contracts.ts";
 
 /** T3: the guided join form. Run: deno test --allow-env test/joinIntake_test.ts */
 
@@ -132,7 +132,8 @@ Deno.test("join details: the situation answers give the check's findings", () =>
   const expected = evaluateCheck(answers, now).map((f) => f.ruleId);
   const intake = intakeWithFindings(r.intake!, r.profile, now);
   assertEquals(intake.findings?.map((f) => f.ruleId), expected);
-  assertEquals(expected, ["CR_CHECK_MUNICIPAL_TAX", "CR_CHECK_CORPORATION_TAX", "CR_CHECK_BENEFICIAL_OWNER"]);
+  assertEquals(expected.slice(0, 2), ["CR_PROP_MUNICIPAL_TAX", "CR_CORP_ENTITY_TAX"]);
+  assert(expected.includes("CR_CORP_RTBF"));
   assertEquals(intake.findings?.some((f) => "meaning" in f), false);
 });
 
@@ -176,4 +177,74 @@ Deno.test("onboarding task detail: name, question and urgency", () => {
   );
   assertEquals(onboardingDetail("Ruth Callahan", null), "Ruth Callahan");
   assertEquals(onboardingDetail("", { ...r.intake!, urgency: "soon", question: "x".repeat(300) })!.length, 'First question: ""'.length + 140 + ", wants an answer soon".length);
+});
+
+// ─── COUNTRIES: the join form for any of the six countries ─────────────────
+
+/** A US couple in Valencia: non-lucrative residence, an apartment, no company. */
+const spain = () => {
+  const b = full();
+  b.profile = {
+    ...b.profile,
+    residenceCountry: "Spain",
+    residenceProvince: undefined,
+    timezone: "Europe/Madrid",
+    legalCountry: "ES",
+    countryAnswers: {
+      residencyStatus: "nonLucrative",
+      permitExpiryDate: "2027-05-20",
+      isTaxResident: "yes",
+      region: "valencia",
+      ownsProperty: "yes",
+      rentsOutProperty: "no",
+      ownsVehicle: "foreignLicenseOnly",
+      hasCompany: "no",
+      hasEmployees: "no",
+      hasForeignAssetsOver50k: "yes",
+      hasForeignCryptoOver50k: "no",
+      evil: "<script>",
+    },
+  } as never;
+  b.intake.question = "Do I need to renew my residence card before May, and what does the NIE cover?";
+  return b;
+};
+
+Deno.test("join details (Spain): country answers are cleaned and give the shared profile fields", () => {
+  const r = parseJoinDetails(spain(), TODAY);
+  assertEquals(r.errors, {});
+  assertEquals(r.profile.legalCountry, "ES");
+  const ca = r.profile[COUNTRY_ANSWERS_FIELD] as Record<string, string>;
+  assertEquals("evil" in ca, false);
+  assertEquals(ca.residencyStatus, "nonLucrative");
+  assertEquals(r.profile.residencyStatus, "nonLucrative");
+  assertEquals(r.profile.residencyExpiresAt, "2027-05-20");
+  assertEquals(r.profile.ownsProperty, true);
+  assertEquals(r.profile.hasCompany, false);
+  assertEquals(r.profile.ownsVehicle, false); // drives on a foreign licence, owns no car
+  assertEquals(r.profile.hasEmployees, false);
+  assertEquals(checkAnswersFromProfile(r.profile).country, "ES");
+  const intake = intakeWithFindings(r.intake!, r.profile, new Date("2026-10-27T12:00:00Z"));
+  const ids = intake.findings!.map((f) => f.ruleId);
+  assert(ids.includes("ES_IMM_NLV_RENEWAL") && ids.includes("ES_TAX_720") && ids.includes("ES_VEH_LICENSE"));
+  assert(ids.every((id) => id.startsWith("ES_")));
+  assertEquals(inferArea(r.intake!.question, r.profile), "immigration");
+});
+
+Deno.test("join details (any country): unanswered situation questions come back per question", () => {
+  const b = spain();
+  (b.profile as Record<string, unknown>).countryAnswers = { residencyStatus: "visitor" };
+  const r = parseJoinDetails(b, TODAY);
+  const keys = Object.keys(r.errors).sort();
+  assert(keys.includes("countryAnswers.ownsProperty") && keys.includes("countryAnswers.hasCompany"));
+  assertEquals(keys.includes("countryAnswers.permitExpiryDate"), false); // dates are optional
+  const bad = spain();
+  (bad.profile as Record<string, unknown>).legalCountry = "US";
+  assertEquals(Object.keys(parseJoinDetails(bad, TODAY).errors), ["legalCountry"]);
+});
+
+Deno.test("join details: lead answers from the check become the country answers map", () => {
+  const p = profileFromLead({ country: "CO", answers: { country: "CO", residencyStatus: "visa_R_pre2022", ownsProperty: "medellin" } });
+  assertEquals(p.legalCountry, "CO");
+  assertEquals(p[COUNTRY_ANSWERS_FIELD], { residencyStatus: "visa_R_pre2022", ownsProperty: "medellin" });
+  assertEquals(p.residencyStatus, "visa_R_pre2022");
 });

@@ -24,10 +24,22 @@ import { SESSION_TTL_MS } from "../../helper/auth/cookies.ts";
 import { emitEvent, obligationsFromLead, seedObligationsFromLead } from "../members/events.ts";
 import { createRecord, getRecord } from "../../db/records.ts";
 import { evaluateCheck, normalizeAnswers } from "../leads/deadlineCheck.ts";
-import { checkAnswersFromProfile, firstMatterFrom, intakeFindings, JOIN_PROFILE_KEYS, onboardingDetail } from "./joinIntake.ts";
+import {
+  checkAnswersFromProfile,
+  countryFromProfile,
+  defaultTimeZoneFor,
+  firstMatterFrom,
+  intakeFindings,
+  JOIN_PROFILE_KEYS,
+  onboardingDetail,
+} from "./joinIntake.ts";
+import { flagUnassignedCountry, hasLawyerIn } from "../calls/callService.ts";
+import { isPlaceholderId } from "../../helper/placeholder.ts";
 import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
   COLLECTIONS,
+  COUNTRY_ANSWERS_FIELD,
+  countryName,
   type CountryCode,
   type JoinIntake,
   type Lead,
@@ -35,6 +47,7 @@ import {
   type Membership,
   type Obligation,
   PLAN_STANDARD,
+  toCountryCode,
 } from "../../schemas/contracts.ts";
 
 export type PaymentsMode = "stripe" | "manual";
@@ -70,6 +83,16 @@ export function profileFromAnswers(answers: Record<string, unknown>): Doc {
   return out;
 }
 
+/**
+ * COUNTRIES: a lead's answers (country question keys) become the member's
+ * country answers map, plus the shared profile keys they name directly.
+ */
+export function profileFromLead(lead: Pick<Lead, "country" | "answers">): Doc {
+  const { country: _c, ...answers } = (lead.answers ?? {}) as Record<string, unknown>;
+  const country = toCountryCode(lead.country) ?? "CR";
+  return { ...profileFromAnswers(answers), legalCountry: country, [COUNTRY_ANSWERS_FIELD]: answers };
+}
+
 export interface JoinInput {
   email: string;
   fullName: string;
@@ -79,6 +102,8 @@ export interface JoinInput {
   profile?: Doc;
   /** T3 guided join: "what you need first"; becomes the first matter on activation. */
   intake?: JoinIntake | null;
+  /** COUNTRIES: the country the membership covers (one of the six). */
+  country?: CountryCode;
 }
 
 /** T3: the intake plus the dated findings its situation answers give (obligations on activation). */
@@ -125,9 +150,14 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
     const l = (await get(COLLECTIONS.leads, input.leadId).catch(() => null)) as unknown as Lead | null;
     if (l && l.email === email) lead = l;
   }
-  const country: CountryCode = lead?.country ?? "CR";
-  // The form's answers are newer than the check's, so they win.
-  const profile = { ...(lead ? profileFromAnswers(lead.answers) : {}), ...profileFromAnswers(input.profile ?? {}) };
+  // The form's country wins, then the check's, then Costa Rica (older forms had no country question).
+  const formCountry = input.profile?.legalCountry ? countryFromProfile(input.profile) : null;
+  const country: CountryCode = input.country ?? formCountry ?? toCountryCode(lead?.country) ?? "CR";
+  // The form's answers are newer than the check's, so they win. A lead from another country is not mixed in.
+  const leadProfile = lead && toCountryCode(lead.country) === country ? profileFromLead(lead) : {};
+  const profile: Doc = { ...leadProfile, ...profileFromAnswers(input.profile ?? {}) };
+  profile.legalCountry = country;
+  if (!filled(profile.timezone)) profile.timezone = defaultTimeZoneFor(country);
 
   const existing = (await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null;
   const prior = existing ? await membershipsFor(clientId) : [];
@@ -140,7 +170,7 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
     fullName: input.fullName,
     email,
     ...(input.phone ? { phone: input.phone } : {}),
-    jurisdiction: "Costa Rica",
+    jurisdiction: countryName(country),
     country,
     ...profile,
   };
@@ -178,6 +208,7 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
     updatedAt: now,
   };
   if (lead) membership.sourceLeadId = lead.id;
+  membership.country = country;
   if (input.intake) membership.intake = intakeWithFindings(input.intake, profile);
   membership.paymentRef = paymentsMode() === "stripe" ? "stripe:pending" : "manual";
   await patch(COLLECTIONS.memberships, membership.id, membership as unknown as Doc);
@@ -247,11 +278,23 @@ export async function activateMembership(
   });
   await seedObligationsFromLead(m as unknown as Record<string, unknown>);
   if (m.intake?.findings?.length) await seedObligationsFromIntake(m.clientId, m.country, m.intake);
+  // COUNTRIES: joining is never blocked; with no lawyer licensed in the member's country yet, staff get a task.
+  await checkCountryCoverage(m);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   // Join confirmation email with the renewal terms (never throws; once per membership).
   await runHook("onActivated", { ...m, ...update } as MembershipDoc);
   return { ...m, ...update } as Membership;
+}
+
+/** Staff task "unassigned member in <country>" when no lawyer there can take calls yet. Never throws. */
+async function checkCountryCoverage(m: Membership): Promise<void> {
+  try {
+    const country = toCountryCode(m.country) ?? "CR";
+    if (!(await hasLawyerIn(country, isPlaceholderId(m.clientId)))) await flagUnassignedCountry(m.clientId, country);
+  } catch (err) {
+    log(`[payments] country coverage check failed for ${m.id}: ${err instanceof Error ? err.message : err}`, "error");
+  }
 }
 
 /**

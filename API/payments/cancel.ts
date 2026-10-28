@@ -36,7 +36,7 @@ type Doc = Record<string, unknown>;
 export const CANCEL_REASONS: Record<string, string> = {
   not_worth_cost: "It costs more than it is worth to me",
   got_what_needed: "I got the help I needed",
-  leaving_country: "I am leaving Costa Rica",
+  leaving_country: "I am leaving the country",
   not_used: "I did not use it enough",
   service_issue: "Something did not work well",
   other: "Another reason",

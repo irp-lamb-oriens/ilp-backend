@@ -30,6 +30,7 @@ import { registerRetentionRoutes } from "../retention/retentionRouter.ts";
 import { parseJoinConsents } from "../privacy/policy.ts";
 import { recordJoinConsents } from "../privacy/privacyRouter.ts";
 import { parseJoinDetails } from "./joinIntake.ts";
+import { toCountryCode } from "../../schemas/contracts.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -137,6 +138,8 @@ export default function paymentsRouter(app: Express) {
           phone,
           leadId,
           ...(details.intake ? { profile: details.profile, intake: details.intake } : {}),
+          // COUNTRIES: the short join can still name the country (e.g. from a country page).
+          ...(toCountryCode(body.country) ? { country: toCountryCode(body.country)! } : {}),
         });
         await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
         // P2 funnel: remember the browser's anonymous id so the server can
