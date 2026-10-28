@@ -161,6 +161,9 @@ export function obligationsFromLead(clientId: string, lead: Pick<Lead, "country"
       status: "upcoming",
     };
     if (f.dueAt) o.dueAt = f.dueAt;
+    if (f.windowStartAt) o.windowStartAt = f.windowStartAt;
+    if (f.confidence) o.confidence = f.confidence;
+    if (f.dueText) o.dueText = f.dueText;
     return o;
   });
 }

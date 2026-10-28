@@ -357,12 +357,17 @@ export function callChangedEmail(o: {
 /** Obligations reaching 30 or 7 days out. Worded "may require review". */
 export function obligationsDueEmail(o: {
   firstName?: string;
-  items: Array<{ title: string; dueLabel: string; daysLeft: number }>;
+  items: Array<{ title: string; dueLabel: string; daysLeft: number; confirm?: boolean }>;
   askUrl: string;
   unsubscribeUrl: string;
 }): MemberEmail {
   const soon = o.items.some((i) => i.daysLeft <= 7);
-  const list = o.items.map((i) => `${i.title}, by ${i.dueLabel} (${i.daysLeft === 0 ? "today" : i.daysLeft === 1 ? "tomorrow" : `in ${i.daysLeft} days`})`);
+  // `confirm`: a low-confidence research date. No firm date is shown; the lawyer confirms it.
+  const list = o.items.map((i) =>
+    i.confirm
+      ? `${i.title}. Ask your lawyer to confirm this date.`
+      : `${i.title}, by ${i.dueLabel} (${i.daysLeft === 0 ? "today" : i.daysLeft === 1 ? "tomorrow" : `in ${i.daysLeft} days`})`
+  );
   return memberEmailLayout({
     subject: soon ? "A date that may require review this week" : "Coming up: dates that may require review",
     firstName: o.firstName,

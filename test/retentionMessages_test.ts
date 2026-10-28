@@ -56,3 +56,14 @@ Deno.test("retention emails carry the unsubscribe link and calm wording", () => 
   assertEquals(o.text.includes("may require review"), true);
   assertEquals(c.html.includes("s?score=0") && c.html.includes("s?score=10"), true);
 });
+
+Deno.test("obligations email: a low-confidence date asks the lawyer to confirm instead of showing the date", () => {
+  const o = obligationsDueEmail({
+    firstName: "Linda",
+    items: [{ title: "Maritime zone concession fee (canon) may require review", dueLabel: "December 1, 2026", daysLeft: 7, confirm: true }],
+    askUrl: "a",
+    unsubscribeUrl: "U",
+  });
+  assertEquals(o.text.includes("Ask your lawyer to confirm this date."), true);
+  assertEquals(o.text.includes("December 1, 2026"), false);
+});

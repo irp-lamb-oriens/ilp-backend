@@ -104,7 +104,8 @@ async function obligationsStep(to: MemberContact, now: Date): Promise<number> {
   reached.sort((a, b) => a.days - b.days);
   const mail = obligationsDueEmail({
     firstName: to.firstName,
-    items: reached.map((r) => ({ title: r.o.title, dueLabel: dateLabel(r.o.dueAt!), daysLeft: r.days })),
+    // Low-confidence research dates are never shown as firm dates (COUNTRIES).
+    items: reached.map((r) => ({ title: r.o.title, dueLabel: dateLabel(r.o.dueAt!), daysLeft: r.days, confirm: r.o.confidence === "low" })),
     askUrl: `${siteUrl()}/status`,
     unsubscribeUrl: await unsubscribeUrl(to.clientId),
   });

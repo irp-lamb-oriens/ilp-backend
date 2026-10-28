@@ -6,11 +6,10 @@ import put from "../../db/put.ts";
 import log from "../../helper/log.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
 import { emailToDocId } from "../../helper/auth/otp.ts";
-import { SUPPORTED_COUNTRIES } from "../countries/countryCatalog.ts";
 import patch from "../../db/patch.ts";
 import rateLimit from "express-rate-limit";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
-import { COLLECTIONS, type Lead } from "../../schemas/contracts.ts";
+import { COLLECTIONS, countryName as nameOf, type CountryCode, type Lead, toCountryCode } from "../../schemas/contracts.ts";
 import { type CheckFinding, evaluateCheck, normalizeAnswers } from "./deadlineCheck.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -18,8 +17,7 @@ const CLIENTS_COLLECTION = "clients";
 
 /** Map an ISO alpha-2 code to its display name, falling back to the code. */
 function countryName(code: string): string {
-  const match = SUPPORTED_COUNTRIES.find((c) => c.code === code);
-  return match ? match.name : code;
+  return nameOf(code);
 }
 
 /** Per-IP limit for the public check (on top of the global /api limiter). */
@@ -35,19 +33,22 @@ const checkLimiter = rateLimit({
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
-function findingsEmailHtml(findings: CheckFinding[]): string {
+function findingsEmailHtml(findings: CheckFinding[], country: CountryCode): string {
   const site = Deno.env.get("PUBLIC_SITE_URL") || "https://ilp.legal";
   const rows = findings.length
     ? findings.map((f) => {
-      const date = f.dueAt
+      // Low-confidence items never show a firm date; undated items show their rule in words.
+      const date = f.confidence === "low"
+        ? "Ask your lawyer to confirm this date"
+        : f.dueAt
         ? new Date(f.dueAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" })
-        : "";
+        : f.dueText ?? "";
       return `<li style="margin:0 0 16px"><strong>${esc(date)}</strong> &middot; ${esc(f.title)}<br>` +
         `<span style="color:#4a5a66">${esc(f.meaning)}</span></li>`;
     }).join("")
     : "<li>Nothing dated came up from your answers. Rules change, so it is worth checking again each year.</li>";
   return `<div style="font-family:Helvetica,Arial,sans-serif;font-size:17px;line-height:1.6;color:#202a33;max-width:560px">
-<p>Here is what may apply to you in Costa Rica, based on your answers. These are general dates, not legal advice; a lawyer can confirm what applies to you.</p>
+<p>Here is what may apply to you in ${esc(countryName(country))}, based on your answers. These are general dates, not legal advice; a lawyer can confirm what applies to you.</p>
 <ul style="padding-left:20px">${rows}</ul>
 <p><a href="${esc(site)}/join" style="color:#123b5d">Have a lawyer review this with ILP</a></p></div>`;
 }
@@ -107,7 +108,7 @@ export default (app: Express) => {
       enqueueEmail({
         to: email,
         subject: "Your free deadline check from ILP",
-        html: findingsEmailHtml(findings),
+        html: findingsEmailHtml(findings, answers.country),
       }).catch((err) => log(`[leads] findings email not queued: ${err}`, "leads"));
 
       res.status(201).json({ findings, saved: true, leadId: id });
@@ -120,7 +121,7 @@ export default (app: Express) => {
       const body = req.body as Record<string, unknown> | undefined;
 
       const email = sanitizeStr(body?.email).toLowerCase();
-      const country = sanitizeStr(body?.country).toUpperCase();
+      const country = toCountryCode(body?.country) ?? sanitizeStr(body?.country).toUpperCase();
       const name = sanitizeStr(body?.name);
       const topic = sanitizeStr(body?.topic);
       const consent = body?.consent === true;
