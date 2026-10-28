@@ -27,7 +27,7 @@ practiceArea valid values:
   • "immigration", "real-estate", "corporate", "tax", "family", "estate", "other"
 
 jurisdiction valid values:
-  • "Costa Rica", "Panama", "Mexico", "other"
+  • "Colombia", "Costa Rica", "Mexico", "Panama", "Portugal", "Spain", "other"
 
 legalUrgency valid values:
   • "low", "medium", "high", "urgent"
@@ -169,7 +169,7 @@ YOUR OBJECTIVE:
 Gather all the information needed to prepare a legal consultation BEFORE the call, then schedule that call.
 This means you need EXHAUSTIVE detail — not just field names, but specifics:
 • Legal matter: the exact type of matter (residency, real estate, corporate, immigration, tax, family)
-• Jurisdiction: which country the matter concerns (Costa Rica, Panama, or Mexico)
+• Jurisdiction: which country the matter concerns (Colombia, Costa Rica, Mexico, Panama, Portugal or Spain)
 • Practice area: which area of law this falls under
 • Urgency: how soon the client needs help
 • Notes: any additional context the client wants to share

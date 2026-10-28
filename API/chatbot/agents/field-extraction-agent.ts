@@ -13,7 +13,7 @@ const FORM_SCHEMA = {
   email: "string",
   phone: "string",
   clientCountry: "string",
-  jurisdiction: "string (Costa Rica | Panama | Mexico | other)",
+  jurisdiction: "string (Colombia | Costa Rica | Mexico | Panama | Portugal | Spain | other)",
   legalMatter: "string (residency | real-estate | corporate | immigration | tax | family | other)",
   practiceArea: "string (immigration | real-estate | corporate | tax | family | estate | other)",
   legalUrgency: "string (low | medium | high | urgent)",

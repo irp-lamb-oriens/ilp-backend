@@ -8,9 +8,12 @@ SERVICES:
 - Family & Estate (wills, estates, family law): wills, succession, estate planning, family matters.
 
 JURISDICTIONS ILP PRACTICES IN:
-- Costa Rica (primary)
-- Panama
+- Colombia
+- Costa Rica
 - Mexico
+- Panama
+- Portugal
+- Spain
 - United States (limited)
 
 STAGES OF A LEGAL MATTER:

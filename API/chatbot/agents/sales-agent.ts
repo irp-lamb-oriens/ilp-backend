@@ -22,7 +22,7 @@ export function runSalesAgent(userMessage: string): SalesAgentResponse {
       intent: "booking",
       confidenceGuestimate: 0.85,
       reply:
-        "I'd be happy to help you book a consultation. Could you confirm your email and which country your legal matter concerns (Costa Rica, Panama, or Mexico)?",
+        "I'd be happy to help you book a consultation. Could you confirm your email and which country your legal matter concerns (Colombia, Costa Rica, Mexico, Panama, Portugal or Spain)?",
     };
   }
 

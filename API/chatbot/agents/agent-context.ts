@@ -187,15 +187,15 @@ PRACTICE AREA (practiceArea):
   Options: "immigration", "real-estate", "corporate", "tax", "family", "estate", "other"
 
 JURISDICTION (jurisdiction):
-  Options: "Costa Rica", "Panama", "Mexico", "other"
-  INFERENCE: "CR"→"Costa Rica", "PA"→"Panama", "MX"→"Mexico".
+  Options: "Colombia", "Costa Rica", "Mexico", "Panama", "Portugal", "Spain", "other"
+  INFERENCE: "CO"→"Colombia", "CR"→"Costa Rica", "MX"→"Mexico", "PA"→"Panama", "PT"→"Portugal", "ES"→"Spain".
 
 LEGAL URGENCY (legalUrgency):
   Options: "low", "medium", "high", "urgent"
 
 REFERRAL (referredBy): How the client heard about ILP.
 PHONE: Store EXACTLY as typed.
-COUNTRIES: CR→Costa Rica, US→United States, PA→Panama, MX→Mexico, CA→Canada.`;
+COUNTRIES: CO→Colombia, CR→Costa Rica, MX→Mexico, PA→Panama, PT→Portugal, ES→Spain, US→United States, CA→Canada.`;
 }
 
 export function generateNeverReaskBlock(): string {
@@ -219,7 +219,7 @@ Be specific. Always name the exact piece of info you need.
 2. email → "What's your email?"
 3. phone → "What's the best phone number to reach you?"
 4. clientCountry → "Which country are you currently based in?"
-5. jurisdiction → "Which country does your legal matter concern? (Costa Rica, Panama, or Mexico)"
+5. jurisdiction → "Which country does your legal matter concern? (Colombia, Costa Rica, Mexico, Panama, Portugal or Spain)"
 6. legalMatter → "What kind of legal matter do you need help with? (residency, real estate, corporate, immigration, tax, family, or other)"
 7. practiceArea → "Which practice area does this fall under?"
 8. legalUrgency → "How urgent is this? (low, medium, high, or urgent)" (optional — accept "idk" and move on)
@@ -230,7 +230,7 @@ REQUIRED vs OPTIONAL:
 - ⚠️REQUIRED fields: Try up to 2 times. If user still can't answer, skip gracefully.
 - (optional) fields: Accept "idk" immediately and move on.
 
-🌎 COLLOQUIAL NAMES: Accept slang — "CR"→"Costa Rica", "PA"→"Panama", "MX"→"Mexico". Don't question valid answers.`;
+🌎 COLLOQUIAL NAMES: Accept slang — "CO"→"Colombia", "CR"→"Costa Rica", "MX"→"Mexico", "PA"→"Panama", "PT"→"Portugal", "ES"→"Spain". Don't question valid answers.`;
 }
 
 
