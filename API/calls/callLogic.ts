@@ -6,14 +6,80 @@
  * (clientStatus/memberHome.ts) and the reminder job (jobs/callReminders.ts)
  * call these.
  *
- * Costa Rica is UTC-6 all year (no daylight saving), so local wall-clock
- * times convert with a fixed offset.
+ * Each lawyer's weekly windows are wall-clock times in the lawyer's own time
+ * zone (availability.timezone, IANA). Spain, Portugal and parts of Mexico
+ * change clocks, so conversions go through Intl per instant, never a fixed
+ * offset. Costa Rica (UTC-6, no daylight saving) stays the default for older
+ * availability documents.
  */
 
-import type { Consultation, LawyerAvailability, WeeklyWindow } from "../../schemas/contracts.ts";
+import { COUNTRIES, COUNTRY_CODES, type Consultation, type LawyerAvailability, type WeeklyWindow } from "../../schemas/contracts.ts";
 
 export const CR_TZ = "America/Costa_Rica" as const;
 export const CR_OFFSET_MIN = 6 * 60;
+
+// ─── Time zones ────────────────────────────────────────────────────────────
+
+/** True when `tz` is an IANA zone this runtime knows. */
+export function isTimeZone(tz: unknown): tz is string {
+  if (typeof tz !== "string" || !/^[A-Za-z]+(?:\/[A-Za-z0-9_+-]+){1,2}$/.test(tz)) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const fmtCache = new Map<string, Intl.DateTimeFormat>();
+function partsIn(tz: string, t: number) {
+  let f = fmtCache.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    fmtCache.set(tz, f);
+  }
+  const o: Record<string, number> = {};
+  for (const p of f.formatToParts(new Date(t))) if (p.type !== "literal") o[p.type] = Number(p.value);
+  return o;
+}
+
+/** Minutes the zone is ahead of UTC at instant `t` (Costa Rica: -360; Madrid in summer: 120). */
+export function tzOffsetMin(tz: string, t: number): number {
+  const p = partsIn(tz, t);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return Math.round((asUtc - Math.floor(t / 1000) * 1000) / MIN);
+}
+
+/**
+ * Plain name of a zone: "Costa Rica time", "Canary Islands time" (from the
+ * country table), else the IANA city ("New York time").
+ */
+export function zoneLabel(tz: string): string {
+  for (const c of COUNTRY_CODES) {
+    const z = COUNTRIES[c].timeZones.find((x) => x.id === tz);
+    if (z) return COUNTRIES[c].timeZones.length === 1 ? `${COUNTRIES[c].name} time` : `${z.label} time`;
+  }
+  const city = tz.split("/").pop() ?? tz;
+  return `${city.replace(/_/g, " ")} time`;
+}
+
+/** "YYYY-MM-DD" of the calendar day in `tz` that contains `t` (ms). */
+export function dateKeyIn(tz: string, t: number): string {
+  const p = partsIn(tz, t);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+/** UTC ms of the wall-clock time `minutes` after 00:00 on day `key` in `tz`. */
+export function wallToUtc(tz: string, key: string, minutes = 0): number {
+  const [y, m, d] = key.split("-").map(Number);
+  const naive = Date.UTC(y, m - 1, d) + minutes * MIN;
+  let t = naive - tzOffsetMin(tz, naive) * MIN;
+  // A second pass settles the offset on days the clocks change.
+  t = naive - tzOffsetMin(tz, t) * MIN;
+  return t;
+}
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -32,13 +98,14 @@ export const NO_SHOW_WAIT_MIN = 10;
 export type AvailabilityRules = Pick<
   LawyerAvailability,
   "weekly" | "blackoutDates" | "minLeadHours" | "maxCallsPerDay"
->;
+> & { timezone?: string };
 
 /**
  * Used until a lawyer saves their own settings: the hours booking offered
- * before availability existed (weekdays 8:00-12:00 and 13:00-17:00 CR).
+ * before availability existed (weekdays 8:00-12:00 and 13:00-17:00), in the
+ * lawyer's time zone (their country's default; Costa Rica for older lawyers).
  */
-export function defaultAvailability(providerId: string, now = new Date()): LawyerAvailability {
+export function defaultAvailability(providerId: string, now = new Date(), timezone: string = CR_TZ): LawyerAvailability {
   const weekly: WeeklyWindow[] = [];
   for (const day of [1, 2, 3, 4, 5] as const) {
     weekly.push({ day, start: "08:00", end: "12:00" }, { day, start: "13:00", end: "17:00" });
@@ -46,7 +113,7 @@ export function defaultAvailability(providerId: string, now = new Date()): Lawye
   return {
     id: providerId,
     providerId,
-    timezone: CR_TZ,
+    timezone: isTimeZone(timezone) ? timezone : CR_TZ,
     weekly,
     blackoutDates: [],
     minLeadHours: 18,
@@ -76,8 +143,13 @@ export function normalizeAvailability(
   input: unknown,
   providerId: string,
   now = new Date(),
+  defaultTimezone: string = CR_TZ,
 ): { value: AvailabilityDoc } | { error: string } {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  if (o.timezone !== undefined && o.timezone !== null && o.timezone !== "" && !isTimeZone(o.timezone)) {
+    return { error: "Choose your time zone from the list." };
+  }
+  const timezone = isTimeZone(o.timezone) ? o.timezone : isTimeZone(defaultTimezone) ? defaultTimezone : CR_TZ;
   const rawWeekly = Array.isArray(o.weekly) ? o.weekly : [];
   if (rawWeekly.length > 28) return { error: "Too many time windows (28 at most)." };
   const weekly: WeeklyWindow[] = [];
@@ -132,7 +204,7 @@ export function normalizeAvailability(
     value: {
       id: providerId,
       providerId,
-      timezone: CR_TZ,
+      timezone,
       weekly,
       blackoutDates,
       minLeadHours,
@@ -146,7 +218,7 @@ export function normalizeAvailability(
 
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-// ─── Costa Rica dates ──────────────────────────────────────────────────────
+// ─── Costa Rica dates (older callers; new code uses dateKeyIn / wallToUtc) ──
 
 /** "YYYY-MM-DD" of the Costa Rica calendar day containing `t` (ms). */
 export function crDateKey(t: number): string {
@@ -177,15 +249,17 @@ export interface SlotInput {
 const overlaps = (s1: number, e1: number, s2: number, e2: number) => s1 < e2 && s2 < e1;
 
 /**
- * Bookable start times (ISO, UTC): the lawyer's weekly windows in Costa Rica
- * time, minus blackout dates, minus booked consultations, minus calendar busy
- * times, no sooner than minLeadHours from now, and no slots on a day that
- * already holds maxCallsPerDay calls.
+ * Bookable start times (ISO, UTC): the lawyer's weekly windows in the
+ * lawyer's time zone (availability.timezone, default Costa Rica), minus
+ * blackout dates, minus booked consultations, minus calendar busy times, no
+ * sooner than minLeadHours from now, and no slots on a day that already holds
+ * maxCallsPerDay calls.
  */
 export function buildSlots(o: SlotInput): string[] {
   const len = o.lengthMin ?? 20;
   const days = o.days ?? 14;
   const a = o.availability;
+  const tz = isTimeZone(a.timezone) ? a.timezone : CR_TZ;
   const nowMs = o.now.getTime();
   const earliest = nowMs + Math.max(0, a.minLeadHours ?? 0) * HOUR;
   const blackout = new Set(a.blackoutDates ?? []);
@@ -194,7 +268,7 @@ export function buildSlots(o: SlotInput): string[] {
     .filter((c) => c.status !== "cancelled")
     .map((c) => {
       const s = Date.parse(c.scheduledAt);
-      return { s, e: s + (c.durationMin || len) * MIN, day: crDateKey(s) };
+      return { s, e: s + (c.durationMin || len) * MIN, day: Number.isNaN(s) ? "" : dateKeyIn(tz, s) };
     })
     .filter((x) => !Number.isNaN(x.s));
   const busy = (o.busy ?? [])
@@ -205,19 +279,19 @@ export function buildSlots(o: SlotInput): string[] {
   for (const h of held) perDay.set(h.day, (perDay.get(h.day) ?? 0) + 1);
 
   const out: string[] = [];
-  const firstDay = crMidnight(crDateKey(nowMs));
+  const [fy, fm, fd] = dateKeyIn(tz, nowMs).split("-").map(Number);
   for (let i = 0; i < days; i++) {
-    const dayStart = firstDay + i * DAY;
-    const key = crDateKey(dayStart);
+    const cal = new Date(Date.UTC(fy, fm - 1, fd + i));
+    const key = cal.toISOString().slice(0, 10);
     if (blackout.has(key)) continue;
     if ((perDay.get(key) ?? 0) >= Math.max(1, a.maxCallsPerDay ?? 6)) continue;
-    const dow = new Date(dayStart - CR_OFFSET_MIN * MIN).getUTCDay();
+    const dow = cal.getUTCDay();
     const windows = (a.weekly ?? []).filter((w) => w.day === dow)
       .sort((x, y) => toMinutes(x.start) - toMinutes(y.start));
     for (const w of windows) {
       const wEnd = toMinutes(w.end);
       for (let m = toMinutes(w.start); m + len <= wEnd; m += len) {
-        const s = dayStart + m * MIN;
+        const s = wallToUtc(tz, key, m);
         const e = s + len * MIN;
         if (s < earliest) continue;
         if (held.some((h) => overlaps(s, e, h.s, h.e))) continue;
@@ -241,22 +315,44 @@ const normArea = (a: string) => {
 export interface LawyerCandidate {
   providerId: string;
   specialties: string[];
+  /** Countries the lawyer is licensed in (CountryCode). Empty or missing = Costa Rica (older profiles). */
+  countries?: string[];
   /** Upcoming booked calls; the least loaded match wins. */
   load?: number;
 }
+
+/** Countries a candidate is licensed in; older profiles without any are Costa Rica lawyers. */
+export const candidateCountries = (c: Pick<LawyerCandidate, "countries">): string[] =>
+  c.countries?.length ? c.countries.map((x) => x.toUpperCase()) : ["CR"];
 
 /**
  * The lawyer for a member with no assigned lawyer: the least-loaded lawyer
  * whose specialties include the matter's area, else the fallback
  * (DEFAULT_PROVIDER_ID). Ties break on providerId so the choice is stable.
+ *
+ * With `country`, only lawyers licensed in that country are considered: the
+ * least-loaded specialty match, else the least-loaded lawyer licensed there,
+ * else the fallback (the caller passes it only when it is licensed there),
+ * else null: nobody can take the call yet.
  */
-export function pickLawyer(area: string | null | undefined, candidates: LawyerCandidate[], fallback: string | null): string | null {
+export function pickLawyer(
+  area: string | null | undefined,
+  candidates: LawyerCandidate[],
+  fallback: string | null,
+  country?: string | null,
+): string | null {
+  const byLoad = (x: LawyerCandidate, y: LawyerCandidate) => (x.load ?? 0) - (y.load ?? 0) || x.providerId.localeCompare(y.providerId);
+  const pool = country
+    ? candidates.filter((c) => c.providerId && candidateCountries(c).includes(country.toUpperCase()))
+    : candidates;
   if (area) {
     const want = normArea(area);
-    const matches = candidates
-      .filter((c) => c.providerId && c.specialties.some((s) => normArea(s) === want))
-      .sort((x, y) => (x.load ?? 0) - (y.load ?? 0) || x.providerId.localeCompare(y.providerId));
+    const matches = pool.filter((c) => c.providerId && c.specialties.some((s) => normArea(s) === want)).sort(byLoad);
     if (matches.length) return matches[0].providerId;
+  }
+  if (country) {
+    const any = pool.filter((c) => c.providerId).sort(byLoad);
+    if (any.length) return any[0].providerId;
   }
   return fallback || null;
 }

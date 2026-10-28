@@ -214,3 +214,43 @@ Deno.test("transcript sweep: only consented calls, after the call, within a day"
   assertEquals(transcriptFetchDue({ ...c, transcriptFetchAttempts: 8 }, new Date("2026-11-05T15:31:00Z")), false);
   assertEquals(transcriptFetchDue(c, new Date("2026-11-06T16:00:00Z")), false);
 });
+
+// ─── COUNTRIES: lawyers in their own time zone, routing by country ────────
+
+Deno.test("slots follow the lawyer's time zone, including clock changes", async () => {
+  const { dateKeyIn, tzOffsetMin, wallToUtc, zoneLabel } = await import("../API/calls/callLogic.ts");
+  assertEquals(tzOffsetMin("America/Costa_Rica", Date.parse("2026-07-01T12:00:00Z")), -360);
+  assertEquals(tzOffsetMin("Europe/Madrid", Date.parse("2026-07-01T12:00:00Z")), 120);
+  assertEquals(tzOffsetMin("Europe/Madrid", Date.parse("2026-11-02T12:00:00Z")), 60);
+  assertEquals(tzOffsetMin("Atlantic/Azores", Date.parse("2026-11-02T12:00:00Z")), -60);
+  assertEquals(new Date(wallToUtc("Europe/Lisbon", "2026-10-26", 9 * 60)).toISOString(), "2026-10-26T09:00:00.000Z");
+  assertEquals(dateKeyIn("Asia/Tokyo", Date.parse("2026-11-02T20:00:00Z")), "2026-11-03");
+  assertEquals(zoneLabel("Atlantic/Canary"), "Canary Islands time");
+  assertEquals(zoneLabel("America/Bogota"), "Colombia time");
+  // A Madrid lawyer's 09:00 on Friday Oct 23 (summer time) and on Monday Oct 26 (after the change).
+  const madrid = { ...rules({ weekly: [{ day: 5 as const, start: "09:00", end: "09:20" }, { day: 1 as const, start: "09:00", end: "09:20" }] }), timezone: "Europe/Madrid" };
+  const slots = buildSlots({ now: new Date("2026-10-22T12:00:00Z"), availability: madrid, booked: [], days: 5 });
+  assertEquals(slots, ["2026-10-23T07:00:00.000Z", "2026-10-26T08:00:00.000Z"]);
+  // Saved settings keep the lawyer's zone; an unknown zone is refused.
+  const ok = normalizeAvailability({ weekly: [], timezone: "America/Mexico_City" }, "p1");
+  assertEquals("value" in ok && ok.value.timezone, "America/Mexico_City");
+  assertEquals("error" in normalizeAvailability({ weekly: [], timezone: "Mars/Base" }, "p1"), true);
+  const pt = normalizeAvailability({ weekly: [] }, "p1", new Date(), "Europe/Lisbon");
+  assertEquals("value" in pt && pt.value.timezone, "Europe/Lisbon");
+  assertEquals(defaultAvailability("p1", new Date(), "America/Bogota").timezone, "America/Bogota");
+});
+
+Deno.test("routing by country: only lawyers licensed there; null when there is none", () => {
+  const c = [
+    { providerId: "cr1", specialties: ["corporate"], load: 0 }, // older profile: Costa Rica
+    { providerId: "es1", specialties: ["immigration"], countries: ["ES"], load: 2 },
+    { providerId: "es2", specialties: ["tax"], countries: ["ES", "PT"], load: 0 },
+  ];
+  assertEquals(pickLawyer("corporate", c, "dflt", "CR"), "cr1");
+  assertEquals(pickLawyer("immigration", c, "dflt", "ES"), "es1");
+  assertEquals(pickLawyer("corporate", c, "dflt", "ES"), "es2"); // no specialty match: least loaded in Spain
+  assertEquals(pickLawyer("tax", c, null, "PT"), "es2");
+  assertEquals(pickLawyer("tax", c, null, "CO"), null); // nobody licensed in Colombia yet
+  assertEquals(pickLawyer("tax", c, "co_default", "CO"), "co_default"); // caller vouches for the fallback
+  assertEquals(pickLawyer("corporate", c, "dflt"), "cr1"); // no country: as before
+});

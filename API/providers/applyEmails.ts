@@ -4,6 +4,8 @@
  * Plain text plus simple HTML; copy follows frontend/copy-rules.md.
  */
 
+import { COUNTRIES, type CountryCode } from "../../schemas/contracts.ts";
+
 const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 interface Mail {
@@ -30,13 +32,13 @@ function layout(subject: string, name: string, paragraphs: string[], cta?: { lab
 }
 
 export const lawyerApplyEmails = {
-  received: (o: { name: string; signInUrl: string }): Mail =>
+  received: (o: { name: string; signInUrl: string; country?: CountryCode }): Mail =>
     layout(
       "We received your ILP partner lawyer application",
       o.name,
       [
         "Thank you for applying to take member calls with ILP. Your application is now under review.",
-        "What happens next: we check your carné with the Colegio de Abogados y Abogadas de Costa Rica and read your answers. If something is missing, we email you. When your profile is approved, we email you again and members can book calls with you.",
+        `What happens next: we check your ${(o.country && o.country !== "CR") ? COUNTRIES[o.country].lawyerBody.numberLabel.toLowerCase() : "carné"} with the ${COUNTRIES[o.country ?? "CR"].lawyerBody.name} and read your answers. If something is missing, we email you. When your profile is approved, we email you again and members can book calls with you.`,
         "You can sign in to the lawyer portal now with this email address. There you can check your weekly hours and see what is left to finish. You cannot take calls until the review is done.",
       ],
       { label: "Sign in to the lawyer portal", url: o.signInUrl },

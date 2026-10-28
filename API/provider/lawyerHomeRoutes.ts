@@ -32,6 +32,7 @@ import {
   type Matter,
   type Obligation,
   profileCompleteness,
+  toCountryCode,
 } from "../../schemas/contracts.ts";
 import {
   findRecords,
@@ -131,7 +132,7 @@ export function buildBrief(i: BriefInput) {
       phone: str(p.phone),
       nationality: str(p.nationality),
       age: ageFrom(p.dateOfBirth),
-      country: str(p.country) ?? "CR",
+      country: toCountryCode(p.legalCountry) ?? toCountryCode(p.country) ?? toCountryCode(p.jurisdiction) ?? "CR",
     },
     household: { maritalStatus: str(p.maritalStatus), dependents: p.dependents ?? null },
     residency: { status: str(p.residencyStatus), expiresAt: str(p.residencyExpiresAt) },
@@ -193,7 +194,7 @@ async function cardFor(m: Matter, providerId: string) {
 
 // ─── AI suggestion ─────────────────────────────────────────────────────────
 
-const SUGGEST_PROMPT = `You draft a post-consultation note for a Costa Rica lawyer to review.
+const SUGGEST_PROMPT = `You draft a post-consultation note for the member's lawyer (licensed in Colombia, Costa Rica, Mexico, Panama, Portugal or Spain) to review.
 From the transcript, return ONLY JSON: {"summary": string (3-5 plain sentences, what was discussed and concluded),
 "nextSteps": [{"what": string, "who": "client" | "lawyer" | "ilp", "dueInDays": integer}] (1 to 5 items)}.
 Do not give conclusions the transcript does not support. No prices, fees or sales suggestions.`;

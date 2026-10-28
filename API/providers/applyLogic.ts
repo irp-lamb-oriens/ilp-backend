@@ -13,9 +13,17 @@
  * An application never activates a lawyer. Only a staff "approve" does.
  */
 
-import { normalizeAvailability } from "../calls/callLogic.ts";
+import { isTimeZone, normalizeAvailability } from "../calls/callLogic.ts";
 import { LEGAL_VERSIONS } from "../privacy/policy.ts";
-import type { ConsentRecord, CsmTask, LawyerAvailability, WeeklyWindow } from "../../schemas/contracts.ts";
+import {
+  type ConsentRecord,
+  COUNTRIES,
+  type CountryCode,
+  type CsmTask,
+  type LawyerAvailability,
+  toCountryCode,
+  type WeeklyWindow,
+} from "../../schemas/contracts.ts";
 
 type Doc = Record<string, unknown>;
 
@@ -43,15 +51,26 @@ const MAX_CENTS = 10_000_000; // US$100,000
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_RE = /^\+?[0-9 ()-]{7,24}$/;
 const CARNE_RE = /^\d{1,7}$/;
+/** Licence numbers outside Costa Rica: letters, digits and separators (e.g. Madrid "ICAM 123456", Portugal "12345L"). */
+const LICENCE_RE = /^[A-Za-z0-9/-]{1,20}$/;
+
+/** The licensing body and the number to ask for, per country (contracts COUNTRIES). */
+export function licensingFor(country: CountryCode) {
+  const c = COUNTRIES[country];
+  return { body: c.lawyerBody.name, numberLabel: c.lawyerBody.numberLabel, url: c.lawyerBody.url, countryName: c.name };
+}
 
 export interface Application {
+  /** Country of practice; the licence below is from this country's body. Costa Rica for older forms. */
+  country: CountryCode;
   name: string;
   email: string;
   phone: string;
   languages: string[];
   city: string;
-  province: string;
-  carne: string;
+  province: string; // Costa Rica: one of CR_PROVINCES; elsewhere the state, region or department
+  carne: string; // licence number (Costa Rica carné, Colombia tarjeta profesional, Mexico cédula profesional, ...)
+  timezone: string;
   yearAdmitted: number;
   notary: boolean;
   notaryCarne?: string;
@@ -105,22 +124,32 @@ export function validateApplication(body: unknown, now = new Date()): { value: A
   const e: FieldErrors = {};
   const year = now.getUTCFullYear();
 
+  const country = o.country === undefined || o.country === "" ? "CR" : toCountryCode(o.country);
+  if (!country) e.country = "Choose the country where you are licensed to practise.";
+  const lic = licensingFor(country ?? "CR");
   const name = str(o.name, 120);
-  if (name.length < 2) e.name = "Enter your full name as it appears on your Colegio carné.";
+  if (name.length < 2) e.name = "Enter your full name as it appears on your licence.";
   const email = lower(o.email);
-  if (!EMAIL_RE.test(email)) e.email = "Enter an email address you check, like name@yourfirm.cr.";
+  if (!EMAIL_RE.test(email)) e.email = "Enter an email address you check, like name@yourfirm.com.";
   const phone = str(o.phone, 30);
-  if (!PHONE_RE.test(phone)) e.phone = "Enter a mobile number with the country code, like +506 8888 1234.";
+  if (!PHONE_RE.test(phone)) e.phone = "Enter a mobile number with the country code, like +34 612 345 678.";
   const languages = [...new Set((Array.isArray(o.languages) ? o.languages : []).map((l) => lower(l)))]
     .filter((l): l is string => (APPLY_LANGUAGES as readonly string[]).includes(l));
   if (!languages.length) e.languages = "Choose at least one language you can hold a call in.";
   const city = str(o.city, 80);
   if (city.length < 2) e.city = "Enter the city or town where you work.";
-  const province = str(o.province, 40);
-  if (!(CR_PROVINCES as readonly string[]).includes(province)) e.province = "Choose your province.";
+  const province = str(o.province, 60);
+  if (country === "CR" || !country) {
+    if (!(CR_PROVINCES as readonly string[]).includes(province)) e.province = "Choose your province.";
+  } else if (province.length < 2) e.province = "Enter the state, region or department where you work.";
 
-  const carne = str(o.carne, 20).replace(/[\s.-]/g, "");
-  if (!CARNE_RE.test(carne)) e.carne = "Enter your carné number from the Colegio de Abogados y Abogadas, digits only.";
+  const carne = country === "CR" || !country ? str(o.carne, 20).replace(/[\s.-]/g, "") : str(o.carne, 24).replace(/\s+/g, "");
+  if (country === "CR" || !country) {
+    if (!CARNE_RE.test(carne)) e.carne = "Enter your carné number from the Colegio de Abogados y Abogadas, digits only.";
+  } else if (!LICENCE_RE.test(carne)) e.carne = `Enter your ${lic.numberLabel.toLowerCase()} as it appears on your licence.`;
+  const tzRaw = str(o.timezone, 60);
+  if (tzRaw && !isTimeZone(tzRaw)) e.timezone = "Choose your time zone from the list.";
+  const timezone = isTimeZone(tzRaw) ? tzRaw : COUNTRIES[country ?? "CR"].defaultTimeZone;
   const yearAdmitted = intOf(o.yearAdmitted);
   if (!Number.isInteger(yearAdmitted) || yearAdmitted < 1950 || yearAdmitted > year) {
     e.yearAdmitted = `Enter the year you were admitted, between 1950 and ${year}.`;
@@ -157,7 +186,7 @@ export function validateApplication(body: unknown, now = new Date()): { value: A
   const callsPerWeek = intOf(o.callsPerWeek);
   if (!Number.isInteger(callsPerWeek) || callsPerWeek < 1 || callsPerWeek > 40) e.callsPerWeek = "Enter between 1 and 40 calls a week.";
   let weekly: WeeklyWindow[] = [];
-  const hours = normalizeAvailability({ weekly: o.weekly }, "check", now);
+  const hours = normalizeAvailability({ weekly: o.weekly, timezone }, "check", now);
   if ("error" in hours) e.weekly = hours.error;
   else if (!hours.value.weekly.length) e.weekly = "Add the hours of at least one day when members could book a call.";
   else weekly = hours.value.weekly;
@@ -190,11 +219,16 @@ export function validateApplication(body: unknown, now = new Date()): { value: A
   else if (str(a.privacyVersion) && str(a.privacyVersion) !== LEGAL_VERSIONS.privacy) {
     e.privacy = "The privacy policy changed while you were applying. Reload the page and accept the new version.";
   }
-  if (a.carneVerification !== true) e.carneVerification = "Allow us to check your carné with the Colegio, or we cannot review the application.";
+  if (a.carneVerification !== true) {
+    e.carneVerification = country === "CR" || !country
+      ? "Allow us to check your carné with the Colegio, or we cannot review the application."
+      : `Allow us to check your licence with the ${lic.body}, or we cannot review the application.`;
+  }
 
   if (Object.keys(e).length) return { errors: e };
   return {
     value: {
+      country: country as CountryCode,
       name,
       email,
       phone,
@@ -202,6 +236,7 @@ export function validateApplication(body: unknown, now = new Date()): { value: A
       city,
       province,
       carne,
+      timezone,
       yearAdmitted,
       notary,
       ...(notary ? { notaryCarne } : {}),
@@ -277,6 +312,14 @@ export function applicationTaskId(providerId: string): string {
   return `task_lawyer_application__${providerId.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 }
 
+/** "Colegio de Abogados y Abogadas de Costa Rica, carné 12345" or the country's body and number. */
+export function credentialsLine(app: Pick<Application, "country" | "carne" | "notary" | "notaryCarne">): string {
+  const notary = app.notary ? `; notary ${app.notaryCarne}` : "";
+  if (app.country === "CR") return `Colegio de Abogados y Abogadas de Costa Rica, carné ${app.carne}${notary}`;
+  const lic = licensingFor(app.country);
+  return `${lic.body}, ${lic.numberLabel.toLowerCase()} ${app.carne}${notary}`;
+}
+
 /** The fields an application writes on the provider doc. Never sets active: true. */
 export function providerFieldsFrom(app: Application, nowIso: string): Doc {
   return {
@@ -287,14 +330,17 @@ export function providerFieldsFrom(app: Application, nowIso: string): Doc {
     contacts: [{ name: app.name, email: app.email, phone: app.phone }],
     ...(app.firmWebsite ? { website: app.firmWebsite } : {}),
     legalAreas: providerAreas(app),
-    jurisdictions: ["CR"],
+    jurisdictions: [app.country],
+    country: app.country,
+    timezone: app.timezone,
     languages: app.languages,
-    credentials: `Colegio de Abogados y Abogadas de Costa Rica, carné ${app.carne}${app.notary ? `; notary ${app.notaryCarne}` : ""}`,
+    credentials: credentialsLine(app),
     bio: app.bio,
     status: "pending_review" as ApplicationStatus,
     active: false,
     application: {
       submittedAt: nowIso,
+      country: app.country,
       city: app.city,
       province: app.province,
       carne: app.carne,
@@ -327,9 +373,11 @@ export function availabilityFrom(app: Application, providerId: string, now: Date
       minLeadHours: app.minNoticeHours,
       maxCallsPerDay: Math.min(6, Math.max(1, app.callsPerWeek)),
       specialties: app.areas.filter((a) => a !== "other"),
+      timezone: app.timezone,
     },
     providerId,
     now,
+    COUNTRIES[app.country].defaultTimeZone,
   );
   if ("error" in norm) throw new Error(norm.error);
   return norm.value;
@@ -379,7 +427,7 @@ export interface ApplyDeps {
   audit: (entry: { actor: Actor; action: string; target: string; meta?: Doc }) => Promise<void>;
   sendEmail: (msg: { to: string; subject: string; html: string; text: string }, dedupeKey: string) => Promise<void>;
   emails: {
-    received: (o: { name: string; signInUrl: string }) => { subject: string; html: string; text: string };
+    received: (o: { name: string; signInUrl: string; country?: CountryCode }) => { subject: string; html: string; text: string };
     approved: (o: { name: string; signInUrl: string }) => { subject: string; html: string; text: string };
     changes: (o: { name: string; note: string; applyUrl: string; signInUrl: string }) => { subject: string; html: string; text: string };
     declined: (o: { name: string; reason: string }) => { subject: string; html: string; text: string };
@@ -448,7 +496,7 @@ export async function submitApplication(body: unknown, deps: ApplyDeps, ip?: str
     target: `providers/${providerId}`,
     meta: { areas: app.areas, notary: app.notary, taskId, ...(ip ? { ip } : {}) },
   });
-  const mail = deps.emails.received({ name: firstName(app.name), signInUrl: deps.urls.signIn });
+  const mail = deps.emails.received({ name: firstName(app.name), signInUrl: deps.urls.signIn, country: app.country });
   await deps.sendEmail({ to: app.email, ...mail }, `lawyer_apply_${providerId}_${nowIso.slice(0, 13)}`);
   return { status: 201, body: { ok: true, providerId, status: "pending_review", ...(existing ? { resubmitted: true } : {}) } };
 }

@@ -45,11 +45,10 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     try {
       if (send) {
         const who = await peopleFor(c);
-        const when = whenLabel(c.scheduledAt);
         if (who.member.email) {
           const m = callReminderEmail({
             to: "member", kind: send, greetingName: who.member.firstName, otherName: who.lawyer.name,
-            whenLabel: when, meetUrl: c.meetUrl, question: c.question?.split("\n")[0], portalUrl: memberHomeUrl(),
+            whenLabel: whenLabel(c.scheduledAt, who.member.timezone), meetUrl: c.meetUrl, question: c.question?.split("\n")[0], portalUrl: memberHomeUrl(),
           });
           await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_member`);
           sent++;
@@ -57,7 +56,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
         if (who.lawyer.email) {
           const l = callReminderEmail({
             to: "lawyer", kind: send, greetingName: who.lawyer.name, otherName: who.member.name,
-            whenLabel: when, meetUrl: c.meetUrl, question: c.question, briefUrl: lawyerBriefUrl(c.id),
+            whenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), meetUrl: c.meetUrl, question: c.question, briefUrl: lawyerBriefUrl(c.id),
           });
           await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_lawyer`);
           sent++;
