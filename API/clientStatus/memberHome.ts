@@ -23,6 +23,7 @@
 
 import { isQuoteAccepted, isQuoteAwaitingClient, quoteKey } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -87,6 +88,7 @@ import {
   mergeThread,
   moneyView,
   nextStepFor,
+  type ThreadItem,
 } from "./memberLogic.ts";
 
 const CLIENTS = "clients";
@@ -418,6 +420,21 @@ export function registerMemberHomeRoutes(app: Express) {
       const items = (docs as Doc[])
         .map(documentMeta)
         .sort((a, b) => String(b.uploadedAt ?? "").localeCompare(String(a.uploadedAt ?? "")));
+      if (isListRequest(req)) {
+        // LISTS: the member's own documents (clientId query above), paged and searched.
+        type Meta = (typeof items)[number];
+        const spec: ListSpec<Meta> = {
+          sorts: { uploadedAt: (d) => String(d.uploadedAt ?? ""), fileName: (d) => String(d.fileName ?? "").toLowerCase() },
+          defaultSort: "uploadedAt",
+          defaultDir: "desc",
+          filters: { category: (d, v) => d.category === v, matterId: (d, v) => d.matterId === v },
+          search: (d) => [d.fileName, d.category],
+        };
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(items, p, spec), (chunk) => forClient(chunk)),
+          meta: { categories: DOCUMENT_CATEGORIES },
+        }));
+      }
       res.json({ items: forClient(items), categories: DOCUMENT_CATEGORIES });
     }),
   );
@@ -560,6 +577,17 @@ export function registerMemberHomeRoutes(app: Express) {
       if (!id) return;
       const doc = (await get(CLIENTS, id)) as Doc | null;
       if (!doc) return res.status(404).json({ error: "Not found." });
+      if (isListRequest(req)) {
+        // LISTS: newest first, so the thread opens on the latest page and loads older ones on scroll up.
+        const spec: ListSpec<ThreadItem> = {
+          sorts: { at: (m) => m.at },
+          defaultSort: "at",
+          defaultDir: "desc",
+          filters: { kind: (m, v) => m.kind === v },
+          search: (m) => [m.body, m.author],
+        };
+        return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(mergeThread(doc, memberName(doc)), p, spec)) }));
+      }
       res.json({ items: mergeThread(doc, memberName(doc)) });
     }),
   );
