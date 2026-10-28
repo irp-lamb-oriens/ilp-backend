@@ -75,7 +75,7 @@ import {
   storeMemberDocument,
   uploadBytes,
 } from "../../helper/storage.ts";
-import { attachMeeting, type CallRecord, peopleFor, routeLawyer, sendBookingEmails, slotsFor } from "../calls/callService.ts";
+import { attachMeeting, type CallRecord, flagUnassignedCountry, matchingNotice, peopleFor, routeLawyer, sendBookingEmails, slotsFor } from "../calls/callService.ts";
 import { canChange } from "../calls/callLogic.ts";
 import {
   bookingCapacity,
@@ -243,7 +243,11 @@ export function registerMemberHomeRoutes(app: Express) {
       const id = clientIdOf(req, res);
       if (!id) return;
       const providerId = await routeLawyer(id, req.query.matterId as string | undefined);
-      if (!providerId) return res.json({ slots: [], lawyerName: null, reason: "No lawyer is assigned yet. Your ILP team will set one up and contact you." });
+      if (!providerId) {
+        // COUNTRIES: nobody licensed in the member's country yet. Calm notice; staff get a task.
+        const country = await flagUnassignedCountry(id);
+        return res.json({ slots: [], lawyerName: null, matching: true, country, reason: matchingNotice(country) });
+      }
       const slots = await slotsFor(providerId);
       res.json({ slots, lawyerName: await providerName(providerId), lengthMin: PLAN_STANDARD.callLengthMin });
     }),
@@ -271,7 +275,10 @@ export function registerMemberHomeRoutes(app: Express) {
 
       const mId = typeof matterId === "string" && bundle.matters.some((m) => m.id === matterId) ? matterId : undefined;
       const providerId = await routeLawyer(id, mId);
-      if (!providerId) return res.status(409).json({ error: "No lawyer is assigned yet. Your ILP team will contact you to set one up." });
+      if (!providerId) {
+        const country = await flagUnassignedCountry(id);
+        return res.status(409).json({ error: matchingNotice(country), matching: true, country });
+      }
 
       // The slot must be one we offer and still free.
       const iso = when.toISOString();

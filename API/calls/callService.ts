@@ -32,10 +32,13 @@ import {
   COLLECTIONS,
   type ConsentRecord,
   type Consultation,
+  COUNTRIES,
+  type CountryCode,
   type CsmTask,
   type Matter,
   type Membership,
   PLAN_STANDARD,
+  toCountryCode,
 } from "../../schemas/contracts.ts";
 import { emitEvent, taskIdFor } from "../members/events.ts";
 import { applicationBlocksCalls } from "../providers/applyLogic.ts";
@@ -51,11 +54,14 @@ import {
 import {
   type AvailabilityDoc,
   buildSlots,
+  candidateCountries,
   CR_TZ,
   defaultAvailability,
+  isTimeZone,
   type LawyerCandidate,
   normalizeAvailability,
   pickLawyer,
+  zoneLabel,
 } from "./callLogic.ts";
 
 type Doc = Record<string, unknown>;
@@ -73,24 +79,38 @@ export const memberHomeUrl = () => `${frontendUrl()}/status`;
 
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-/** "Thursday, November 5, 9:00 AM" in Costa Rica time. */
-export function whenLabel(iso: string): string {
+/**
+ * "Thursday, November 5, 9:00 AM (Costa Rica time)" in the reader's time
+ * zone (the member's or the lawyer's). Costa Rica when unknown.
+ */
+export function whenLabel(iso: string, tz: string = CR_TZ): string {
+  const zone = isTimeZone(tz) ? tz : CR_TZ;
   const d = new Date(iso);
-  return d.toLocaleString("en-US", {
+  const text = d.toLocaleString("en-US", {
     weekday: "long",
     month: "long",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
-    timeZone: CR_TZ,
+    timeZone: zone,
   });
+  return `${text} (${zoneLabel(zone)})`;
+}
+
+/** A person's time zone: their saved one, else their country's default, else Costa Rica. */
+export function personTimeZone(doc: Doc | null | undefined): string {
+  const saved = str(doc?.timezone);
+  if (saved && isTimeZone(saved)) return saved;
+  const juris = Array.isArray(doc?.jurisdictions) ? (doc!.jurisdictions as unknown[])[0] : undefined;
+  const code = toCountryCode(doc?.legalCountry) ?? toCountryCode(doc?.country) ?? toCountryCode(juris) ?? toCountryCode(doc?.jurisdiction);
+  return code ? COUNTRIES[code].defaultTimeZone : CR_TZ;
 }
 
 // ─── People ────────────────────────────────────────────────────────────────
 
 export interface CallPeople {
-  member: { name: string; firstName: string; email: string | null };
-  lawyer: { name: string; email: string | null };
+  member: { name: string; firstName: string; email: string | null; timezone: string };
+  lawyer: { name: string; email: string | null; timezone: string };
   /** Member or lawyer is placeholder (seed) data: no Calendar event, no email. */
   placeholder?: boolean;
 }
@@ -104,8 +124,8 @@ export async function peopleFor(c: Pick<Consultation, "clientId" | "providerId">
   const first = str(p.name) ?? str(p.fullName)?.split(" ")[0] ?? "there";
   const full = str(p.fullName) ?? ([str(p.name), str(p.surname)].filter(Boolean).join(" ") || "ILP member");
   return {
-    member: { name: full, firstName: first, email: str(p.email)?.toLowerCase() ?? null },
-    lawyer: { name: str(provider?.name) ?? "your ILP lawyer", email: str(provider?.email)?.toLowerCase() ?? null },
+    member: { name: full, firstName: first, email: str(p.email)?.toLowerCase() ?? null, timezone: personTimeZone(p) },
+    lawyer: { name: str(provider?.name) ?? "your ILP lawyer", email: str(provider?.email)?.toLowerCase() ?? null, timezone: await lawyerTimeZone(c.providerId, provider) },
     placeholder: isPlaceholderDoc(c) || isPlaceholderId(c.clientId) || isPlaceholderDoc(client) ||
       isPlaceholderId(c.providerId) || isPlaceholderDoc(provider),
   };
@@ -113,14 +133,26 @@ export async function peopleFor(c: Pick<Consultation, "clientId" | "providerId">
 
 // ─── Availability ──────────────────────────────────────────────────────────
 
+/** The lawyer's time zone: their availability's, else their profile's, else their country's default. */
+export async function lawyerTimeZone(providerId: string | undefined, provider?: Doc | null): Promise<string> {
+  if (!providerId) return CR_TZ;
+  const avail = (await get(COLLECTIONS.availability, providerId).catch(() => null)) as Doc | null;
+  if (isTimeZone(avail?.timezone)) return avail!.timezone as string;
+  const p = provider ?? ((await get("providers", providerId).catch(() => null)) as Doc | null);
+  return personTimeZone(p);
+}
+
 /** A lawyer's saved availability, or the default hours when none is saved. */
 export async function loadAvailability(providerId: string): Promise<AvailabilityDoc & { isDefault: boolean }> {
   const doc = (await get(COLLECTIONS.availability, providerId).catch(() => null)) as Doc | null;
-  if (!doc) return { ...defaultAvailability(providerId), calendarId: null, isDefault: true };
-  const norm = normalizeAvailability(doc, providerId);
+  // Older documents have no time zone of their own: the lawyer's country decides (Costa Rica by default).
+  const provider = doc?.timezone ? null : ((await get("providers", providerId).catch(() => null)) as Doc | null);
+  const tz = provider ? personTimeZone(provider) : CR_TZ;
+  if (!doc) return { ...defaultAvailability(providerId, new Date(), tz), calendarId: null, isDefault: true };
+  const norm = normalizeAvailability(doc, providerId, new Date(), tz);
   if ("error" in norm) {
     log(`[calls] stored availability for ${providerId} is invalid (${norm.error}); using defaults`, "error");
-    return { ...defaultAvailability(providerId), calendarId: null, isDefault: true };
+    return { ...defaultAvailability(providerId, new Date(), tz), calendarId: null, isDefault: true };
   }
   return { ...norm.value, updatedAt: str(doc.updatedAt) ?? norm.value.updatedAt, isDefault: false };
 }
@@ -130,14 +162,15 @@ export async function saveAvailability(
   body: unknown,
   actor: { email: string; role: "lawyer" | "staff" },
 ): Promise<{ value: AvailabilityDoc } | { error: string }> {
-  const norm = normalizeAvailability(body, providerId);
+  const provider = (await get("providers", providerId).catch(() => null)) as Doc | null;
+  const norm = normalizeAvailability(body, providerId, new Date(), personTimeZone(provider));
   if ("error" in norm) return norm;
   await put(COLLECTIONS.availability, providerId, norm.value as unknown as Doc);
   await auditLog({
     actor: { uid: actor.email, email: actor.email, role: actor.role },
     action: "availability.updated",
     target: `${COLLECTIONS.availability}/${providerId}`,
-    meta: { windows: norm.value.weekly.length, blackoutDates: norm.value.blackoutDates.length, maxCallsPerDay: norm.value.maxCallsPerDay },
+    meta: { windows: norm.value.weekly.length, blackoutDates: norm.value.blackoutDates.length, maxCallsPerDay: norm.value.maxCallsPerDay, timezone: norm.value.timezone },
   }).catch(() => undefined);
   return norm;
 }
@@ -175,11 +208,27 @@ export async function slotsFor(providerId: string, now = new Date(), excludeId?:
 
 // ─── Routing ───────────────────────────────────────────────────────────────
 
+/** The country a member's membership covers: the membership's, else the client record's, else Costa Rica. */
+export async function memberCountry(clientId: string, client?: Doc | null): Promise<CountryCode> {
+  const m = await currentMembership(clientId).catch(() => null);
+  const fromMembership = toCountryCode(m?.country);
+  if (fromMembership) return fromMembership;
+  const c = client ?? ((await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null);
+  return toCountryCode(c?.legalCountry) ?? toCountryCode(c?.country) ?? toCountryCode(c?.jurisdiction) ?? "CR";
+}
+
+/** Countries a provider profile is licensed in (jurisdictions; older profiles are Costa Rica). */
+export const providerCountries = (p: Doc | null | undefined): string[] =>
+  candidateCountries({ countries: Array.isArray(p?.jurisdictions) ? (p!.jurisdictions as unknown[]).map(String) : [] });
+
 /**
  * The lawyer a member books with: the matter's assigned lawyer, else the
- * client's, else the least-loaded lawyer whose specialties match the matter
- * area (lawyer_availability.specialties, falling back to providers.legalAreas),
- * else DEFAULT_PROVIDER_ID.
+ * client's, else the least-loaded lawyer licensed in the member's country
+ * whose specialties match the matter area (lawyer_availability.specialties,
+ * falling back to providers.legalAreas), else the least-loaded lawyer
+ * licensed there, else DEFAULT_PROVIDER_ID when it is licensed there.
+ * Null means nobody licensed in that country can take the call yet
+ * (see flagUnassignedCountry).
  */
 export async function routeLawyer(clientId: string, matterId?: string): Promise<string | null> {
   const matters = await findRecords<Matter>(COLLECTIONS.matters, { clientId }, { sortBy: "openedAt", desc: true });
@@ -188,46 +237,79 @@ export async function routeLawyer(clientId: string, matterId?: string): Promise<
   const client = (await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null;
   const assigned = str(client?.assignedProviderId);
   if (assigned) return assigned;
-  const fallback = Deno.env.get("DEFAULT_PROVIDER_ID") || null;
   const matter = matterId ? matters.find((x) => x.id === matterId) : matters.find((x) => !x.closedAt);
-  const area = matter?.area ?? str(client?.legalArea);
-  if (!area) return fallback;
+  const country = toCountryCode(matter?.country) ?? await memberCountry(clientId, client);
+  const fallbackId = Deno.env.get("DEFAULT_PROVIDER_ID") || null;
+  const fallbackDoc = fallbackId ? ((await get("providers", fallbackId).catch(() => null)) as Doc | null) : null;
+  const fallback = fallbackId && providerCountries(fallbackDoc).includes(country) ? fallbackId : null;
+  const area = matter?.area ?? str(client?.legalArea) ?? null;
   try {
     // Placeholder (seed) lawyers only ever take placeholder members, and the reverse.
     const candidates = await lawyerCandidates(area, await isPlaceholderClient(clientId));
-    return pickLawyer(area, candidates, fallback);
+    return pickLawyer(area, candidates, fallback, country);
   } catch (err) {
     log(`[calls] routing failed for ${clientId}: ${err instanceof Error ? err.message : err}`, "error");
     return fallback;
   }
 }
 
-async function lawyerCandidates(area: string, placeholderMember = false): Promise<LawyerCandidate[]> {
+/** Every bookable lawyer with specialties and countries (applicants in review are skipped). */
+async function lawyerCandidates(area: string | null, placeholderMember = false): Promise<LawyerCandidate[]> {
   const avail = (await getAll(COLLECTIONS.availability).catch(() => [])) as Doc[];
-  const byId = new Map<string, string[]>();
+  const saved = new Map<string, string[]>();
   for (const a of avail) {
     const id = str(a.providerId) ?? str(a.id);
-    if (id) byId.set(id, Array.isArray(a.specialties) ? (a.specialties as string[]) : []);
+    if (id) saved.set(id, Array.isArray(a.specialties) ? (a.specialties as string[]) : []);
   }
-  // Lawyers without saved specialties: use their provider profile's legal areas.
-  const providers = (await query("providers", [{ field: "legalAreas", op: "ARRAY_CONTAINS", value: area }]).catch(() => [])) as Doc[];
-  for (const p of providers) {
-    const id = str(p.id);
-    if (!id || p.active === false || p.status === "inactive") continue;
-    const saved = byId.get(id);
-    if (!saved || saved.length === 0) byId.set(id, Array.isArray(p.legalAreas) ? (p.legalAreas as string[]) : [area]);
-  }
+  const providers = (await getAll("providers").catch(() => [])) as Doc[];
   const out: LawyerCandidate[] = [];
-  for (const [providerId, specialties] of byId) {
-    if (!specialties.length) continue;
+  for (const p of providers) {
+    const providerId = str(p.id);
+    if (!providerId || p.active === false || p.status === "inactive") continue;
     if (isPlaceholderId(providerId) !== placeholderMember) continue;
     // T2: availability alone does not make a lawyer bookable; applicants in review are skipped.
-    const profile = (await get("providers", providerId).catch(() => null)) as Doc | null;
-    if (applicationBlocksCalls(profile)) continue;
+    if (applicationBlocksCalls(p)) continue;
+    // Lawyers without saved specialties: use their provider profile's legal areas.
+    const own = saved.get(providerId);
+    const specialties = own?.length ? own : Array.isArray(p.legalAreas) ? (p.legalAreas as string[]) : area ? [] : [];
     const load = (await findRecords<Consultation>(COLLECTIONS.consultations, { providerId, status: "booked" }).catch(() => [])).length;
-    out.push({ providerId, specialties, load });
+    out.push({ providerId, specialties, countries: providerCountries(p), load });
   }
   return out;
+}
+
+/** The calm line a member sees while nobody licensed in their country can take calls. */
+export const matchingNotice = (country: CountryCode) =>
+  `We're matching you with a lawyer licensed in ${COUNTRIES[country].name}. Your CSM will contact you.`;
+
+/**
+ * No lawyer licensed in the member's country yet: one open staff task
+ * ("member.unassigned_country"), deduplicated per member and country.
+ * Joining and the rest of the portal are never blocked. Never throws.
+ */
+export async function flagUnassignedCountry(clientId: string, country?: CountryCode): Promise<CountryCode> {
+  const c = country ?? await memberCountry(clientId);
+  try {
+    const client = (await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null;
+    const name = str(client?.fullName) ?? str(client?.name) ?? clientId;
+    await emitEvent("member.unassigned_country", {
+      clientId,
+      sourceId: clientId,
+      sourceKind: "membership",
+      dedupeKey: `${clientId}_country_${c}`,
+      ownerEmail: await csmOwner(clientId),
+      detail: `unassigned member in ${COUNTRIES[c].name} (${name})`,
+    });
+  } catch (err) {
+    log(`[calls] unassigned-country task for ${clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
+  }
+  return c;
+}
+
+/** True when at least one bookable lawyer is licensed in `country`. */
+export async function hasLawyerIn(country: CountryCode, placeholderMember = false): Promise<boolean> {
+  const candidates = await lawyerCandidates(null, placeholderMember).catch(() => [] as LawyerCandidate[]);
+  return candidates.some((c) => candidateCountries(c).includes(country));
 }
 
 // ─── CSM task when the calendar fails ──────────────────────────────────────
@@ -326,14 +408,13 @@ export async function attachMeeting(c: CallRecord, people?: CallPeople): Promise
 /** Booking emails to the member and the lawyer (deduped per consultation). */
 export async function sendBookingEmails(c: CallRecord, people?: CallPeople): Promise<void> {
   const who = people ?? (await peopleFor(c));
-  const when = whenLabel(c.scheduledAt);
   try {
     if (who.member.email) {
-      const m = callBookedMemberEmail({ firstName: who.member.firstName, lawyerName: who.lawyer.name, whenLabel: when, meetUrl: c.meetUrl, portalUrl: memberHomeUrl() });
+      const m = callBookedMemberEmail({ firstName: who.member.firstName, lawyerName: who.lawyer.name, whenLabel: whenLabel(c.scheduledAt, who.member.timezone), meetUrl: c.meetUrl, portalUrl: memberHomeUrl() });
       await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
     }
     if (who.lawyer.email) {
-      const l = callBookedLawyerEmail({ lawyerName: who.lawyer.name, memberName: who.member.name, whenLabel: when, question: c.question, briefUrl: lawyerBriefUrl(c.id) });
+      const l = callBookedLawyerEmail({ lawyerName: who.lawyer.name, memberName: who.member.name, whenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), question: c.question, briefUrl: lawyerBriefUrl(c.id) });
       await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_lawyer`);
     }
   } catch (err) {
@@ -374,13 +455,12 @@ export async function cancelCall(c: CallRecord, actor: Actor, reason?: string): 
   if (c.chargedAt && !c.restoredAt) await restoreCall(c, actor);
   await audit(actor, "consultation.cancelled", c, { reason });
   const who = await peopleFor(c);
-  const old = whenLabel(c.scheduledAt);
   try {
     if (who.member.email) {
-      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ change: "cancelled", greetingName: who.member.firstName, otherName: who.lawyer.name, oldWhenLabel: old, link: `${frontendUrl()}/status/book`, linkLabel: "Book another time" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_member`);
+      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ change: "cancelled", greetingName: who.member.firstName, otherName: who.lawyer.name, oldWhenLabel: whenLabel(c.scheduledAt, who.member.timezone), link: `${frontendUrl()}/status/book`, linkLabel: "Book another time" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_member`);
     }
     if (who.lawyer.email) {
-      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ change: "cancelled", greetingName: who.lawyer.name, otherName: who.member.name, oldWhenLabel: old, link: `${frontendUrl()}/lawyer`, linkLabel: "Open Today" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ change: "cancelled", greetingName: who.lawyer.name, otherName: who.member.name, oldWhenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), link: `${frontendUrl()}/lawyer`, linkLabel: "Open Today" }), placeholder: who.placeholder }, `call_cancelled_${c.id}_lawyer`);
     }
   } catch (err) {
     log(`[calls] cancel emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -415,12 +495,12 @@ export async function rescheduleCall(c: CallRecord, newIso: string, actor: Actor
   }
   await audit(actor, "consultation.rescheduled", c, { from: old, to: newIso });
   try {
-    const args = { change: "rescheduled" as const, oldWhenLabel: whenLabel(old), newWhenLabel: whenLabel(newIso), meetUrl: updated.meetUrl };
+    const args = (tz: string) => ({ change: "rescheduled" as const, oldWhenLabel: whenLabel(old, tz), newWhenLabel: whenLabel(newIso, tz), meetUrl: updated.meetUrl });
     if (who.member.email) {
-      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ ...args, greetingName: who.member.firstName, otherName: who.lawyer.name, link: memberHomeUrl(), linkLabel: "Open your ILP home" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_member`);
+      await enqueueEmail({ to: who.member.email, ...callChangedEmail({ ...args(who.member.timezone), greetingName: who.member.firstName, otherName: who.lawyer.name, link: memberHomeUrl(), linkLabel: "Open your ILP home" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_member`);
     }
     if (who.lawyer.email) {
-      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ ...args, greetingName: who.lawyer.name, otherName: who.member.name, link: lawyerBriefUrl(c.id), linkLabel: "Open the brief" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...callChangedEmail({ ...args(who.lawyer.timezone), greetingName: who.lawyer.name, otherName: who.member.name, link: lawyerBriefUrl(c.id), linkLabel: "Open the brief" }), placeholder: who.placeholder }, `call_moved_${c.id}_${newIso}_lawyer`);
     }
   } catch (err) {
     log(`[calls] reschedule emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
