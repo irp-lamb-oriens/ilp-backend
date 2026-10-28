@@ -369,3 +369,15 @@ Deno.test("respondList answers 400 for a bad cursor", async () => {
 
 // Keep the type import used.
 export type _P = ListParams;
+
+Deno.test("backfill plan: only records whose tokens differ, re-run is a no-op", async () => {
+  const { planSearchTokens } = await import("../scripts/backfillSearchTokens.ts");
+  const fresh = { id: "t1", title: "Call Ana about the DIMEX renewal", type: "follow_up", clientId: "c1" };
+  const current = { ...fresh, id: "t2", searchTokens: recordSearchTokens("csm_tasks", fresh) };
+  const plan = planSearchTokens("csm_tasks", [fresh, current]);
+  assertEquals(plan.update.map((u) => u.id), ["t1"]);
+  assertEquals(plan.unchanged, 1);
+  assert(plan.update[0].searchTokens.includes("dimex"));
+  const again = planSearchTokens("csm_tasks", [{ ...fresh, searchTokens: plan.update[0].searchTokens }]);
+  assertEquals(again.update.length, 0);
+});
