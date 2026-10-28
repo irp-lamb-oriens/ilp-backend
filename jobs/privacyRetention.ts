@@ -11,7 +11,8 @@
  *   funnel_events        anonymous funnel beacons                RETENTION_FUNNEL_MONTHS (13)
  *   *_otps, *_sessions,  expired login codes, sessions and       RETENTION_SESSION_GRACE_DAYS (1)
  *   join_sessions,       join hand-off tokens, unused download
- *   download_tickets     tickets (60 s, single use; AUTH)
+ *   download_tickets,    tickets (60 s, single use; AUTH), and
+ *   deadline_claims      free-check claim tokens (2 hours; DEADLINES)
  *   email_queue          sent / failed email copies              RETENTION_EMAIL_QUEUE_DAYS (90)
  *   ilp_chatbot_threads  public website chatbot threads          RETENTION_CHATBOT_MONTHS (6)
  *   consultations        transcript, summary text removed N      RETENTION_TRANSCRIPT_MONTHS (24)
@@ -57,6 +58,7 @@ export function retentionTargets(cfg: RetentionConfig, now: Date): RetentionTarg
     "client_status_sessions",
     "join_sessions",
     "download_tickets",
+    "deadline_claims", // DEADLINES: claim tokens from the free check (2 hours)
   ].map((c) => ({ name: `expired ${c}`, collection: c, field: "expiresAt", cutoff: expired }));
   return [
     {

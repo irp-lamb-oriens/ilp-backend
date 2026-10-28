@@ -55,7 +55,7 @@ export const CONSENT_KINDS: ConsentKind[] = ["terms", "privacy", "recording", "m
 /** Kinds a member can withdraw on /status/privacy. Terms and privacy end with the account. */
 export const WITHDRAWABLE: ConsentKind[] = ["recording", "marketing_email", "ai_assistant"];
 
-export const CONSENT_SOURCES = ["join", "booking", "join_call", "settings", "lily", "privacy_page"] as const;
+export const CONSENT_SOURCES = ["join", "booking", "join_call", "settings", "lily", "privacy_page", "check"] as const; // "check": DEADLINES, saving deadlines from the free check
 export type ConsentSource = typeof CONSENT_SOURCES[number];
 
 export interface ConsentInput {
@@ -100,7 +100,7 @@ export const JOIN_CONSENT_ERROR = "Please accept the Terms of Membership and the
  * `acceptTerms` / `acceptPrivacy` / `marketing` booleans. Terms and Privacy
  * must both be granted; stale versions and unknown kinds are refused.
  */
-export function parseJoinConsents(body: Record<string, unknown>): JoinConsents | { error: string } {
+export function parseJoinConsents(body: Record<string, unknown>, source: "join" | "check" = "join"): JoinConsents | { error: string } {
   let list: Record<string, unknown>[];
   if (Array.isArray(body.consents)) {
     list = (body.consents as unknown[]).filter((c): c is Record<string, unknown> => !!c && typeof c === "object");
@@ -113,7 +113,7 @@ export function parseJoinConsents(body: Record<string, unknown>): JoinConsents |
   }
   const out: Partial<Record<ConsentKind, ConsentInput>> = {};
   for (const raw of list) {
-    const c = parseConsentInput({ ...raw, source: "join" });
+    const c = parseConsentInput({ ...raw, source });
     if ("error" in c) return c;
     if (!JOIN_KINDS.includes(c.kind)) return { error: "Unknown consent." };
     out[c.kind] = c;
@@ -131,7 +131,8 @@ export function joinConsentsToWrite(want: JoinConsents, existing: ConsentRecord[
   const latest = latestConsents(existing);
   return [want.terms, want.privacy, ...(want.marketing ? [want.marketing] : [])].filter((c) => {
     const have = latest[c.kind];
-    return !(have && have.source === "join" && have.granted === c.granted && have.version === c.version);
+    // A retry from the same place (join, or the free check's "Set the deadlines for each") writes nothing twice.
+    return !(have && have.source === c.source && have.granted === c.granted && have.version === c.version);
   });
 }
 
@@ -397,6 +398,7 @@ export const ERASURE_PLAN: readonly ErasureRule[] = [
   { collection: "client_status_sessions", select: [{ by: "email", field: "email" }], action: "delete", why: "Sign-in sessions." },
   { collection: "client_status_otps", select: [{ by: "emailDocId" }], action: "delete", why: "Pending sign-in codes." },
   { collection: "join_sessions", select: [{ by: "field", field: "clientId" }], action: "delete", why: "Join hand-off tokens." },
+  { collection: "deadline_claims", select: [{ by: "field", field: "clientId" }], action: "delete", why: "Free-check claim tokens with the deadlines chosen (DEADLINES)." },
   { collection: "email_queue", select: [{ by: "email", field: "to" }], action: "delete", why: "Stored copies of emails sent to the member (purged before the completion email is queued)." },
   { collection: "invoices", select: [{ by: "field", field: "clientId" }], action: "keep", why: "Invoices and payments are kept for the legally required period [N years per counsel/accountant]." },
   { collection: "consents", select: [{ by: "field", field: "clientId" }, { by: "email", field: "email" }], action: "pseudonymize_email", why: "Proof of consent is kept; the email becomes a SHA-256 hash that can be checked against a disputed address." },

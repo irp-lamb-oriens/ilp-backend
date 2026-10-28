@@ -5,12 +5,19 @@ import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import log from "../../helper/log.ts";
 import { sanitizeStr } from "../../helper/sanitize.ts";
-import { emailToDocId } from "../../helper/auth/otp.ts";
+import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import patch from "../../db/patch.ts";
 import rateLimit from "express-rate-limit";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
-import { COLLECTIONS, countryName as nameOf, type CountryCode, type Lead, toCountryCode } from "../../schemas/contracts.ts";
+import { COLLECTIONS, countryName as nameOf, type CountryCode, type Lead, type Membership, type Obligation, toCountryCode } from "../../schemas/contracts.ts";
 import { type CheckFinding, evaluateCheck, normalizeAnswers } from "./deadlineCheck.ts";
+import query from "../../db/query.ts";
+import auditLog from "../../helper/auditLog.ts";
+import { createRecord, getRecord, updateRecord } from "../../db/records.ts";
+import { recordJoinConsents } from "../privacy/privacyRouter.ts";
+import { sha256Hex } from "../privacy/policy.ts";
+import { sendClientSignInCode } from "../clientStatus/signInCode.ts";
+import { CLAIMS_COLLECTION, claimDeadlines, type ClaimStore, parseClaim } from "./claim.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CLIENTS_COLLECTION = "clients";
@@ -29,6 +36,51 @@ const checkLimiter = rateLimit({
   message: { error: "Too many checks from this connection. Try again in a few minutes." },
   validate: { trustProxy: false },
 });
+
+/** DEADLINES: per-IP limit for saving deadlines (each claim emails a sign-in code). */
+const claimLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many tries from this connection. Wait a few minutes, then try again." },
+  validate: { trustProxy: false },
+});
+
+/** The Firestore side of the claim (API/leads/claim.ts). */
+export const firestoreClaimStore: ClaimStore = {
+  getClient: async (id) => (await get(CLIENTS_COLLECTION, id).catch(() => null)) as Record<string, unknown> | null,
+  putClient: async (id, doc) => {
+    await put(CLIENTS_COLLECTION, id, doc);
+  },
+  patchClient: async (id, fields) => {
+    await patch(CLIENTS_COLLECTION, id, fields);
+  },
+  memberships: async (clientId) =>
+    (await query(COLLECTIONS.memberships, [{ field: "clientId", op: "EQUAL", value: clientId }]).catch(() => [])) as unknown as Membership[],
+  getObligation: (id) => getRecord<Obligation>(COLLECTIONS.obligations, id),
+  createObligation: async (o) => {
+    await createRecord(COLLECTIONS.obligations, o);
+  },
+  updateObligation: async (id, fields) => {
+    await updateRecord(COLLECTIONS.obligations, id, fields);
+  },
+  getLead: async (id) => (await get(COLLECTIONS.leads, id).catch(() => null)) as unknown as Lead | null,
+  putLead: async (lead) => {
+    await patch(COLLECTIONS.leads, lead.id, lead as unknown as Record<string, unknown>);
+  },
+  patchLead: async (id, fields) => {
+    await patch(COLLECTIONS.leads, id, fields);
+  },
+  recordConsents: async (who, want) => (await recordJoinConsents(who, want)).length,
+  saveClaim: async (hash, doc) => {
+    await put(CLAIMS_COLLECTION, hash, doc);
+  },
+  audit: (action, clientId, email, meta) => auditLog({ actor: { uid: clientId, email, role: "client" }, action, target: `clients/${clientId}`, meta }),
+  sendCode: (email, clientId) => sendClientSignInCode(email, clientId),
+  newToken: () => generateSessionToken(),
+  hash: (token) => sha256Hex(token),
+};
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -112,6 +164,33 @@ export default (app: Express) => {
       }).catch((err) => log(`[leads] findings email not queued: ${err}`, "leads"));
 
       res.status(201).json({ findings, saved: true, leadId: id });
+    }),
+  );
+
+  /**
+   * DEADLINES: "Set the deadlines for each" (API/leads/claim.ts). Public,
+   * rate-limited, honeypot field `website`. Creates or merges the free
+   * account, saves the chosen deadlines and emails a /status sign-in code.
+   */
+  app.post(
+    "/api/leads/claim",
+    claimLimiter,
+    asyncHandler(async (req: Request, res: Response) => {
+      const parsed = parseClaim(req.body);
+      if ("honeypot" in parsed) return res.status(202).json({ saved: true });
+      if ("error" in parsed) return res.status(400).json({ error: parsed.error, field: parsed.field });
+      const result = await claimDeadlines(parsed, firestoreClaimStore);
+      log(`[leads] claim ${result.clientId}: ${result.created} new, ${result.restored} restored, ${result.kept} kept (${result.accountType})`, "leads");
+      res.status(201).json({
+        saved: true,
+        total: result.total,
+        created: result.created,
+        accountType: result.accountType,
+        newAccount: result.newAccount,
+        codeSent: result.codeSent,
+        claimToken: result.claimToken,
+        expiresAt: result.expiresAt,
+      });
     }),
   );
 

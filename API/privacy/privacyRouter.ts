@@ -105,7 +105,7 @@ export async function recordJoinConsents(
   const todo = joinConsentsToWrite(want, await consentsOf(who.clientId));
   const written: ConsentRecord[] = [];
   for (const c of todo) {
-    written.push(await writeConsent({ clientId: who.clientId, email: who.email, kind: c.kind, granted: c.granted, version: c.version, source: "join" }));
+    written.push(await writeConsent({ clientId: who.clientId, email: who.email, kind: c.kind, granted: c.granted, version: c.version, source: c.source }));
   }
   if (!written.length) return written;
   const mk = written.find((w) => w.kind === "marketing_email");
@@ -116,7 +116,7 @@ export async function recordJoinConsents(
     actor: memberActor(who.clientId, who.email),
     action: "privacy.consents_recorded",
     target: `clients/${who.clientId}`,
-    meta: { source: "join", kinds: written.map((w) => `${w.kind}:${w.granted ? "yes" : "no"}`), versions: written.map((w) => w.version) },
+    meta: { source: want.terms.source, kinds: written.map((w) => `${w.kind}:${w.granted ? "yes" : "no"}`), versions: written.map((w) => w.version) },
   });
   return written;
 }

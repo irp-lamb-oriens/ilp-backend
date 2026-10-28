@@ -31,11 +31,10 @@ import patch from "../../db/patch.ts";
 import { stripFields } from "../../db/records.ts";
 import { CLIENT_HIDDEN_FIELDS } from "../../schemas/contracts.ts";
 import { registerMemberHomeRoutes } from "./memberHome.ts";
+import { sendClientSignInCode } from "./signInCode.ts";
 import { normalizeQuote } from "./memberLogic.ts";
-import { sendEmailTransport } from "../../config/integrations.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import {
-  issueOtp,
   verifyOtp,
   generateSessionToken,
   emailToDocId,
@@ -309,34 +308,8 @@ export default (app: Express) => {
         return res.status(403).json({ error: "Email not authorized for this project." });
       }
 
-      const otpDocId = `${projectId}__${emailToDocId(normalizedEmail)}`;
-      const issued = await issueOtp(OTP_COLLECTION, otpDocId, normalizedEmail, { projectId });
-      if (!issued.ok) return res.status(issued.status).json({ error: issued.error });
-      const code = issued.code;
-
-      try {
-        await sendEmailTransport({
-          to: normalizedEmail,
-          subject: "Your ILP Client Portal Login Code",
-          html: `
-            <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px;">
-              <div style="text-align: center; margin-bottom: 32px;">
-                <h1 style="color: #123b5d; font-size: 24px; margin: 0;">ILP Client Portal</h1>
-                <p style="color: #4a5a66; font-size: 14px; margin-top: 8px;">Secure Login Code</p>
-              </div>
-              <div style="background: #eff7fb; border-radius: 12px; padding: 32px; text-align: center;">
-                <p style="color: #202a33; font-size: 16px; margin: 0 0 16px;">Your verification code is:</p>
-                <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #123b5d; font-family: monospace; padding: 16px; background: white; border-radius: 8px; display: inline-block;">${code}</div>
-                <p style="color: #7a8a96; font-size: 13px; margin-top: 16px;">This code expires in 10 minutes.</p>
-              </div>
-            </div>
-          `,
-        });
-        log(`[client-status] OTP sent to ${normalizedEmail}`);
-      } catch (err) {
-        log(`[client-status] Failed to send OTP email: ${err instanceof Error ? err.message : err}`);
-        return res.status(500).json({ error: "Failed to send verification code." });
-      }
+      const sent = await sendClientSignInCode(normalizedEmail, projectId);
+      if (!sent.ok) return res.status(sent.status).json({ error: sent.error });
 
       res.json({ success: true, message: "Verification code sent to your email." });
     }),

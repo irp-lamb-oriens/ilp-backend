@@ -103,6 +103,7 @@ const seed = (status = "cancelled"): Record<string, Doc[]> => ({
   client_status_sessions: [{ id: "tok1", email: "gloria@example.com" }],
   client_status_otps: [{ id: "gloria_example_com", codeHash: "h" }],
   join_sessions: [{ id: "jt1", clientId: "cli_1", email: "gloria@example.com" }],
+  deadline_claims: [{ id: "claimhash1", clientId: "cli_1", ruleIds: ["CR_VEH_MARCHAMO"] }],
   email_queue: [{ id: "e1", to: "gloria@example.com", subject: "Hi" }, { id: "e2", to: "other@example.com" }],
   invoices: [{ id: "inv_1", clientId: "cli_1", clientEmail: "gloria@example.com", total: 179.99 }],
   consents: [{ id: "cns_1", clientId: "cli_1", email: "gloria@example.com", kind: "terms", granted: true }],
@@ -127,7 +128,7 @@ Deno.test("deletion matrix: deletes, anonymizes, keeps accounting and proof, tou
   const res = await runErasure(st, subject, NOW);
   const rows = (c: string) => [...(st.db.get(c)?.values() ?? [])];
 
-  for (const c of ["handoffs", "obligations", "csm_tasks", "member_documents", "member_feedback", "push_subscriptions", "client_status_sessions", "client_status_otps", "join_sessions"]) {
+  for (const c of ["handoffs", "obligations", "csm_tasks", "member_documents", "member_feedback", "push_subscriptions", "client_status_sessions", "client_status_otps", "join_sessions", "deadline_claims"]) {
     assertEquals(rows(c).length, 0, `${c} not deleted`);
   }
   assertEquals(rows("matters").map((d) => d.id), ["mat_2"]);
@@ -244,7 +245,7 @@ Deno.test("retention: deletes only what is past its period", async () => {
   assertEquals([c1.transcript, c1.summary, c1.minutesUsed, typeof c1.transcriptRemovedAt], [undefined, undefined, 20, "string"]);
   assertEquals(st.db.get("consultations")!.get("c2")!.transcript, "t"); // came back: still a member
   assertEquals(counts["transcripts after membership end"], 1);
-  assertEquals(retentionTargets(RETENTION_DEFAULTS, NOW).length, 13); // + download_tickets (AUTH)
+  assertEquals(retentionTargets(RETENTION_DEFAULTS, NOW).length, 14); // + download_tickets (AUTH), deadline_claims (DEADLINES)
   assertEquals(transcriptExpired([], new Date()), false);
 });
 
