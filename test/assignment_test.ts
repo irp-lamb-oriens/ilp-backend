@@ -101,7 +101,7 @@ Deno.test("offboardLawyer: members re-matched in their country or flagged; membe
 
     world.put("consultations", "later", call("later", "C", "2026-11-25T15:00:00.000Z"));
     world.put("consultations", "past", { ...call("past", "C", "2026-10-19T15:00:00.000Z"), status: "completed" });
-    await markCancelled({ ...(world.doc("memberships", "mem1") as never) }, { uid: "system", email: "system", role: "system" }, "test");
+    await markCancelled(world.doc("memberships", "mem1") as never, { uid: "system", email: "system", role: "system" }, "test");
     assertEquals(world.doc("consultations", "later")!.status, "cancelled");
     assertEquals(world.doc("consultations", "past")!.status, "completed");
   } finally {
