@@ -76,6 +76,7 @@ import { recordingWithdrawn } from "../privacy/policy.ts";
 import { isListRequest, type ListSpec, mapProducer, respondList } from "../../helper/listing.ts";
 import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
 import type { RecordCollection } from "../../db/records.ts";
+import { ensureStageConfig } from "../dashboard/automation/stageConfig.ts";
 
 /** Query-string keys accepted as equality filters on staff lists. */
 const FILTER_KEYS = [
@@ -214,8 +215,22 @@ export default function membersRouter(app: Express) {
       if (!isSlug(slug)) return res.status(404).json({ error: "Unknown collection." });
       if (isListRequest(req)) {
         const spec = slugSpec(slug);
+        // Pipeline header: open matters per stage and past the stage time limit, once with the first page.
+        let meta: Record<string, unknown> | undefined;
+        if (slug === "matters" && !req.query.cursor) {
+          const country = typeof req.query.country === "string" ? req.query.country : "";
+          const [all, stages] = await Promise.all([findRecords<Matter>(COLLECTIONS.matters), ensureStageConfig().catch(() => [])]);
+          const sla = new Map(stages.map((st) => [st.id, st.slaDays ?? 14]));
+          const open = all.filter((m) => !m.closedAt && (!country || (m.country ?? "CR") === country));
+          const byStage: Record<string, number> = {};
+          for (const m of open) byStage[m.stage] = (byStage[m.stage] ?? 0) + 1;
+          const now = Date.now();
+          const late = open.filter((m) => now - Date.parse(m.stageEnteredAt) > (sla.get(m.stage) ?? 14) * 86400000).length;
+          meta = { byStage, openTotal: open.length, late };
+        }
         return respondList(req, res, spec, (p) => ({
           produce: pageRecords<Rec>(SLUG_TO_COLLECTION[slug] as RecordCollection, {}, p, spec, slugEqKeys(slug)),
+          meta,
         }));
       }
       const limit = Math.min(Number(req.query.limit) || 500, 2000);
