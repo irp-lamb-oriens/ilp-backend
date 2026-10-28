@@ -7,6 +7,8 @@
  */
 
 import get from "../../db/get.ts";
+import { syncTransaction } from "../../db/lock.ts";
+import { lawyerMaySee } from "./lawyerAccess.ts";
 import {
   createRecord,
   findRecords,
@@ -164,11 +166,32 @@ export function lawyerStatusError(next: unknown, current: string): string | null
  * Charge a completed consultation against the member's membership once.
  * Idempotent: the consultation carries `chargedAt` after the first charge.
  */
-export async function chargeConsultation(c: Consultation): Promise<Membership | null> {
+export async function chargeConsultation(c0: Consultation): Promise<Membership | null> {
+  // REL: under a per-call lock with a fresh read, so two "completed" writes
+  // arriving together (double click, lawyer + staff) charge once.
+  return await syncTransaction(COLLECTIONS.consultations, c0.id, async () => {
+    const c = (await getRecord<Consultation>(COLLECTIONS.consultations, c0.id)) ?? c0;
+    return await chargeLocked(c);
+  });
+}
+
+/**
+ * Minutes a completed call uses: what the lawyer recorded, never more than
+ * the booked length (a call that runs over is not charged extra) and never
+ * negative. Pure.
+ */
+export function chargeableMinutes(c: Pick<Consultation, "minutesUsed" | "durationMin">): number {
+  const booked = c.durationMin || PLAN_STANDARD.callLengthMin;
+  const used = Number(c.minutesUsed);
+  if (!Number.isFinite(used)) return booked;
+  return Math.min(booked, Math.max(0, Math.round(used)));
+}
+
+async function chargeLocked(c: Consultation): Promise<Membership | null> {
   if (c.status !== "completed" || c.chargedAt) return null;
   const m = await currentMembership(c.clientId);
   if (!m) return null;
-  const minutes = Math.max(0, Math.round(c.minutesUsed ?? c.durationMin ?? PLAN_STANDARD.callLengthMin));
+  const minutes = chargeableMinutes(c);
   const updated = await updateRecord<Membership>(COLLECTIONS.memberships, m.id, {
     minutesUsed: (m.minutesUsed ?? 0) + minutes,
     callsUsed: (m.callsUsed ?? 0) + 1,
@@ -259,14 +282,15 @@ export function clientView(b: MemberBundle) {
   });
 }
 
-/** Does this lawyer work with this client (assigned matter or a consultation)? */
+/** Does this lawyer work with this client now? One rule (lawyerAccess.ts) for bundle, brief and documents. */
 export async function lawyerCanSee(providerId: string, clientId: string): Promise<boolean> {
   if (!providerId) return false;
-  const [m, c] = await Promise.all([
-    findRecords<Matter>(COLLECTIONS.matters, { clientId, assignedProviderId: providerId }, { limit: 1 }),
-    findRecords<Consultation>(COLLECTIONS.consultations, { clientId, providerId }, { limit: 1 }),
+  const [client, m, c] = await Promise.all([
+    get(COLLECTIONS.clients, clientId).catch(() => null),
+    findRecords<Matter>(COLLECTIONS.matters, { clientId, assignedProviderId: providerId }),
+    findRecords<Consultation>(COLLECTIONS.consultations, { clientId, providerId }),
   ]);
-  return m.length > 0 || c.length > 0;
+  return lawyerMaySee(providerId, client as Record<string, unknown> | null, m, c);
 }
 
 export { createRecord, findRecords, getRecord, updateRecord };

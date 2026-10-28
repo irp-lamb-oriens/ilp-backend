@@ -55,6 +55,7 @@ import {
   type Obligation,
 } from "../../schemas/contracts.ts";
 import {
+  chargeableMinutes,
   chargeConsultation,
   clientView,
   createRecord,
@@ -75,6 +76,9 @@ import {
 import { onRecordCreated, onRecordUpdated } from "./events.ts";
 import { parseDeadlinePatch } from "./deadlines.ts";
 import { recordingWithdrawn } from "../privacy/policy.ts";
+import auditLog from "../../helper/auditLog.ts";
+import { JOIN_OPENS_MIN } from "../calls/callLogic.ts";
+import { recordingStillAllowed } from "../calls/callService.ts";
 import { isListRequest, type ListSpec, mapProducer, respondList } from "../../helper/listing.ts";
 import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
 import type { RecordCollection } from "../../db/records.ts";
@@ -165,6 +169,12 @@ function slugSpec(slug: string, dir?: "asc" | "desc"): ListSpec<Rec> {
 const CLIENT_SLUGS = new Set(["memberships", "matters", "consultations", "handoffs", "obligations"]);
 
 /** Fields a lawyer may change on their own consultation. */
+/** REL: every staff write to a member record is audited (who, which record, which fields; not the values). */
+function staffAudit(req: Request, action: string, target: string, meta: Record<string, unknown>) {
+  const email = String((req as AuthedRequest).dashboardUser ?? "unknown");
+  return auditLog({ actor: { uid: email, email, role: (req as AuthedRequest).dashboardRole ?? "staff" }, action, target, meta }).catch(() => {});
+}
+
 const LAWYER_CONSULTATION_FIELDS = ["consent", "status", "minutesUsed", "transcript", "summary", "endedAt"];
 
 export default function membersRouter(app: Express) {
@@ -293,8 +303,14 @@ export default function membersRouter(app: Express) {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const missing = missingFields(slug, body);
       if (missing.length) return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
+      // REL: a new matter follows the member's lawyer unless staff name one.
+      if (slug === "matters" && !body.assignedProviderId) {
+        const client = await get(COLLECTIONS.clients, String(body.clientId)).catch(() => null);
+        if (typeof client?.assignedProviderId === "string" && client.assignedProviderId) body.assignedProviderId = client.assignedProviderId;
+      }
       const record = await createRecord(SLUG_TO_COLLECTION[slug], withDefaults(slug, body));
       await onRecordCreated(slug, record, { actor: (req as AuthedRequest).dashboardUser });
+      void staffAudit(req, "record.created", `${SLUG_TO_COLLECTION[slug]}/${record.id}`, { clientId: body.clientId, fields: Object.keys(body) });
       res.status(201).json(record);
     }),
   );
@@ -316,6 +332,7 @@ export default function membersRouter(app: Express) {
       const after = await updateRecord<Record<string, unknown>>(SLUG_TO_COLLECTION[slug], id, fields);
       if (after) await onRecordUpdated(slug, before, after, { actor: (req as AuthedRequest).dashboardUser });
       if (slug === "consultations" && after) await chargeConsultation(after as unknown as Consultation);
+      void staffAudit(req, "record.updated", `${SLUG_TO_COLLECTION[slug]}/${id}`, { clientId: before.clientId, fields: Object.keys(fields) });
       res.json(after);
     }),
   );
@@ -505,6 +522,20 @@ export default function membersRouter(app: Express) {
       if (statusError) return res.status(400).json({ error: statusError });
       const fields: Record<string, unknown> = {};
       for (const k of LAWYER_CONSULTATION_FIELDS) if (req.body?.[k] !== undefined) fields[k] = req.body[k];
+      // REL: a call cannot start or be completed (and charged) before its time.
+      if ((fields.status === "in_progress" || fields.status === "completed") && fields.status !== before.status &&
+        Date.now() < Date.parse(before.scheduledAt) - JOIN_OPENS_MIN * 60_000) {
+        return res.status(409).json({ error: "This call has not started yet." });
+      }
+      // REL: minutes are whole numbers between 0 and the booked length.
+      if (fields.minutesUsed !== undefined) {
+        const n = Number(fields.minutesUsed);
+        if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "minutesUsed must be a number of minutes." });
+        fields.minutesUsed = chargeableMinutes({ minutesUsed: n, durationMin: before.durationMin });
+      }
+      if (fields.endedAt !== undefined && (typeof fields.endedAt !== "string" || Number.isNaN(Date.parse(fields.endedAt)))) {
+        return res.status(400).json({ error: "endedAt must be a date." });
+      }
       if (fields.consent && typeof fields.consent === "object") {
         const recording = (fields.consent as Record<string, unknown>).recording;
         if (recording !== "granted" && recording !== "declined" && recording !== "pending") {
@@ -520,17 +551,44 @@ export default function membersRouter(app: Express) {
         }
         fields.consent = { recording, at: nowIso(), by: "lawyer", where: "lawyer_call" };
       }
-      if (fields.summary && typeof fields.summary === "object") {
-        const s = fields.summary as Record<string, unknown>;
-        fields.summary = { ...s, confirmedAt: s.status === "confirmed" ? nowIso() : undefined };
+      // REL: a transcript is stored only with recording consent (granted on the call, not withdrawn since).
+      if (fields.transcript !== undefined) {
+        if (typeof fields.transcript !== "string") return res.status(400).json({ error: "transcript must be text." });
+        const consentNow = (fields.consent as Consultation["consent"] | undefined) ?? before.consent;
+        if (!(await recordingStillAllowed({ clientId: before.clientId, consent: consentNow }))) {
+          return res.status(409).json({ error: "The member did not agree to recording, so no transcript can be stored. Write the summary yourself." });
+        }
+        fields.transcript = fields.transcript.slice(0, 200_000);
+        fields.transcriptSource = "pasted";
+      }
+      if (fields.summary !== undefined) {
+        const s = (fields.summary && typeof fields.summary === "object" ? fields.summary : {}) as Record<string, unknown>;
+        const text = typeof s.text === "string" ? s.text.trim().slice(0, 5000) : "";
+        if (!text) return res.status(400).json({ error: "The summary needs some text." });
+        if (s.status !== "suggested" && s.status !== "confirmed") return res.status(400).json({ error: "summary.status must be suggested or confirmed." });
+        if (before.summary?.status === "confirmed" && s.status === "suggested") {
+          return res.status(409).json({ error: "This summary is already confirmed." });
+        }
+        fields.summary = { text, status: s.status, confirmedAt: s.status === "confirmed" ? (before.summary?.confirmedAt ?? nowIso()) : undefined };
       }
       if (fields.status === "completed" && !fields.endedAt && !before.endedAt) fields.endedAt = nowIso();
       const after = await updateRecord<Consultation>(COLLECTIONS.consultations, before.id, fields);
       if (after) {
         await onRecordUpdated("consultations", before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>, { actor: (req as AuthedRequest).providerUser });
         await chargeConsultation(after);
+        const changed = Object.keys(fields).filter((k) => k !== "transcript");
+        if (fields.transcript !== undefined) changed.push("transcript");
+        void auditLog({
+          actor: { uid: pid, email: String((req as AuthedRequest).providerUser ?? ""), role: "lawyer" },
+          action: (fields.summary as { status?: string } | undefined)?.status === "confirmed" && before.summary?.status !== "confirmed"
+            ? "consultation.summary_confirmed"
+            : "consultation.updated",
+          target: `consultations/${before.id}`,
+          meta: { clientId: before.clientId, fields: changed, status: after.status },
+        }).catch(() => {});
       }
-      res.json(forLawyer(after));
+      const fresh = await getRecord<Consultation>(COLLECTIONS.consultations, before.id);
+      res.json(forLawyer(fresh ?? after));
     }),
   );
 
@@ -544,10 +602,19 @@ export default function membersRouter(app: Express) {
       const c = await getRecord<Consultation>(COLLECTIONS.consultations, consultationId);
       if (!c || c.providerId !== pid) return res.status(404).json({ error: "Consultation not found." });
       if (c.handoffId) return res.status(409).json({ error: "This consultation already has a handoff.", handoffId: c.handoffId });
+      // REL: the lawyer's judgment goes to the member only once they confirmed it.
+      if (c.status !== "completed" || c.summary?.status !== "confirmed") {
+        return res.status(409).json({ error: "Confirm the summary and complete the call before handing off." });
+      }
       const steps = Array.isArray(req.body?.legalNextSteps) ? req.body.legalNextSteps as LegalNextStep[] : [];
       const cleanSteps = steps
         .filter((s) => s && typeof s.what === "string" && s.what.trim())
-        .map((s) => ({ what: s.what.trim(), who: s.who ?? "client", dueAt: s.dueAt }));
+        .slice(0, 10)
+        .map((s) => ({
+          what: s.what.trim().slice(0, 500),
+          who: (s.who === "lawyer" || s.who === "ilp" ? s.who : "client") as LegalNextStep["who"],
+          dueAt: typeof s.dueAt === "string" && !Number.isNaN(Date.parse(s.dueAt)) ? new Date(s.dueAt).toISOString() : undefined,
+        }));
       if (!cleanSteps.length) return res.status(400).json({ error: "At least one next step is required." });
       const handoff = await createRecord<Partial<Handoff>>(COLLECTIONS.handoffs, withDefaults("handoffs", {
         consultationId,
@@ -558,8 +625,14 @@ export default function membersRouter(app: Express) {
         commercialNotes: typeof req.body?.commercialNotes === "string" ? req.body.commercialNotes : undefined,
       }) as Partial<Handoff>);
       await updateRecord(COLLECTIONS.consultations, consultationId, { handoffId: handoff.id });
-      if (c.matterId) await updateRecord(COLLECTIONS.matters, c.matterId, { nextStep: cleanSteps[0] });
+      if (c.matterId) await updateRecord(COLLECTIONS.matters, c.matterId, { nextStep: cleanSteps[0], nextStepSetAt: handoff.approvedAt });
       const taskIds = await onRecordCreated("handoffs", handoff, { actor: (req as AuthedRequest).providerUser });
+      void auditLog({
+        actor: { uid: pid, email: String((req as AuthedRequest).providerUser ?? ""), role: "lawyer" },
+        action: "handoff.created",
+        target: `handoffs/${handoff.id}`,
+        meta: { clientId: c.clientId, consultationId, steps: cleanSteps.length },
+      }).catch(() => {});
       res.status(201).json(forLawyer({ ...handoff, csmTaskIds: undefined, createdTaskCount: taskIds.length }));
     }),
   );

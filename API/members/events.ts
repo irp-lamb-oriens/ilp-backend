@@ -227,8 +227,12 @@ export function eventsFor(slug: string, before: Doc | null, after: Doc): Array<[
   }
   if (slug === "handoffs" && !before) {
     out.push(["handoff.approved", { clientId, matterId: str(after.matterId), sourceId: id }]);
+  }
+  // REL: commercial notes (written by staff, at creation or later) open the proposal task once.
+  if (slug === "handoffs") {
     const notes = str(after.commercialNotes)?.trim();
-    if (notes) {
+    const had = str(before?.commercialNotes)?.trim();
+    if (notes && !had) {
       out.push(["handoff.opportunity", {
         clientId,
         matterId: str(after.matterId),
