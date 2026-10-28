@@ -32,7 +32,7 @@ import type { EventPayload } from "../members/events.ts";
 // A ConsentRecord stores the version the person saw. Bump the id when the
 // text changes in a way that needs fresh consent.
 export const LEGAL_VERSIONS = {
-  terms: "terms-2026-10-26-draft1",
+  terms: "terms-2026-10-27-draft2",
   privacy: "privacy-2026-10-26-draft1",
   recording: "recording-ai-2026-10-26-draft1",
   cookies: "cookies-2026-10-26-draft1",

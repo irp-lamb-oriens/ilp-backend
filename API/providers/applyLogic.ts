@@ -28,7 +28,7 @@ import {
 type Doc = Record<string, unknown>;
 
 /** Version of the draft partner lawyer terms (keep equal to frontend components/legal/content/partner.ts). */
-export const PARTNER_TERMS_VERSION = "partner-terms-2026-10-27-draft1";
+export const PARTNER_TERMS_VERSION = "partner-terms-2026-10-27-draft2";
 
 export type ApplicationStatus = "pending_review" | "changes_requested" | "active" | "declined";
 
