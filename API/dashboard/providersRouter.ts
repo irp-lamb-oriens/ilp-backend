@@ -29,6 +29,7 @@
  *   DELETE /api/dashboard/providers/:id           — delete a provider
  */
 
+import { offboardLawyer } from "../members/assignment.ts";
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
@@ -518,8 +519,15 @@ export default function providersRouter(app: Express) {
 
       await patch("providers", id, updates);
       log(`[providers] ${actor} updated provider ${id}`);
+      // REL: switching a lawyer off offboards them: their members are re-matched
+      // (or flagged), upcoming calls move or are cancelled, nothing is charged.
+      let offboarding: unknown = null;
+      if (updates.active === false && existing.active !== false) {
+        const r = await offboardLawyer(id, { email: String(actor), role: "staff" });
+        offboarding = r.members.map((m) => ({ clientId: m.clientId, to: m.providerId, moved: m.moved, cancelled: m.cancelled }));
+      }
       const updated = await get("providers", id);
-      return res.json({ success: true, provider: { id, ...updated } });
+      return res.json({ success: true, provider: { id, ...updated }, ...(offboarding ? { offboarding } : {}) });
     }),
   );
 
@@ -534,6 +542,9 @@ export default function providersRouter(app: Express) {
       const existing = await get("providers", id);
       if (!existing) return res.status(404).json({ error: "Provider not found." });
 
+      // REL: offboard first (members re-matched, calls moved or cancelled), then remove.
+      await patch("providers", id, { active: false, updatedAt: new Date().toISOString(), updatedBy: actor });
+      await offboardLawyer(id, { email: String(actor), role: "staff" });
       await del("providers", id);
       log(`[providers] ${actor} deleted provider ${id} (${existing.name})`);
       return res.json({ success: true, id });

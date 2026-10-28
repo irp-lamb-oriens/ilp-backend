@@ -34,6 +34,7 @@ import {
   onboardingDetail,
 } from "./joinIntake.ts";
 import { flagUnassignedCountry, hasLawyerIn } from "../calls/callService.ts";
+import { ensureAssigned } from "../members/assignment.ts";
 import { isPlaceholderId } from "../../helper/placeholder.ts";
 import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
@@ -282,6 +283,9 @@ export async function activateMembership(
   if (m.intake?.findings?.length) await seedObligationsFromIntake(m.clientId, m.country, m.intake);
   // COUNTRIES: joining is never blocked; with no lawyer licensed in the member's country yet, staff get a task.
   await checkCountryCoverage(m);
+  // REL: route once and persist (clients.assignedProviderId, open matters), so the
+  // lawyer, the board and the first booking agree. Never throws.
+  await ensureAssigned(m.clientId);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   // Join confirmation email with the renewal terms (never throws; once per membership).

@@ -26,6 +26,7 @@ import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { emitEvent } from "../members/events.ts";
+import { cancelUpcomingCalls } from "../members/assignment.ts";
 import { COLLECTIONS, type CsmTask, type Membership } from "../../schemas/contracts.ts";
 
 type Doc = Record<string, unknown>;
@@ -320,7 +321,10 @@ export async function markCancelled(m: MembershipDoc, actor: Actor, reason: stri
   const fields: Doc = { status: "cancelled", cancelledAt: now, updatedAt: now };
   await patch(COLLECTIONS.memberships, m.id, fields);
   await patch(COLLECTIONS.clients, m.clientId, { membershipStatus: "cancelled", updatedAt: now }).catch(() => {});
-  await auditLog({ actor, action: "membership.cancelled", target: `memberships/${m.id}`, meta: { reason } });
+  // REL: the membership has ended, so booked calls from now on are cancelled
+  // (never charged); the lawyer's day and both inboxes are told.
+  const calls = await cancelUpcomingCalls(m.clientId, { email: actor.email || "system", role: "system" }, "Membership ended");
+  await auditLog({ actor, action: "membership.cancelled", target: `memberships/${m.id}`, meta: { reason, cancelledCalls: calls } });
   const after = { ...m, ...fields } as MembershipDoc;
   await runHook("onCancelled", after);
   return after;

@@ -69,7 +69,6 @@ import {
 import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED, bookingRecordingConsent } from "../privacy/policy.ts";
-import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { memberOnly } from "./accountGuard.ts";
 import { registerMemberDeadlineRoutes } from "./memberDeadlines.ts";
@@ -86,6 +85,17 @@ import {
 } from "../../helper/storage.ts";
 import { attachMeeting, type CallRecord, flagUnassignedCountry, matchingNotice, peopleFor, routeLawyer, sendBookingEmails, slotsFor } from "../calls/callService.ts";
 import { canChange } from "../calls/callLogic.ts";
+import { claimSlot, withLawyerSlots } from "../calls/slotClaims.ts";
+import { assignMember } from "../members/assignment.ts";
+import { onQuoteAccepted } from "../finance/quoteAccepted.ts";
+import { isPlaceholderId, PLACEHOLDER_PREFIX } from "../../helper/placeholder.ts";
+import { newId } from "../../db/records.ts";
+
+/** REL: the consultation id is chosen before the write, so the slot claim can name it. */
+const consultationIdFor = (clientId: string) => {
+  const base = newId("consultations");
+  return isPlaceholderId(clientId) ? `${PLACEHOLDER_PREFIX}${base}` : base;
+};
 import {
   bookingCapacity,
   coerceProfileValue,
@@ -303,14 +313,17 @@ export function registerMemberHomeRoutes(app: Express) {
         return res.status(409).json({ error: matchingNotice(country), matching: true, country });
       }
 
-      // The slot must be one we offer and still free.
       const iso = when.toISOString();
-      const offered = await slotsFor(providerId);
-      if (!offered.includes(iso)) return res.status(409).json({ error: "That time was just taken. Please pick another." });
+      // REL: a member who asked to cancel books only inside the paid period.
+      const m0 = bundle.membership;
+      if (m0?.cancelAtPeriodEnd && m0.periodEnd && iso >= m0.periodEnd) {
+        return res.status(409).json({ error: `Your membership ends on ${m0.periodEnd.slice(0, 10)}. Pick a time before then.` });
+      }
 
       const pending = Array.isArray(bundle.client?.pendingQuestions) ? bundle.client!.pendingQuestions as string[] : [];
       const fullQuestion = pending.length ? `${q}\n\nAlso on my list:\n- ${pending.join("\n- ")}` : q;
       const record = withDefaults("consultations", {
+        id: consultationIdFor(id),
         clientId: id,
         matterId: mId,
         providerId,
@@ -322,7 +335,23 @@ export function registerMemberHomeRoutes(app: Express) {
           ? { recording: "pending" }
           : { recording: consent, at: nowIso(), by: "client", where: recordingConsent === consent ? "booking" : "privacy_page" },
       });
-      const created = await createRecord(COLLECTIONS.consultations, record);
+      // REL: the slot must still be offered and free. Under the lawyer's slot lock
+      // the second of two members pressing Book on the same time gets a 409, and
+      // the claim document stops a second server instance from taking it too.
+      const created = await withLawyerSlots(providerId, async () => {
+        const offered = await slotsFor(providerId);
+        if (!offered.includes(iso)) return null;
+        if (!(await claimSlot(providerId, iso, String(record.id)))) return null;
+        return await createRecord(COLLECTIONS.consultations, record);
+      });
+      if (!created) return res.status(409).json({ error: "That time was just taken. Please pick another." });
+      // REL: persist the routing (member-level assignment) the first time, so the
+      // lawyer, the matter and later bookings agree on who the lawyer is.
+      const viaMatter = mId ? bundle.matters.find((m) => m.id === mId)?.assignedProviderId === providerId : false;
+      if (!viaMatter && bundle.client?.assignedProviderId !== providerId) {
+        await assignMember(id, providerId, { email: actor(req) || "system", role: isStaff(req) ? "staff" : "client" }, { auto: true, reason: "Routed at booking" })
+          .catch((err) => log(`[member-home] assignment after booking failed for ${id}: ${err instanceof Error ? err.message : err}`, "error"));
+      }
       if (pending.length) await patch(CLIENTS, id, { pendingQuestions: [] });
       await emitEvent("consultation.booked", { clientId: id, matterId: mId, sourceId: created.id, detail: memberName(bundle.client) });
       log(`[member-home] consultation ${created.id} booked for ${id} at ${iso}`);
@@ -577,8 +606,8 @@ export function registerMemberHomeRoutes(app: Express) {
         updatedAt: at,
       });
       log(`[member-home] quote ${targetId} accepted by ${email} on ${id}`);
-      // P5/P7: linked opportunities move to won now, not on the next staff read (never throws).
-      await syncOpportunitiesForQuote(id, targetId);
+      // REL: settlement opened (lawyer fee pending), audit, linked opportunities won. Never throws.
+      await onQuoteAccepted(id, { ...target, status: "accepted", clientAcceptedAt: at }, { email, role: "client" });
       res.json(forClient(moneyView({ ...doc, quotes: updated, charges: [...charges, ...charge] })));
     }),
   );

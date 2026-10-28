@@ -1,14 +1,16 @@
 /**
  * assignmentRouter.ts — admin client→lawyer assignment, Uber-style.
  *
- * Lawyers (providers) are prioritized by their `score` (0–5, half-star).
- * Higher-scored lawyers get clients first. Assignment is:
- *   • manual — an admin picks a specific lawyer for a client
- *   • auto   — for each unassigned client, the highest-scored lawyer whose
- *              legalAreas/jurisdictions match the client is chosen
+ * REL: assignment goes through API/members/assignment.ts. Assignment is:
+ *   • manual — staff pick an active lawyer licensed in the member's country;
+ *              open matters and upcoming calls follow (a call moves when the
+ *              new lawyer is free at that time, else it is cancelled)
+ *   • auto   — each unassigned member with a running membership is routed
+ *              like booking (country, specialty, load); nobody licensed in
+ *              the country → the CSM task, never a lawyer from elsewhere
  *
  * The "constant client loop queue" is the pool of unassigned clients. Auto
- * assignment drains it in score-prioritized order.
+ * assignment drains it.
  *
  * Routes (all requireDashboardAuth):
  *   GET  /api/dashboard/assignment/queue
@@ -21,16 +23,16 @@ import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } fro
 import { LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
-import get from "../../db/get.ts";
 import getAll from "../../db/getAll.ts";
-import put from "../../db/put.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { isProviderBookable } from "../providers/applyLogic.ts";
+import { assignBlock, assignMember } from "../members/assignment.ts";
+import { flagUnassignedCountry, routeNewLawyer } from "../calls/callService.ts";
+import { currentMembership } from "../members/service.ts";
 import {
   buildClientSummary,
   fetchAllClientsWithIds,
 } from "./clientHelpers.ts";
-
-const CLIENTS_COLLECTION = "clients";
 
 /** A provider's numeric score, defaulting to 0 when unrated. */
 function scoreOf(p: Record<string, unknown>): number {
@@ -43,34 +45,8 @@ function scoreOf(p: Record<string, unknown>): number {
 async function rankedProviders(): Promise<Array<Record<string, unknown>>> {
   const all = await getAll("providers").catch(() => []);
   return all
-    .filter((p) => p?.active !== false)
+    .filter((p) => isProviderBookable(p))
     .sort((a, b) => scoreOf(b) - scoreOf(a));
-}
-
-/** Score a provider against a client's legalArea/jurisdiction. */
-function matchScore(
-  provider: Record<string, unknown>,
-  client: Record<string, unknown>,
-): number {
-  let score = 0;
-  const wantedArea = typeof client.legalArea === "string" ? client.legalArea : null;
-  const wantedJurisdiction =
-    typeof client.jurisdiction === "string" ? client.jurisdiction.toUpperCase() : null;
-
-  if (
-    wantedArea &&
-    Array.isArray(provider.legalAreas) &&
-    (provider.legalAreas as string[]).includes(wantedArea)
-  ) {
-    score += 2;
-  }
-  if (wantedJurisdiction) {
-    const tags = Array.isArray(provider.jurisdictions)
-      ? (provider.jurisdictions as string[]).map((j) => j.toUpperCase())
-      : [];
-    if (tags.length === 0 || tags.includes(wantedJurisdiction)) score += 1;
-  }
-  return score;
 }
 
 export default function assignmentRouter(app: Express) {
@@ -137,32 +113,15 @@ export default function assignmentRouter(app: Express) {
       if (!providerId || typeof providerId !== "string") {
         return res.status(400).json({ error: "providerId is required." });
       }
-
-      const doc = await get(CLIENTS_COLLECTION, id);
-      if (!doc) return res.status(404).json({ error: "Client not found." });
-
-      const provider = await get("providers", providerId);
-      if (!provider) return res.status(404).json({ error: "Provider not found." });
-
-      const nowIso = new Date().toISOString();
-      await put(CLIENTS_COLLECTION, id, {
-        assignedProviderId: providerId,
-        assignedAt: nowIso,
-        assignedBy: actor,
-        updatedAt: nowIso,
-        activityLog: [
-          ...(Array.isArray(doc.activityLog) ? doc.activityLog : []),
-          {
-            type: "client_assigned",
-            providerId,
-            actor,
-            timestamp: nowIso,
-          },
-        ],
-      });
-
+      // REL: only an active lawyer licensed in the member's country (and never a
+      // seed lawyer for a real member). Matters and upcoming calls follow
+      // (members/assignment.ts: a call moves when the new lawyer is free at that
+      // time, else it is cancelled and the member asked to rebook).
+      const block = await assignBlock(id, providerId);
+      if (block) return res.status(block.status).json({ error: block.error });
+      const r = await assignMember(id, providerId, { email: actor, role: "staff" }, { reason: "Your ILP team changed your lawyer" });
       log(`[assignment] ${actor} assigned ${id} to ${providerId}`);
-      res.json({ success: true, id, providerId });
+      res.json({ success: true, id, providerId, previous: r.previous, matters: r.matters, moved: r.moved, cancelled: r.cancelled });
     })
   );
 
@@ -174,49 +133,25 @@ export default function assignmentRouter(app: Express) {
 
       const all = await fetchAllClientsWithIds();
       const unassigned = all.filter(({ data }) => !data.assignedProviderId);
-      const providers = await rankedProviders();
-
       const assignments: Array<{ clientId: string; providerId: string }> = [];
       const skipped: Array<{ clientId: string; reason: string }> = [];
 
-      for (const { docId, data } of unassigned) {
-        if (providers.length === 0) {
-          skipped.push({ clientId: docId, reason: "no active providers" });
+      for (const { docId } of unassigned) {
+        // REL: members only (free accounts and leads have no lawyer), routed
+        // like booking: licensed in the member's country, specialty, load.
+        const m = await currentMembership(docId).catch(() => null);
+        if (!m || (m.status !== "active" && m.status !== "past_due")) {
+          skipped.push({ clientId: docId, reason: "no active membership" });
           continue;
         }
-
-        // Pick the highest-scored provider that matches area/jurisdiction.
-        // Fall back to the top-scored provider when nothing matches.
-        let best = providers[0];
-        let bestMatch = -1;
-        for (const p of providers) {
-          const m = matchScore(p, data);
-          if (m > bestMatch) {
-            bestMatch = m;
-            best = p;
-          }
+        const pick = await routeNewLawyer(docId);
+        if (!pick) {
+          await flagUnassignedCountry(docId);
+          skipped.push({ clientId: docId, reason: "no active lawyer licensed in the member's country" });
+          continue;
         }
-
-        const nowIso = new Date().toISOString();
-        await put(CLIENTS_COLLECTION, docId, {
-          assignedProviderId: String(best.id),
-          assignedAt: nowIso,
-          assignedBy: actor,
-          autoAssigned: true,
-          updatedAt: nowIso,
-          activityLog: [
-            ...(Array.isArray(data.activityLog) ? data.activityLog : []),
-            {
-              type: "client_assigned",
-              providerId: String(best.id),
-              actor,
-              auto: true,
-              timestamp: nowIso,
-            },
-          ],
-        });
-
-        assignments.push({ clientId: docId, providerId: String(best.id) });
+        await assignMember(docId, pick, { email: actor, role: "staff" }, { auto: true, reason: "Matched by country and specialty" });
+        assignments.push({ clientId: docId, providerId: pick });
       }
 
       log(`[assignment] ${actor} auto-assigned ${assignments.length} clients`);
