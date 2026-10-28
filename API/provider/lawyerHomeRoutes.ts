@@ -42,6 +42,7 @@ import {
   updateRecord,
 } from "../members/service.ts";
 import { onRecordUpdated } from "../members/events.ts";
+import { lawyerMaySee } from "../members/lawyerAccess.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import { ensureStageConfig, getStageLabel, isValidStage } from "../dashboard/automation/stageConfig.ts";
@@ -318,6 +319,8 @@ export default function lawyerHomeRoutes(app: Express) {
       if (!c) return;
       await ensureStageConfig();
       const b = await memberBundle(c.clientId);
+      // REL: after a reassignment the previous lawyer keeps the call record, not the member's profile.
+      if (!lawyerMaySee(c.providerId, b.client, b.matters, b.consultations)) return res.status(404).json({ error: "Consultation not found." });
       const priorSummaries = b.consultations
         .filter((x) => x.providerId === c.providerId && x.id !== c.id && x.summary?.status === "confirmed")
         .sort((a, z) => z.scheduledAt.localeCompare(a.scheduledAt))
@@ -362,9 +365,8 @@ export default function lawyerHomeRoutes(app: Express) {
       const clientId = req.params.id;
       await ensureStageConfig();
       const b = await memberBundle(clientId);
-      const assigned = b.client?.assignedProviderId === pid ||
-        b.matters.some((m) => m.assignedProviderId === pid) ||
-        b.consultations.some((c) => c.providerId === pid);
+      // REL: one access rule for bundle, brief and documents (members/lawyerAccess.ts).
+      const assigned = lawyerMaySee(pid, b.client, b.matters, b.consultations);
       if (!b.client || !assigned) return res.status(404).json({ error: "Member not found." });
       const mine = b.consultations
         .filter((c) => c.providerId === pid)

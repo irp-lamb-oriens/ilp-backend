@@ -41,6 +41,8 @@ import log from "./log.ts";
 import get from "../db/get.ts";
 import query from "../db/query.ts";
 import { type AuthedRequest, requireDashboardAuth, requireProviderAuth } from "./auth/session.ts";
+import { lawyerMaySee } from "../API/members/lawyerAccess.ts";
+import type { Consultation, Matter } from "../schemas/contracts.ts";
 
 export const DOCUMENTS_COLLECTION = "member_documents";
 export const DOCUMENT_MAX_BYTES = 15 * 1024 * 1024;
@@ -324,8 +326,8 @@ export async function lawyerAssignedTo(providerId: string, clientId: string): Pr
     query("matters", [{ field: "clientId", op: "EQUAL", value: clientId }]),
     query("consultations", [{ field: "clientId", op: "EQUAL", value: clientId }]),
   ]);
-  return (matters as Doc[]).some((m) => m.assignedProviderId === providerId) ||
-    (consultations as Doc[]).some((c) => c.providerId === providerId);
+  // REL: the shared rule (API/members/lawyerAccess.ts): open matters, live calls, a handoff still owed.
+  return lawyerMaySee(providerId, client, matters as unknown as Matter[], consultations as unknown as Consultation[]);
 }
 
 async function serveFile(req: Request, res: Response, actor: { email: string; role: string }, via: "staff" | "lawyer") {
