@@ -77,6 +77,8 @@ import { isListRequest, type ListSpec, mapProducer, respondList } from "../../he
 import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
 import type { RecordCollection } from "../../db/records.ts";
 import { ensureStageConfig } from "../dashboard/automation/stageConfig.ts";
+import get from "../../db/get.ts";
+import { clientName } from "../provider/lawyerHomeRoutes.ts";
 import { fieldValue, LIST_SCHEMAS, type ListSchema } from "../../schemas/listSchemas.ts";
 
 /** FILTERS: the field schema of each record list (schemas/listSchemas.ts). */
@@ -246,7 +248,15 @@ export default function membersRouter(app: Express) {
           meta = { byStage, openTotal: open.length, late };
         }
         return respondList(req, res, spec, (p) => ({
-          produce: pageRecords<Rec>(SLUG_TO_COLLECTION[slug] as RecordCollection, {}, p, spec, slugEqKeys(slug)),
+          // BOARDS: matter cards show the member's name; looked up per streamed batch only.
+          produce: slug === "matters"
+            ? mapProducer(pageRecords<Rec>(COLLECTIONS.matters, {}, p, spec, slugEqKeys(slug)), async (items) => {
+              const ids = [...new Set(items.map((m) => String(m.clientId ?? "")).filter(Boolean))];
+              const docs = await Promise.all(ids.map((id) => get(COLLECTIONS.clients, id).catch(() => null)));
+              const names = new Map(ids.map((id, i) => [id, clientName(docs[i] as Record<string, unknown> | null, "")]));
+              return items.map((m) => ({ ...m, memberName: names.get(String(m.clientId ?? "")) || undefined }));
+            })
+            : pageRecords<Rec>(SLUG_TO_COLLECTION[slug] as RecordCollection, {}, p, spec, slugEqKeys(slug)),
           meta,
         }));
       }

@@ -404,7 +404,7 @@ export default function lawyerHomeRoutes(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const pid = pidOf(req);
       if (!pid) return res.status(401).json({ error: "No provider identity on session." });
-      await ensureStageConfig();
+      const stageCfg = await ensureStageConfig();
       const includeClosed = req.query.closed === "1";
       const [matters, cons] = await Promise.all([
         findRecords<Matter>(COLLECTIONS.matters, { assignedProviderId: pid }, { sortBy: "stageEnteredAt" }),
@@ -448,7 +448,8 @@ export default function lawyerHomeRoutes(app: Express) {
             }
             return chunk.map((m) => buildCard(m, clients.get(m.clientId) ?? null, obligationsBy.get(m.clientId) ?? [], next.get(m.clientId) ?? null));
           }, 8),
-          meta: { stages: stageIds, stageLabels: getStageLabels(), counts, areas, total: visible.length },
+          // BOARDS: each stage's time limit, for the column's limit indicator.
+          meta: { stages: stageIds, stageLabels: getStageLabels(), counts, areas, total: visible.length, slaDays: Object.fromEntries(stageCfg.map((st) => [st.id, st.slaDays ?? null])) },
         }));
       }
       const clientIds = [...new Set(visible.map((m) => m.clientId))];
