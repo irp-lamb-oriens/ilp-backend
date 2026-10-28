@@ -2394,6 +2394,15 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         }, mem.activatedAt + HOUR, "open");
       }
     }
+    // DEADLINES: some members still have deadlines without a date a week after adding them.
+    if (mem.status === "active" && mem.i % 7 === 3 && NOW - mem.activatedAt > 8 * DAY) {
+      mkTask("obligation.needs_date_7d", {
+        clientId: mem.id,
+        sourceId: `${mem.id}_needs_date`,
+        sourceKind: "obligation",
+        detail: `${mem.first} ${mem.last}`,
+      }, mem.activatedAt + 8 * DAY, "auto");
+    }
     if (mem.status === "past_due") {
       mkTask("membership.past_due", { clientId: mem.id, sourceId: m.id, dedupeKey: `${m.id}_${String(m.pastDueSince).slice(0, 10)}`, detail: `${mem.first} ${mem.last}` },
         Date.parse(String(m.pastDueSince)), "open");

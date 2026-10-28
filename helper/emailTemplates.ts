@@ -360,6 +360,8 @@ export function obligationsDueEmail(o: {
   items: Array<{ title: string; dueLabel: string; daysLeft: number; confirm?: boolean }>;
   askUrl: string;
   unsubscribeUrl: string;
+  /** DEADLINES: a free account (no membership): no "ask your lawyer" offer, a link to their Deadlines page. */
+  free?: boolean;
 }): MemberEmail {
   const soon = o.items.some((i) => i.daysLeft <= 7);
   // `confirm`: a low-confidence research date. No firm date is shown; the lawyer confirms it.
@@ -372,11 +374,13 @@ export function obligationsDueEmail(o: {
     subject: soon ? "A date that may require review this week" : "Coming up: dates that may require review",
     firstName: o.firstName,
     paragraphs: [
-      o.items.length === 1 ? "A date on your ILP profile is coming up and may require review:" : "Some dates on your ILP profile are coming up and may require review:",
+      o.items.length === 1 ? `A date on your ILP ${o.free ? "deadlines list" : "profile"} is coming up and may require review:` : `Some dates on your ILP ${o.free ? "deadlines list" : "profile"} are coming up and may require review:`,
       ...list,
-      "Not every date applies to everyone. If you are not sure whether this one applies to you, ask your lawyer. It is part of your membership.",
+      o.free
+        ? "Not every date applies to everyone. You saved this list from the free ILP check. You can change a date, turn reminders off or remove an item on your Deadlines page. ILP members can ask a lawyer licensed in their country whether a date applies to them."
+        : "Not every date applies to everyone. If you are not sure whether this one applies to you, ask your lawyer. It is part of your membership.",
     ],
-    cta: { label: "Ask my lawyer", url: o.askUrl },
+    cta: o.free ? { label: "See my deadlines", url: o.askUrl } : { label: "Ask my lawyer", url: o.askUrl },
     unsubscribeUrl: o.unsubscribeUrl,
   });
 }

@@ -5,6 +5,8 @@
  *   membership.renewal_7d  — active membership whose period ends within 7 days
  *   quote.unanswered_5d    — a quote with status "sent" for 5+ days
  *   document.missing_3d    — a document-type pending action overdue by 3+ days
+ *   obligation.needs_date_7d — DEADLINES: a member with deadlines still without a
+ *                            date 7+ days after they were added (one task per member)
  *
  * emitEvent is idempotent (task id = event + source), so re-running is safe.
  * The pure selectors are exported for tests.
@@ -14,7 +16,8 @@ import { isQuoteAwaitingClient, quoteKey, quoteSentAt } from "../schemas/quoteSt
 import getAll from "../db/getAll.ts";
 import { findRecords } from "../db/records.ts";
 import log from "../helper/log.ts";
-import { COLLECTIONS, type Membership } from "../schemas/contracts.ts";
+import { COLLECTIONS, type Membership, type Obligation } from "../schemas/contracts.ts";
+import { needsDateClients } from "../API/members/deadlines.ts";
 import { emitEvent, type EventName, type EventPayload } from "../API/members/events.ts";
 
 const DAY = 86400_000;
@@ -69,14 +72,26 @@ export function missingDocumentEvents(clients: Doc[], now: Date): Array<[EventNa
   return out;
 }
 
+/** DEADLINES: members (active memberships) with needsDate deadlines older than 7 days. Free accounts get no CSM task. */
+export function needsDateEvents(obligations: Obligation[], memberships: Membership[], now: Date): Array<[EventName, EventPayload]> {
+  const members = new Set(memberships.filter((m) => m.status === "active").map((m) => m.clientId));
+  return needsDateClients(obligations, members, now).map((clientId) => ["obligation.needs_date_7d", {
+    clientId,
+    sourceId: `${clientId}_needs_date`,
+    sourceKind: "obligation",
+  }]);
+}
+
 export async function taskRuleSweep(): Promise<void> {
   const now = new Date();
-  const [memberships, clients] = await Promise.all([
+  const [memberships, clients, obligations] = await Promise.all([
     findRecords<Membership>(COLLECTIONS.memberships, { status: "active" }),
     getAll(COLLECTIONS.clients) as Promise<Doc[]>,
+    findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }),
   ]);
   const events = [
     ...renewalEvents(memberships, now),
+    ...needsDateEvents(obligations, memberships, now),
     ...unansweredQuoteEvents(clients, now),
     ...missingDocumentEvents(clients, now),
   ];
