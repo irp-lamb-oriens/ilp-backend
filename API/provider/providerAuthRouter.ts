@@ -12,6 +12,9 @@
  * the session and attached to every subsequent request by
  * `requireProviderAuth`.
  *
+ * Applicants (status pending_review or changes_requested, T2) may sign in;
+ * a declined application gets 403 at both steps (providerLoginBlock).
+ *
  * Routes:
  *   POST /api/provider/auth/request-otp
  *   POST /api/provider/auth/verify-otp
@@ -32,6 +35,7 @@ import {
   emailToDocId,
 } from "../../helper/auth/otp.ts";
 import { requireProviderAuth } from "../../helper/auth/session.ts";
+import { providerLoginBlock } from "../providers/applyLogic.ts";
 
 /** Resolve a provider doc by email (case-insensitive). */
 async function findProviderByEmail(email: string): Promise<Record<string, unknown> | null> {
@@ -67,6 +71,9 @@ export default function providerAuthRouter(app: Express) {
       if (!provider) {
         return res.status(404).json({ error: "No lawyer account found for this email." });
       }
+      // T2: applicants in review may sign in (they cannot take calls); declined ones may not.
+      const blocked = providerLoginBlock(provider);
+      if (blocked) return res.status(403).json({ error: blocked, code: "application_declined" });
 
       const normalizedEmail = email.trim().toLowerCase();
       const issued = await issueOtp("provider_otps", emailToDocId(normalizedEmail), normalizedEmail);
@@ -113,6 +120,8 @@ export default function providerAuthRouter(app: Express) {
       if (!provider) {
         return res.status(404).json({ error: "No lawyer account found for this email." });
       }
+      const blocked = providerLoginBlock(provider);
+      if (blocked) return res.status(403).json({ error: blocked, code: "application_declined" });
 
       const token = generateSessionToken();
       const sessionExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);

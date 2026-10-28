@@ -38,6 +38,7 @@ import {
   PLAN_STANDARD,
 } from "../../schemas/contracts.ts";
 import { emitEvent, taskIdFor } from "../members/events.ts";
+import { applicationBlocksCalls } from "../providers/applyLogic.ts";
 import { RECORDING_WITHDRAWN_MESSAGE, recordingAllowedFor } from "../privacy/policy.ts";
 import {
   currentMembership,
@@ -156,6 +157,9 @@ async function heldBy(providerId: string, fromMs: number, excludeId?: string): P
  * the daily cap. `excludeId` ignores one consultation (the one being moved).
  */
 export async function slotsFor(providerId: string, now = new Date(), excludeId?: string): Promise<string[]> {
+  // T2: a lawyer whose application is in review (or declined) offers no times.
+  const provider = (await get("providers", providerId).catch(() => null)) as Doc | null;
+  if (applicationBlocksCalls(provider)) return [];
   const availability = await loadAvailability(providerId);
   const held = await heldBy(providerId, now.getTime(), excludeId);
   let busy: Array<{ start: string; end: string }> = [];
@@ -217,6 +221,9 @@ async function lawyerCandidates(area: string, placeholderMember = false): Promis
   for (const [providerId, specialties] of byId) {
     if (!specialties.length) continue;
     if (isPlaceholderId(providerId) !== placeholderMember) continue;
+    // T2: availability alone does not make a lawyer bookable; applicants in review are skipped.
+    const profile = (await get("providers", providerId).catch(() => null)) as Doc | null;
+    if (applicationBlocksCalls(profile)) continue;
     const load = (await findRecords<Consultation>(COLLECTIONS.consultations, { providerId, status: "booked" }).catch(() => [])).length;
     out.push({ providerId, specialties, load });
   }

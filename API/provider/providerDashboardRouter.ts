@@ -52,6 +52,7 @@ import {
   stripProviderWrites,
 } from "./lawyerView.ts";
 import lawyerHomeRoutes from "./lawyerHomeRoutes.ts";
+import { isProviderBookable, providerStatus } from "../providers/applyLogic.ts";
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -109,6 +110,12 @@ export default function providerDashboardRouter(app: Express) {
         score: doc?.score ?? null,
         legalAreas: doc?.legalAreas ?? [],
         jurisdictions: doc?.jurisdictions ?? [],
+        // T2: application state for the "Finish your profile" checklist.
+        status: providerStatus(doc),
+        canTakeCalls: isProviderBookable(doc),
+        reviewNote: doc?.status === "changes_requested" ? (doc?.reviewNote ?? null) : null,
+        submittedAt: (doc?.application as Record<string, unknown> | undefined)?.submittedAt ?? null,
+        hasBio: typeof doc?.bio === "string" && doc.bio.trim().length > 0,
       });
     })
   );
