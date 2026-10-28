@@ -417,7 +417,7 @@ export interface CsmTask {
   dueAt: Iso;
   status: CsmTaskStatus;
   outcome?: string; // required when status = done
-  source: { kind: "membership" | "consultation" | "handoff" | "quote" | "document" | "privacy_request" | "manual"; id?: string };
+  source: { kind: "membership" | "consultation" | "handoff" | "quote" | "document" | "privacy_request" | "obligation" | "manual"; id?: string };
   createdAt: Iso;
   closedAt?: Iso;
 }
@@ -437,20 +437,65 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "call.link_failed": { type: "follow_up", dueInHours: 4, title: "Meet link failed: send link" }, // P3 calendar failure
   "privacy.request_received": { type: "privacy", dueInHours: 24, title: "Privacy request: respond by due date" }, // P6 data-rights request
   "member.unassigned_country": { type: "follow_up", dueInHours: 24, title: "Match a lawyer licensed in the member's country" }, // COUNTRIES: no partner lawyer in the member's country yet
+  "obligation.needs_date_7d": { type: "follow_up", dueInHours: 72, title: "Help the member set dates for their deadlines" }, // DEADLINES: needsDate items older than 7 days
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────
+/** DEADLINES: where an obligation came from. Older records have none (read as "check"). */
+export type ObligationSource = "check" | "picker" | "lawyer" | "staff";
+export const OBLIGATION_SOURCES: readonly ObligationSource[] = ["check", "picker", "lawyer", "staff"];
+
 export interface Obligation {
   id: string;
   clientId: string;
   country: CountryCode;
   ruleId: string;
   title: string; // worded as "may require review"
-  dueAt?: Iso;
+  dueAt?: Iso; // computed from the rule and the person's answers
   status: "upcoming" | "asked" | "handled" | "dismissed";
   windowStartAt?: Iso;
   confidence?: "high" | "medium" | "low"; // "low": members see "Ask your lawyer to confirm this date", not the date
   dueText?: string;
+  // DEADLINES: the person's own list (free check selection, picker, Deadlines page)
+  area?: string; // the rule's area, copied so lists can filter by it
+  source?: ObligationSource;
+  userDueAt?: Iso | null; // a date the person set; shown and reminded instead of dueAt
+  needsDate?: boolean; // no computed date, or a low-confidence one: the person is asked to set one
+  remind?: boolean; // reminder emails at 30 and 7 days; absent = true
+  dismissedAt?: Iso | null; // removed from the list by the person (status "dismissed"); undo clears it
+  notes?: string; // the person's own note, up to 500 characters
+  createdAt?: Iso;
+  updatedAt?: Iso;
+}
+
+/** DEADLINES: the date shown and reminded for an obligation: the person's own date, else the computed one. */
+export function obligationDueAt(o: Pick<Obligation, "dueAt" | "userDueAt">): Iso | undefined {
+  return o.userDueAt || o.dueAt || undefined;
+}
+
+/** DEADLINES: true when the obligation still has no date the person can rely on. */
+export function obligationNeedsDate(o: Pick<Obligation, "dueAt" | "userDueAt" | "confidence" | "needsDate">): boolean {
+  if (o.userDueAt) return false;
+  return o.needsDate === true || !o.dueAt || o.confidence === "low";
+}
+
+// ─── Account type (DEADLINES: free accounts) ──────────────────────────────
+/**
+ * A person who saves deadlines from the free check gets a free ILP account:
+ * a client record with `accountType: "free"` and no paid membership. They
+ * sign in to /status and see Overview, Deadlines, Profile and Privacy.
+ * Joining later upgrades the same record (`accountType: "member"`).
+ */
+export type AccountType = "free" | "member";
+export const ACCOUNT_TYPE_FIELD = "accountType";
+
+/** Error code a member-only route answers a free account with (HTTP 402). */
+export const MEMBERSHIP_REQUIRED = "membership_required";
+
+/** "member" when a membership other than an unpaid one exists; "free" only for records marked free. Older records stay members. */
+export function accountTypeOf(client: Record<string, unknown> | null | undefined, membership: Pick<Membership, "status"> | null | undefined): AccountType {
+  if (membership && membership.status !== "pending") return "member";
+  return client?.[ACCOUNT_TYPE_FIELD] === "free" ? "free" : "member";
 }
 
 /**

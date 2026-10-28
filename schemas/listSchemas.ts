@@ -516,6 +516,20 @@ export const APPLICATION_STATUS_OPTIONS = opts([["pending_review", "Waiting for 
 export const CONSULTATION_STATUS_OPTIONS = opts([["booked", "Booked"], ["in_progress", "In progress"], ["completed", "Completed"], ["no_show", "No-show"], ["cancelled", "Cancelled"]]);
 export const OBLIGATION_STATUS_OPTIONS = opts([["upcoming", "Upcoming"], ["asked", "Asked the lawyer"], ["handled", "Handled"], ["dismissed", "Dismissed"]]);
 export const TASK_STATUS_OPTIONS = opts([["open", "Open"], ["done", "Done"], ["cancelled", "Cancelled"]]);
+/** DEADLINES: the person's own deadlines on /status/deadlines. */
+export const DEADLINE_AREA_OPTIONS = opts([
+  ["immigration", "Residency and visas"],
+  ["property", "Property"],
+  ["corporate", "Your company"],
+  ["tax", "Taxes"],
+  ["vehicle", "Vehicle"],
+  ["employment", "People who work for you"],
+  ["estate", "Family and estate"],
+  ["identity", "IDs and registrations"],
+  ["cross_border", "Home-country filings"],
+]);
+export const DEADLINE_STATUS_OPTIONS = opts([["upcoming", "To do"], ["asked", "Asked the lawyer"], ["handled", "Done"]]);
+export const DEADLINE_SOURCE_OPTIONS = opts([["check", "From the free check"], ["picker", "Added by you"], ["lawyer", "Added by your lawyer"], ["staff", "Added by your ILP team"]]);
 
 // ── Server lists (every route that answers the helper/listing.ts contract) ──
 
@@ -725,6 +739,17 @@ export const LIST_SCHEMAS = {
       { key: "matterId", label: "Matter", type: "enum", serverParam: "matterId" },
       { key: "uploadedAt", label: "Added", type: "date", sortable: true, quick: true },
       { key: "size", label: "Size", type: "number", defaultVisible: false },
+    ],
+  }),
+  memberDeadlines: defineListSchema({
+    id: "member-deadlines",
+    fields: [
+      { key: "title", label: "Deadline", type: "text", searchable: true, sortable: true },
+      { key: "shownDueAt", label: "Date", type: "date", sortable: true },
+      { key: "area", label: "Area", type: "enum", options: DEADLINE_AREA_OPTIONS, quick: true },
+      { key: "status", label: "Status", type: "enum", options: DEADLINE_STATUS_OPTIONS, quick: true },
+      { key: "hasDate", label: "Has a date", type: "boolean" },
+      { key: "source", label: "Added from", type: "enum", options: DEADLINE_SOURCE_OPTIONS },
     ],
   }),
   memberMessages: defineListSchema({
