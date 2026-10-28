@@ -28,7 +28,8 @@ import {
 } from "../schemas/contracts.ts";
 import { buildTask, type EventPayload } from "../API/members/events.ts";
 import { opportunityFromHandoff } from "../API/opportunities/logic.ts";
-import { type CheckAnswers, evaluateCheck } from "../API/leads/deadlineCheck.ts";
+import { type CheckAnswers, evaluateCheck, normalizeAnswers } from "../API/leads/deadlineCheck.ts";
+import { COUNTRIES, COUNTRY_ANSWERS_FIELD, type CountryCode } from "../schemas/contracts.ts";
 import { lineClientPrice } from "../API/dashboard/quotePricing.ts";
 import { LEGAL_VERSIONS } from "../API/privacy/policy.ts";
 import { CANCEL_REASONS } from "../API/payments/cancel.ts";
@@ -58,6 +59,10 @@ import {
   PROPERTY_LABEL,
   PROPERTY_WEIGHTS,
   type PropertyKind,
+  ACCOUNT_LAWYER_COUNTRIES,
+  COUNTRY_PLACES,
+  COUNTRY_WEIGHTS,
+  LAWYER_COUNTRIES,
   PROVINCES,
   PRONOUNS,
   RESIDENCIES,
@@ -774,7 +779,137 @@ export const defaultBatch = (size: SeedSize, seed: number) => `ph-${size}-${seed
 const pad = (n: number, w = 3) => String(n).padStart(w, "0");
 const slug = (s: string) =>
   s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, ".").replace(/^\.|\.$/g, "");
-const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
+/**
+ * COUNTRIES: the matter scripts were written for Costa Rica. For a member in
+ * another country, the Costa Rican names of IDs, offices and fees become that
+ * country's (from docs/research), so the story reads right.
+ */
+const LOCAL_TERMS: Record<Exclude<CountryCode, "CR">, Array<[RegExp, string]>> = {
+  CO: [[/\bDIMEX\b/g, "cédula de extranjería"], [/\b(the )?(Caja|CCSS)\b/g, "$1social security (PILA)"], [/\bmarchamo\b/g, "vehicle tax"], [/\bRTBF\b/g, "RUB"], [/\bHacienda\b/g, "DIAN"], [/\bRegistro Nacional\b/g, "Cámara de Comercio"], [/\bMigración\b/g, "Migración Colombia"]],
+  PA: [[/\bDIMEX\b/g, "carné de residente"], [/\b(the )?(Caja|CCSS)\b/g, "$1CSS"], [/\bmarchamo\b/g, "plate renewal"], [/\bRTBF\b/g, "beneficial-owner register"], [/\bHacienda\b/g, "DGI"], [/\bRegistro Nacional\b/g, "Registro Público"], [/\bMigración\b/g, "Servicio Nacional de Migración"]],
+  MX: [[/\bDIMEX\b/g, "resident card"], [/\b(the )?(Caja|CCSS)\b/g, "$1IMSS"], [/\bmarchamo\b/g, "refrendo"], [/\bRTBF\b/g, "beneficial-owner records"], [/\bHacienda\b/g, "SAT"], [/\bRegistro Nacional\b/g, "Registro Público"], [/\bMigración\b/g, "INM"]],
+  ES: [[/\bDIMEX\b/g, "TIE"], [/\b(the )?(Caja|CCSS)\b/g, "$1Seguridad Social"], [/\bmarchamo\b/g, "vehicle tax (IVTM)"], [/\bRTBF\b/g, "beneficial-owner form"], [/\bHacienda\b/g, "Agencia Tributaria"], [/\bRegistro Nacional\b/g, "Registro Mercantil"], [/\bMigración\b/g, "Extranjería"]],
+  PT: [[/\bDIMEX\b/g, "residence card"], [/\b(the )?(Caja|CCSS)\b/g, "$1Segurança Social"], [/\bmarchamo\b/g, "IUC"], [/\bRTBF\b/g, "RCBE"], [/\bHacienda\b/g, "Autoridade Tributária"], [/\bRegistro Nacional\b/g, "Conservatória"], [/\bMigración\b/g, "AIMA"]],
+};
+export function localize(text: string, country?: string): string {
+  if (!country || country === "CR" || !(country in LOCAL_TERMS)) return text;
+  const c = country as Exclude<CountryCode, "CR">;
+  let out = text.replace(/Costa Rican/g, COUNTRIES[c].adjective).replace(/Costa Rica/g, COUNTRIES[c].name);
+  for (const [re, to] of LOCAL_TERMS[c]) out = out.replace(re, to);
+  return out;
+}
+/** The yearly company obligation an "obligation" opportunity starts from, per country (lower-case rule id). */
+const COMPANY_RULE: Record<CountryCode, string> = {
+  CR: "cr_corp_entity_tax", CO: "co_co_matricula_renewal", PA: "pa_corp_tasa_unica", MX: "mx_co_annual_return", ES: "es_co_accounts_deposit", PT: "pt_co_ies",
+};
+const fill = (s: string, v: Record<string, string>) => localize(s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? ""), v.country);
+
+/**
+ * A member's free-check answers in their country's questions (docs/research),
+ * from the generator's situation. Costa Rica keeps the first check's answers,
+ * which normalizeAnswers translates.
+ */
+function seedCountryAnswers(country: CountryCode, x: {
+  residency: string; resident: boolean; expires?: string; entry?: string; property: string; company: string; vehicle: string; employees: string; place: string;
+}): Record<string, unknown> {
+  const owns = x.property !== "none";
+  const rents = x.property === "airbnb_rental";
+  const hasCo = x.company !== "none";
+  const car = x.vehicle !== "none";
+  const staff = x.employees !== "none";
+  switch (country) {
+    case "CO": {
+      const rs = x.residency === "permanent" ? "visa_R" : x.residency === "digital_nomad" ? "visa_digital_nomad" : x.resident ? "visa_M" : x.residency === "refused" ? "unsure" : "visitor";
+      return {
+        residencyStatus: rs,
+        ...(rs.startsWith("visa_") && x.expires ? { visaExpiryDate: x.expires } : {}),
+        ...(rs === "visitor" && x.entry ? { entryDate: x.entry } : {}),
+        daysInColombia: x.resident ? "gt183" : "lt120",
+        ownsProperty: !owns ? "no" : x.place === "Medellín" ? "medellin" : x.place === "Bogotá" ? "bogota" : "other",
+        boughtWithForeignFunds: owns ? "yes_registered" : "na",
+        rentsProperty: rents ? "short_term" : "no",
+        hasCompany: hasCo ? "yes" : "no",
+        ownsVehicle: !car ? "no" : x.place === "Bogotá" ? "bogota" : x.place === "Medellín" ? "antioquia" : "other",
+        hasEmployees: staff ? "yes_colombian" : "no",
+        hasForeignAssetsOver2000UVT: "yes",
+      };
+    }
+    case "PA": {
+      const rs = x.residency === "pensionado" || x.residency === "permanent" ? "permanent_resident" : x.residency === "in_process" ? "application_pending"
+        : x.residency === "digital_nomad" ? "remote_worker_visa" : x.resident ? "provisional_resident" : x.residency === "refused" ? "not_sure" : "tourist";
+      return {
+        residencyStatus: rs,
+        ...(rs === "permanent_resident" || rs === "provisional_resident" || rs === "application_pending" ? { residencyProgram: x.residency === "pensionado" ? "pensionado" : "friendly_nations" } : {}),
+        ...(rs === "tourist" && x.entry ? { keyDate: x.entry } : x.expires && rs !== "remote_worker_visa" && rs !== "not_sure" ? { keyDate: x.expires } : {}),
+        ownsProperty: !owns ? "no" : hasCo ? "yes_through_company" : rents ? "yes_second_home" : "yes_primary_home",
+        ...(owns ? { rentsOutProperty: rents ? "short_term" : "no", hasPanamaWill: "no" } : {}),
+        hasCompany: hasCo ? "sociedad_anonima" : "no",
+        ...(hasCo ? { incorporationHalf: "jan_jun" } : {}),
+        businessOperatesInPanama: x.employees === "small_business" ? "yes" : "no",
+        ownsVehicle: car ? "yes" : "no",
+        ...(car ? { vehicleRenewalMonth: "3" } : {}),
+        hasEmployees: !staff ? "no" : x.employees === "small_business" ? "business_staff" : "domestic_staff",
+        hasPanamaIncome: rents || x.employees === "small_business" ? "yes" : "no",
+      };
+    }
+    case "MX": {
+      const rs = x.residency === "permanent" ? "permanent" : x.residency === "in_process" ? "residency_visa_not_yet_exchanged"
+        : x.resident ? "temporary" : x.residency === "refused" ? "not_living_in_mexico" : "visitor";
+      const coastal = ["Puerto Vallarta", "Mérida", "Playa del Carmen"].includes(x.place);
+      const state: Record<string, string> = { "San Miguel de Allende": "Guanajuato", "Mérida": "Yucatán", "Puerto Vallarta": "Jalisco", "Playa del Carmen": "Quintana Roo" };
+      return {
+        residencyStatus: rs,
+        ...(rs === "temporary" && x.expires ? { residencyCardExpiry: x.expires } : {}),
+        ...(rs === "visitor" && x.entry ? { visitorAuthorizedUntil: ymd(Date.parse(`${x.entry}T12:00:00Z`) + 180 * DAY) } : {}),
+        ownsProperty: owns ? "yes" : "no",
+        ...(owns ? { holdingStructure: coastal ? "fideicomiso" : "direct_title", propertyInRestrictedZone: coastal ? "yes" : "no" } : {}),
+        rentsOutProperty: rents ? "short_term_platform" : "no",
+        hasCompany: hasCo ? "yes" : "no",
+        ownsVehicle: !car ? "no" : x.vehicle === "imported" ? "foreign_plates_with_TIP" : "mexican_plates",
+        hasEmployees: !staff ? "no" : x.employees === "small_business" ? "company_staff" : "domestic_worker",
+        hasMexicanWill: "no",
+        state: state[x.place] ?? "other",
+      };
+    }
+    case "ES": {
+      const rs = x.residency === "pensionado" || x.residency === "rentista" ? "nonLucrative" : x.residency === "inversionista" ? "goldenVisa"
+        : x.residency === "permanent" ? "longTerm" : x.residency === "digital_nomad" ? "digitalNomad" : x.resident ? "other" : "visitor";
+      const region: Record<string, string> = { Valencia: "valencia", "Málaga": "andalucia", Madrid: "madrid" };
+      return {
+        residencyStatus: rs,
+        ...(rs !== "visitor" && x.expires ? { permitExpiryDate: x.expires } : {}),
+        isTaxResident: x.resident ? "yes" : "no",
+        region: region[x.place] ?? "otra",
+        ownsProperty: owns ? "yes" : "no",
+        ...(owns ? { rentsOutProperty: rents ? "yes" : "no" } : {}),
+        ownsVehicle: car ? "spanishPlated" : "no",
+        hasCompany: hasCo ? "yes" : "no",
+        hasEmployees: staff ? "yes" : "no",
+        hasForeignAssetsOver50k: "yes",
+        hasForeignCryptoOver50k: "no",
+        netWealthBand: "under2M",
+      };
+    }
+    case "PT": {
+      const rs = x.residency === "inversionista" ? "golden_visa" : x.residency === "permanent" ? "permanent_resident" : x.residency === "in_process" ? "residence_visa_holder"
+        : x.resident || x.residency === "digital_nomad" ? "temporary_resident" : "visitor";
+      return {
+        residencyStatus: rs,
+        ...(["temporary_resident", "golden_visa", "permanent_resident"].includes(rs) && x.expires ? { permitExpiryDate: x.expires } : {}),
+        isTaxResident: x.resident ? "yes" : "no",
+        ...(x.resident ? { taxRegime: "none" } : {}),
+        ownsProperty: !owns ? "no" : hasCo ? "company" : "yes",
+        ...(owns ? { propertyValueBand: "under_600k", rentsOutProperty: rents ? "short_term" : "no" } : {}),
+        hasCompany: hasCo ? "yes" : "no",
+        ownsVehicle: car ? "yes" : "no",
+        hasEmployees: staff ? "yes" : "no",
+        hasPortugueseWill: "yes_home",
+      };
+    }
+    default:
+      return {};
+  }
+}
 const dollars = (n: number) => Math.round(n * 100) / 100;
 
 /** Fake Meet link in Google's xxx-xxxx-xxx shape, stable per id. */
@@ -810,6 +945,8 @@ interface Member {
   phone: string;
   persona: Persona;
   loc: Loc;
+  /** COUNTRIES: the country the membership covers. */
+  country: CountryCode;
   profile: Doc;
   answers: CheckAnswers;
   csm: string;
@@ -859,6 +996,9 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const csms = staff.filter((s) => s.role !== "admin");
   const admin = staff.find((s) => s.role === "admin") ?? staff[0];
 
+  /** COUNTRIES: lawyer i's country of practice (lawyer 0, the account lawyer, is in Costa Rica). */
+  const lawyerOrder = opts.focus ? ACCOUNT_LAWYER_COUNTRIES : LAWYER_COUNTRIES;
+  const lawyerCountry = (i: number): CountryCode => lawyerOrder[i % lawyerOrder.length];
   const lawyers = LAWYERS.slice(0, cfg.lawyers).map((l, i) => {
     const focus0 = i === 0 && opts.focus ? opts.focus : null;
     const id = focus0 ? focus0.lawyerId : `${PLACEHOLDER_PREFIX}prov_${pad(i + 1, 2)}`;
@@ -882,9 +1022,13 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       phone: `+1 202 555 01${pad(10 + i, 2)}`,
       contactPerson: l.name,
       legalAreas: [...new Set(l.areas.map((a) => PROVIDER_AREA[a]))],
-      jurisdictions: ["Costa Rica"],
-      languages: ["es", "en"],
-      credentials: `Colegio de Abogados y Abogadas de Costa Rica, carné PH-${pad(20000 + i * 37, 5)} (placeholder)`,
+      jurisdictions: [lawyerCountry(i)],
+      country: lawyerCountry(i),
+      timezone: COUNTRIES[lawyerCountry(i)].defaultTimeZone,
+      languages: lawyerCountry(i) === "PT" ? ["pt", "en"] : ["es", "en"],
+      credentials: lawyerCountry(i) === "CR"
+        ? `Colegio de Abogados y Abogadas de Costa Rica, carné PH-${pad(20000 + i * 37, 5)} (placeholder)`
+        : `${COUNTRIES[lawyerCountry(i)].lawyerBody.name}, ${COUNTRIES[lawyerCountry(i)].lawyerBody.numberLabel.toLowerCase()} PH-${pad(20000 + i * 37, 5)} (placeholder)`,
       insurance: "Professional liability policy on file (placeholder)",
       slaStatus: "signed",
       notes: "Placeholder lawyer for demos. Not a real person.",
@@ -912,7 +1056,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     add(COLLECTIONS.availability, {
       id: l.id,
       providerId: l.id,
-      timezone: "America/Costa_Rica",
+      timezone: COUNTRIES[lawyerCountry(i)].defaultTimeZone,
       weekly: days.flatMap((day) => [
         { day, start: morning[0], end: morning[1] },
         ...(i % 2 === 0 || day !== 5 ? [{ day, start: afternoon[0], end: afternoon[1] }] : []),
@@ -927,9 +1071,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   }
   // Account seed: lawyer 0's book is chosen per member (focusMember), never by load.
   const pickable = opts.focus && lawyers.length > 1 ? lawyers.slice(1) : lawyers;
-  const lawyerFor = (area: Area): (typeof lawyers)[number] => {
-    const cands = pickable.filter((l) => l.areas.includes(area));
-    const pool = cands.length ? cands : pickable;
+  // COUNTRIES: only a lawyer licensed in the member's country; none there leaves the matter unassigned.
+  const lawyerFor = (area: Area, country: CountryCode = "CR"): (typeof lawyers)[number] | null => {
+    const inCountry = (lawyers.length > 1 ? pickable : lawyers).filter((l) => lawyerCountry(lawyers.indexOf(l)) === country);
+    const fallbackCr = country === "CR" && !inCountry.length ? lawyers.filter((l) => lawyerCountry(lawyers.indexOf(l)) === "CR") : [];
+    const local = inCountry.length ? inCountry : fallbackCr;
+    if (!local.length) return null;
+    const cands = local.filter((l) => l.areas.includes(area));
+    const pool = cands.length ? cands : local;
     const min = Math.min(...pool.map((l) => l.load));
     const best = pool.filter((l) => l.load === min);
     const l = rng.pick(best);
@@ -970,6 +1119,11 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     province: rng.shuffle(PROVINCES),
     pets: rng.shuffle(PETS.map((_, k) => k)),
   };
+  // COUNTRIES: an own stream, so spreading members across countries keeps every other draw as it was.
+  const crng = new Rng(opts.seed * 17 + 5);
+  crng.reseed("country-perm");
+  // Fixed order: the first lawyers' countries come first, so in the demo they have members with calls.
+  const countryPerm: CountryCode[] = ["ES", "MX", "CO", "PA", "PT"];
   const cover = <T>(values: readonly T[], weights: ReadonlyArray<readonly [T, number]>, slot: number): T =>
     slot >= 0 && slot < values.length ? values[slot] : rng.weighted(weights);
   // CSM load: the first CSM carries the most members; a third CSM (new hire) has none yet.
@@ -1020,7 +1174,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const employees: EmployeeKind = i === 0 ? "domestic" : cover(perms.employees, EMPLOYEE_WEIGHTS, slot);
     const household: Household = cover(perms.household, HOUSEHOLDS.map((h) => [h, h === "married" ? 40 : h === "single" ? 15 : 9] as [Household, number]), i);
     const province = cover(perms.province, PROVINCES.map((p) => [p, p === "Guanacaste" || p === "San José" ? 25 : 10] as [(typeof PROVINCES)[number], number]), i);
-    const loc: Loc = { place: rng.pick(PLACES[province]), province };
+    const crPlace = rng.pick(PLACES[province]);
+    // Fixed roles stay in Costa Rica (the unassigned one is in a country with fewer lawyers);
+    // then one member per other country, then weighted.
+    crng.reseed("country", i);
+    const country: CountryCode = i === ROLE.unassigned ? "PT" : i <= 10 ? "CR"
+      : i - 11 < countryPerm.length ? countryPerm[i - 11] : crng.weighted(COUNTRY_WEIGHTS);
+    const away = country === "CR" ? null : crng.pick(COUNTRY_PLACES[country]);
+    const loc: Loc = away ? { place: away.place, province: away.region } : { place: crPlace, province };
     const persona: Persona = residency === "pensionado" ? "retiree"
       : residency === "digital_nomad" ? "remote"
       : ["in_process", "refused", "temporary"].includes(residency) ? "applicant"
@@ -1102,7 +1263,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         delete profile[k];
       }
     }
-    const answers: CheckAnswers = {
+    const legacyAnswers: Record<string, unknown> = {
       country: "CR",
       residencyStatus: resident ? "resident" : residency === "in_process" ? "applying" : residency === "refused" ? "unsure" : "visitor",
       ...(resident && residencyExpiresAt ? { residencyExpiresAt } : {}),
@@ -1115,6 +1276,25 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       ownsVehicle: vehicle !== "none",
       hasEmployees: employees !== "none",
     };
+    const rawAnswers = country === "CR" ? legacyAnswers : {
+      country,
+      ...seedCountryAnswers(country, {
+        residency, resident, expires: residencyExpiresAt,
+        entry: typeof legacyAnswers.lastEntryDate === "string" ? legacyAnswers.lastEntryDate : undefined,
+        property, company: companyKind, vehicle, employees, place: loc.place,
+      }),
+    };
+    const answers: CheckAnswers = normalizeAnswers(rawAnswers).answers!;
+    if (country !== "CR") {
+      // The profile speaks the member's country: residency value, country answers, time zone.
+      if (profile.residencyStatus !== undefined) profile.residencyStatus = answers.residencyStatus ?? profile.residencyStatus;
+      delete profile.dimexNumber;
+    }
+    if (Object.keys(profile).length > 1) {
+      profile.legalCountry = country;
+      profile[COUNTRY_ANSWERS_FIELD] = Object.fromEntries(Object.entries(answers).filter(([k]) => k !== "country"));
+      profile.timezone = COUNTRIES[country].defaultTimeZone;
+    }
 
     // Membership status
     let status: Membership["status"] = "active";
@@ -1139,7 +1319,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       clientId: id,
       plan: PLAN_STANDARD.id,
       status,
-      country: "CR",
+      country,
       periodStart: "",
       periodEnd: "",
       minutesIncluded: PLAN_STANDARD.minutesIncluded,
@@ -1199,7 +1379,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       m.activationPaidAt = iso(activatedAt);
     }
     const member: Member = {
-      i, id, first, last, email, phone, persona, loc, profile, answers,
+      i, id, first, last, email, phone, persona, loc, country, profile, answers,
       csm: m.csmEmail as string,
       status, activatedAt, periods, membership: m, cancelAt,
       aiConsent: i === ROLE.complete || rng.chance(0.65),
@@ -1211,11 +1391,13 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const aliasClientId = opts.memberEmail || opts.focus ? members[0].id : null;
   // Account seed: which members' matters all go to lawyer 0 (own stream, so the rest of the story keeps its draws).
   const frng = new Rng(opts.seed * 31 + 1);
+  const crShare = Math.max(0.05, members.filter((m) => m.country === "CR").length / Math.max(1, members.length));
   const focusMember = (mem: Member): boolean => {
-    if (!opts.focus || mem.i === ROLE.unassigned) return false;
+    if (!opts.focus || mem.i === ROLE.unassigned || mem.country !== "CR") return false;
     if (mem.i === 0) return true;
     frng.reseed("focus", mem.i);
-    return frng.chance(opts.focus.lawyerShare ?? 0.4);
+    // Only Costa Rica members can go to the (Costa Rica) account lawyer, so their share is scaled up.
+    return frng.chance(Math.min(1, (opts.focus.lawyerShare ?? 0.4) / crShare));
   };
   for (const mem of members) add(COLLECTIONS.memberships, mem.membership);
 
@@ -1229,12 +1411,12 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   const newAnon = () => `ph_anon_${pad(++anonN, 5)}`;
   const leadDoc = (email: string, name: string | undefined, answers: CheckAnswers, createdAt: number, extra: Partial<Lead> = {}): Lead & Doc => {
     const id = `${PLACEHOLDER_PREFIX}lead_${pad(++leadN, 4)}`;
-    const findings = evaluateCheck(answers, new Date(createdAt)).map(({ ruleId, title, dueAt, area }) => ({ ruleId, title, dueAt, area }));
+    const findings = evaluateCheck(answers, new Date(createdAt)).map(({ ruleId, title, dueAt, area, confidence, dueText }) => ({ ruleId, title, area, ...(dueAt ? { dueAt } : {}), ...(confidence ? { confidence } : {}), ...(dueText ? { dueText } : {}) }));
     return add(COLLECTIONS.leads, {
       id,
       email,
       ...(name ? { name } : {}),
-      country: "CR" as const,
+      country: answers.country,
       answers: answers as unknown as Lead["answers"],
       findings,
       source: "deadline_check",
@@ -1276,7 +1458,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const owns = rng.chance(0.5);
     const company = rng.weighted([["SA", 25], ["SRL", 10], ["none", 55], ["unsure", 10]] as const);
     const res = rng.weighted([["resident", 30], ["applying", 20], ["visitor", 40], ["unsure", 10]] as const);
-    const answers: CheckAnswers = {
+    const legacyLead: Record<string, unknown> = {
       country: "CR",
       residencyStatus: res,
       ...(res === "resident" ? { residencyExpiresAt: ymd(createdAt + rng.int(30, 600) * DAY) } : {}),
@@ -1288,6 +1470,23 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       ownsVehicle: rng.chance(0.5),
       hasEmployees: rng.chance(0.2),
     };
+    // COUNTRIES: leads come from all six countries (own stream, the draws above are unchanged).
+    crng.reseed("lead-country", k);
+    const leadCountry: CountryCode = crng.weighted(COUNTRY_WEIGHTS);
+    const answers: CheckAnswers = normalizeAnswers(leadCountry === "CR" ? legacyLead : {
+      country: leadCountry,
+      ...seedCountryAnswers(leadCountry, {
+        residency: res === "resident" ? "temporary" : res === "applying" ? "in_process" : res === "visitor" ? "tourist" : "refused",
+        resident: res === "resident",
+        expires: typeof legacyLead.residencyExpiresAt === "string" ? legacyLead.residencyExpiresAt : undefined,
+        entry: typeof legacyLead.lastEntryDate === "string" ? legacyLead.lastEntryDate : undefined,
+        property: owns ? "house" : "none",
+        company: company === "SA" || company === "SRL" ? "one_sa" : "none",
+        vehicle: legacyLead.ownsVehicle ? "local" : "none",
+        employees: legacyLead.hasEmployees ? "domestic" : "none",
+        place: crng.pick(COUNTRY_PLACES[leadCountry]).place,
+      }),
+    }).answers!;
     const email = `${slug(first)}.${slug(last)}.${pad(k + 1, 4)}@example.com`;
     const lead = leadDoc(email, rng.chance(0.5) ? `${first} ${last}` : undefined, answers, createdAt);
     const anon = newAnon();
@@ -1338,16 +1537,16 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       const openedAt = j === 0 ? Math.min(mem.activatedAt + rng.int(1, 30) * HOUR, Math.max(mem.activatedAt + MIN, NOW - 10 * MIN)) : mem.activatedAt + Math.round(rng.next() * (end - mem.activatedAt));
       if (openedAt > NOW) continue;
       // One member waits for a lawyer to be assigned (Needs attention → Unassigned).
-      const lawyer = mem.i === ROLE.unassigned ? null : toFocus ? lawyers[0] : lawyerFor(area);
+      const lawyer = mem.i === ROLE.unassigned ? null : toFocus ? lawyers[0] : lawyerFor(area, mem.country);
       const commercial = !!script.opportunity && rng.chance(0.5);
-      const vars = { loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
+      const vars = { country: mem.country, loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
       const id = `${PLACEHOLDER_PREFIX}mat_${pad(mem.i + 1)}_${j + 1}`;
       const doc: Doc = {
         id,
         clientId: mem.id,
         title: fill(script.title, vars),
         area,
-        country: "CR",
+        country: mem.country,
         stage: "intake",
         stageEnteredAt: iso(openedAt),
         ...(lawyer ? { assignedProviderId: lawyer.id } : {}),
@@ -1426,7 +1625,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const id = `${PLACEHOLDER_PREFIX}con_${pad(mem.i + 1)}_${pad(n, 2)}`;
     const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
     const scheduled = takeSlot(lawyer.id, t);
-    const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+    const vars = { country: mem.country, loc: mem.loc.place, L: lawyer.first, M: mem.first };
     const withdrawn = mem.recordingWithdrawnAt !== undefined && mem.recordingWithdrawnAt < scheduled;
     const recording = withdrawn ? "declined" : status === "booked" && rng.chance(0.15) ? "pending" : rng.weighted([["granted", 85], ["declined", 15]] as const);
     const createdAt = Math.min(scheduled - 2 * HOUR, Math.max(mem.activatedAt + HOUR, scheduled - rng.int(1, 7) * DAY));
@@ -1505,6 +1704,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const recs = mattersBy.get(mem.id) ?? [];
     // No calls at all for months (and none possible without a lawyer).
     if (!recs.length || mem.i === ROLE.noCalls || mem.i === ROLE.unassigned) continue;
+    // COUNTRIES: a member whose country has no placeholder lawyer has no calls yet.
+    if (!recs.some((r) => r.doc.assignedProviderId)) continue;
     mem.periods.forEach((start, p) => {
       // (Account seed: history stops before today, so the lawyer's day is only the scripted one.)
       const end = Math.min(addMonths(start, 1), opts.focus ? Math.min(NOW - 3 * HOUR, today0) : NOW - 3 * HOUR, mem.cancelAt ?? Infinity);
@@ -1538,7 +1739,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     });
   }
   // Today: every lawyer has calls (morning ones finished and waiting for the summary).
-  const activeMembers = members.filter((m) => m.status === "active" && (mattersBy.get(m.id)?.length ?? 0) > 0 && m.i !== ROLE.noCalls && m.i !== ROLE.unassigned && m.i !== ROLE.longFull);
+  const activeMembers = members.filter((m) => m.status === "active" && (mattersBy.get(m.id) ?? []).some((r) => r.doc.assignedProviderId) && m.i !== ROLE.noCalls && m.i !== ROLE.unassigned && m.i !== ROLE.longFull);
   /** Completed calls in the member's current period (a fourth one is never added). */
   const usedThisPeriod = (mem: Member) => consultations.filter((c) => c.clientId === mem.id && c.status === "completed" &&
     String(c.scheduledAt) >= String(mem.membership.periodStart) && String(c.scheduledAt) < String(mem.membership.periodEnd)).length;
@@ -1578,7 +1779,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       }
       if (s.status === "completed" && !c.transcript) {
         const rec = open(mem)!;
-        c.transcript = rec.script.dialogue.map((x) => fill(x, { loc: mem.loc.place, L: l.first, M: mem.first })).join("\n");
+        c.transcript = rec.script.dialogue.map((x) => fill(x, { country: mem.country, loc: mem.loc.place, L: l.first, M: mem.first })).join("\n");
         c.transcriptSource = "meet_transcript";
         c.transcriptFetchedAt = iso(Date.parse(String(c.endedAt)) + 12 * MIN);
         c.transcriptFetchAttempts = 1;
@@ -1753,7 +1954,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const lawyer = lawyerById.get(String(c.providerId))!;
     const approvedAt = Date.parse(summary.confirmedAt!);
     const id = `${PLACEHOLDER_PREFIX}hof_${pad(++hofN, 4)}`;
-    const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+    const vars = { country: mem.country, loc: mem.loc.place, L: lawyer.first, M: mem.first };
     const h: Doc = {
       id,
       consultationId: c.id,
@@ -1830,19 +2031,19 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
   let oppN = 0;
   // At least one obligation-sourced and one manual opportunity at every size.
   const oppEligible = members.filter((m) => m.status !== "pending" && m.status !== "cancelled");
-  const oblForced = oppEligible.find((m) => m.answers.hasCompany === true);
+  const oblForced = oppEligible.find((m) => m.situation.company !== "none");
   const manualForced = oppEligible.find((m) => m !== oblForced && (mattersBy.get(m.id) ?? []).length > 0);
   for (const mem of members) {
     rng.reseed("members-5", mem.i);
     if (mem.status === "pending" || mem.status === "cancelled") continue;
     const recs = mattersBy.get(mem.id) ?? [];
-    if (mem.answers.hasCompany === true && (rng.chance(0.12) || mem === oblForced)) {
+    if (mem.situation.company !== "none" && (rng.chance(0.12) || mem === oblForced)) {
       const created = Math.max(mem.activatedAt + DAY, NOW - rng.int(1, 20) * DAY);
       add(COLLECTIONS.opportunities, {
         id: `${PLACEHOLDER_PREFIX}opp_obl_${pad(++oppN, 3)}`,
         clientId: mem.id,
-        source: { kind: "obligation", id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_corporation_tax` },
-        title: "Annual corporation tax and RTBF filing",
+        source: { kind: "obligation", id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_${COMPANY_RULE[mem.country]}` },
+        title: localize("Annual corporation tax and RTBF filing", mem.country),
         area: "corporate",
         stage: "identified",
         valueCents: rng.int(7, 12) * 5000,
@@ -1875,7 +2076,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
     const con = consultations.find((c) => c.matterId === rec.doc.id && c.status === "completed");
     const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
-    const vars = { loc: mem.loc.place, L: lawyer.first, M: mem.first };
+    const vars = { country: mem.country, loc: mem.loc.place, L: lawyer.first, M: mem.first };
     const o = {
       id,
       clientId: mem.id,
@@ -2008,7 +2209,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
         d.closedAt = d.stageEnteredAt;
       }
       if (!d.closedAt) {
-        const vars = { loc: mem.loc.place, L: lawyerById.get(String(d.assignedProviderId))?.first ?? "your lawyer", M: mem.first };
+        const vars = { country: mem.country, loc: mem.loc.place, L: lawyerById.get(String(d.assignedProviderId))?.first ?? "your lawyer", M: mem.first };
         const base = Date.parse(String(d.stageEnteredAt));
         const step = d.stage === "quote_sent"
           ? { what: "Review and answer the proposal", who: "client" as const }
@@ -2129,18 +2330,17 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (mem.status === "pending") continue;
     const list: Doc[] = [];
     const nowAnswers: CheckAnswers = { ...mem.answers };
-    if (mem.profile.residencyExpiresAt) nowAnswers.residencyExpiresAt = String(mem.profile.residencyExpiresAt);
     for (const f of evaluateCheck(nowAnswers, now)) {
-      const key = f.ruleId.replace(/^CR_CHECK_/, "").toLowerCase();
+      const key = f.ruleId.toLowerCase();
       const due = Date.parse(f.dueAt ?? "");
-      const monthly = f.ruleId === "CR_CHECK_CCSS_MEMBER" || f.ruleId === "CR_CHECK_EMPLOYER_CCSS";
+      const monthly = /CCSS|PILA|CSS_MONTHLY|CONTRIB|_MONTHLY/.test(f.ruleId);
       const status = mem.status === "cancelled" ? "upcoming"
         : monthly ? rng.weighted([["upcoming", 40], ["handled", 60]] as const)
         : rng.weighted([["upcoming", 78], ["asked", 15], ["dismissed", 7]] as const);
-      list.push(add(COLLECTIONS.obligations, { id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_${key}`, clientId: mem.id, country: "CR", ruleId: f.ruleId, title: f.title, dueAt: f.dueAt, status }));
+      list.push(add(COLLECTIONS.obligations, { id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_${key}`, clientId: mem.id, country: mem.country, ruleId: f.ruleId, title: f.title, ...(f.dueAt ? { dueAt: f.dueAt } : {}), ...(f.dueText ? { dueText: f.dueText } : {}), ...(f.confidence ? { confidence: f.confidence } : {}), status }));
       // Last year's occurrence of an annual rule, already handled.
       if (Number.isFinite(due) && due - 365 * DAY > mem.activatedAt && due - 365 * DAY < NOW && !key.includes("ccss")) {
-        list.push(add(COLLECTIONS.obligations, { id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_${key}_prev`, clientId: mem.id, country: "CR", ruleId: f.ruleId, title: f.title, dueAt: iso(due - 365 * DAY), status: "handled" }));
+        list.push(add(COLLECTIONS.obligations, { id: `${PLACEHOLDER_PREFIX}obl_${pad(mem.i + 1)}_${key}_prev`, clientId: mem.id, country: mem.country, ruleId: f.ruleId, title: f.title, dueAt: iso(due - 365 * DAY), status: "handled" }));
       }
     }
     obligationsBy.set(mem.id, list);
@@ -2183,6 +2383,16 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     if (mem.status !== "pending") {
       mkTask("membership.activated", { clientId: mem.id, sourceId: m.id, detail: `${mem.first} ${mem.last}` }, mem.activatedAt,
         NOW - mem.activatedAt > 2 * DAY ? "done" : "open");
+      // COUNTRIES: no placeholder lawyer licensed in the member's country yet (or none matched, the unassigned role).
+      if (mem.i === ROLE.unassigned || !lawyers.some((_, k) => lawyerCountry(k) === mem.country)) {
+        mkTask("member.unassigned_country", {
+          clientId: mem.id,
+          sourceId: mem.id,
+          sourceKind: "membership",
+          dedupeKey: `${mem.id}_country_${mem.country}`,
+          detail: `unassigned member in ${COUNTRIES[mem.country].name} (${mem.first} ${mem.last})`,
+        }, mem.activatedAt + HOUR, "open");
+      }
     }
     if (mem.status === "past_due") {
       mkTask("membership.past_due", { clientId: mem.id, sourceId: m.id, dedupeKey: `${m.id}_${String(m.pastDueSince).slice(0, 10)}`, detail: `${mem.first} ${mem.last}` },
@@ -2382,7 +2592,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       if (!mem || !rec) return;
       const lawyer = lawyerById.get(String(rec.doc.assignedProviderId))!;
       const spec = rec.script.opportunity ?? SCRIPTS[rec.area].find((s) => s.opportunity)?.opportunity ?? SCRIPTS.corporate[0].opportunity!;
-      const q = buildQuote(mem, rec, { title: `${fill(spec.title, { loc: mem.loc.place, L: lawyer.first, M: mem.first })} (draft)`, valueCents: spec.min * 100 } as unknown as Opportunity & Doc, lawyer, NOW - (k + 1) * DAY, spec);
+      const q = buildQuote(mem, rec, { title: `${fill(spec.title, { country: mem.country, loc: mem.loc.place, L: lawyer.first, M: mem.first })} (draft)`, valueCents: spec.min * 100 } as unknown as Opportunity & Doc, lawyer, NOW - (k + 1) * DAY, spec);
       const qid = `${String(q.id)}_int${k + 1}`;
       Object.assign(q, {
         id: qid, quoteId: qid, status, clientVisible: false, sentAt: null, sentToClientAt: null,
@@ -2402,7 +2612,7 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
     const recs = mattersBy.get(mem.id) ?? [];
     const primary = recs.find((r) => !r.doc.closedAt) ?? recs[0];
     const lawyer = primary ? lawyerById.get(String(primary.doc.assignedProviderId)) : undefined;
-    const vars = { loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
+    const vars = { country: mem.country, loc: mem.loc.place, L: lawyer?.first ?? "your lawyer", M: mem.first };
     // Charges: activation + each paid month (+ the unpaid month when past due) + accepted legal work.
     const charges: Doc[] = [];
     if (mem.status !== "pending") {
@@ -2503,8 +2713,9 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       ...mem.profile,
       email: mem.email,
       clientFields: { ...mem.profile },
-      jurisdiction: "Costa Rica",
-      country: "CR",
+      jurisdiction: COUNTRIES[mem.country].name,
+      country: mem.country,
+      legalCountry: mem.country,
       persona: fill(PERSONA_LABEL[mem.persona], vars),
       legalArea: primary?.area ?? "",
       legalMatter: primary ? String(primary.doc.title) : "",

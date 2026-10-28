@@ -138,3 +138,25 @@ export const PLACES: Record<(typeof PROVINCES)[number], string[]> = {
 export const BLOCKED_NAMES = new Set([
   "Omar Khoury", "Arjun Kapoor", "Kenji Tanaka", "Avi Kaplan", "Robert Hollis", "Lars Müller", "Malik Ellis",
 ]);
+
+// ─── COUNTRIES: placeholder members and lawyers across all six countries ──
+
+import type { CountryCode } from "../schemas/contracts.ts";
+
+/** Member country weights after the coverage walk (Costa Rica stays the largest book). */
+export const COUNTRY_WEIGHTS: Array<[CountryCode, number]> = [["CR", 40], ["MX", 15], ["ES", 15], ["CO", 10], ["PA", 10], ["PT", 10]];
+
+/** Where placeholder members outside Costa Rica live: town and state, region or department. */
+export const COUNTRY_PLACES: Record<Exclude<CountryCode, "CR">, Array<{ place: string; region: string }>> = {
+  CO: [{ place: "Medellín", region: "Antioquia" }, { place: "Bogotá", region: "Bogotá D.C." }, { place: "Cartagena", region: "Bolívar" }],
+  PA: [{ place: "Boquete", region: "Chiriquí" }, { place: "Panama City", region: "Panamá" }, { place: "Coronado", region: "Panamá Oeste" }],
+  MX: [{ place: "San Miguel de Allende", region: "Guanajuato" }, { place: "Mérida", region: "Yucatán" }, { place: "Puerto Vallarta", region: "Jalisco" }, { place: "Playa del Carmen", region: "Quintana Roo" }],
+  ES: [{ place: "Valencia", region: "Valencian Community" }, { place: "Málaga", region: "Andalusia" }, { place: "Madrid", region: "Madrid" }],
+  PT: [{ place: "Lisbon", region: "Lisboa" }, { place: "Cascais", region: "Lisboa" }, { place: "Lagos", region: "Faro" }],
+};
+
+/** Placeholder lawyer countries by lawyer index; lawyer 0 (the account lawyer) is in Costa Rica. */
+export const LAWYER_COUNTRIES: CountryCode[] = ["CR", "ES", "MX", "CO", "PT", "PA", "CR", "ES", "MX", "CO", "PT", "PA"];
+
+/** Account seed (a real Costa Rica lawyer is lawyer 0): a second Costa Rica lawyer takes the rest of that book. */
+export const ACCOUNT_LAWYER_COUNTRIES: CountryCode[] = ["CR", "CR", "ES", "MX", "CO", "PT", "PA", "CR", "ES", "MX", "CO", "PT"];

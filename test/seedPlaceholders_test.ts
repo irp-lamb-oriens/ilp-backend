@@ -258,3 +258,28 @@ for (const size of ["demo", "pilot"] as const) {
     assertEquals(diversityReport(d).length > 30, true);
   });
 }
+
+Deno.test("seed (COUNTRIES): members, leads and lawyers spread across all six countries", () => {
+  const six = ["CO", "CR", "ES", "MX", "PA", "PT"];
+  const set = (xs: unknown[]) => [...new Set(xs.map(String))].sort();
+  assertEquals(set(pilot.collections.memberships.map((m) => m.country)), six);
+  assertEquals(set(pilot.collections.leads.map((l) => l.country)), six);
+  assertEquals(set(pilot.collections.providers.flatMap((p) => p.jurisdictions as string[])), six);
+  // Each member's matters, obligations and client record carry the membership's country.
+  const countryOf = new Map(pilot.collections.memberships.map((m) => [String(m.clientId), String(m.country)]));
+  for (const m of pilot.collections.matters) assertEquals(m.country, countryOf.get(String(m.clientId)), String(m.id));
+  for (const o of pilot.collections.obligations) {
+    assertEquals(o.country, countryOf.get(String(o.clientId)), String(o.id));
+    assertEquals(String(o.ruleId).startsWith(String(o.country)), true, String(o.id));
+  }
+  for (const c of pilot.collections.clients) if (countryOf.has(String(c.id))) assertEquals(c.country, countryOf.get(String(c.id)));
+  // A matter only goes to a lawyer licensed in the member's country.
+  const lawyerCountries = new Map(pilot.collections.providers.map((p) => [String(p.id), p.jurisdictions as string[]]));
+  for (const m of pilot.collections.matters) if (m.assignedProviderId) assertEquals(lawyerCountries.get(String(m.assignedProviderId))!.includes(String(m.country)), true, String(m.id));
+  // Availability is in each lawyer's own time zone.
+  const tz = new Set(pilot.collections.lawyer_availability.map((a) => String(a.timezone)));
+  assertEquals(tz.has("Europe/Madrid") && tz.has("America/Costa_Rica"), true);
+  // Demo has three lawyers (Costa Rica, Spain, Mexico): members elsewhere wait for a match.
+  const demo = buildPlaceholderData({ size: "demo", seed: 7, now: NOW });
+  assertEquals(demo.collections.csm_tasks.some((t) => String(t.id).includes("member_unassigned_country")), true);
+});
