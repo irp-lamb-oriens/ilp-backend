@@ -20,7 +20,7 @@
  *   POST   /:quoteId/request-changes          request changes (approver-gated)
  *   POST   /:quoteId/comments                 add comment
  *   PATCH  /:quoteId/comments/:commentId/resolve
- *   POST   /:quoteId/send-to-client           send
+ *   POST   /:quoteId/send-to-client           403: staff send quotes (REL)
  *   GET    /:quoteId/contract-pdf             signed agreement PDF
  */
 
@@ -52,8 +52,17 @@ import { buildContractSnapshot } from "../dashboard/contractSnapshot.ts";
 import { resolveQuoteTemplateBlocks } from "../dashboard/contractTemplate.ts";
 import { buildContractPdfBuffer, contractFileName } from "../dashboard/contractPdf.ts";
 import { loadQuoteApprovers, isQuoteApprover } from "../dashboard/automation/quoteApprovers.ts";
-import { resolveClientEmail } from "../dashboard/clientHelpers.ts";
 import { mergeLawyerLineGroups, mergeLawyerLineItems } from "./lawyerView.ts";
+
+/** REL: statuses in which the lawyer may still edit or delete their fee quote. */
+const LAWYER_EDITABLE_STATUSES = new Set(["draft", "changes_requested"]);
+
+/** REL: stamp the lawyer on every fee line (and on grouped lines when `groups`). */
+function ownLines(items: any[] | null, providerId: string, groups = false): any {
+  if (!Array.isArray(items)) return items;
+  if (groups) return items.map((g) => ({ ...g, lineItems: ownLines(g?.lineItems ?? [], providerId) }));
+  return items.map((li) => ({ ...li, providerId }));
+}
 
 /** Margin a new lawyer-created line starts with; staff set the real one. */
 const DEFAULT_MARGIN_PCT = 20;
@@ -149,11 +158,10 @@ export default function providerQuotesRouter(app: Express) {
         paymentSchedule = null,
       } = req.body ?? {};
 
-      if (!VALID_STATUSES.has(status)) {
-        return res.status(400).json({
-          error: `Invalid status. Must be one of: ${[...VALID_STATUSES].join(", ")}`,
-        });
-      }
+      // REL: a lawyer's quote always starts as a draft (a status in the body is
+      // ignored); staff price, approve and send it.
+      void status;
+      const pid = providerIdOf(req);
 
       const hasScheduleInput = Array.isArray(paymentSchedule) && paymentSchedule.length > 0;
       const normalizedSchedule = hasScheduleInput
@@ -166,13 +174,14 @@ export default function providerQuotesRouter(app: Express) {
       }
 
       // Lawyers enter their fee only; margin fields are never taken from the body.
+      // REL: every fee line is this lawyer's (settlements pay each line's provider).
       const normalizedGroups = normalizeLineGroups(
-        mergeLawyerLineGroups(lineGroups, [], DEFAULT_MARGIN_PCT) as any[],
+        ownLines(mergeLawyerLineGroups(lineGroups, [], DEFAULT_MARGIN_PCT) as any[], pid, true),
         currency,
       );
       const normalizedLineItems = normalizedGroups
         ? flattenLineGroups(normalizedGroups)
-        : normalizeLineItems(mergeLawyerLineItems(lineItems, [], DEFAULT_MARGIN_PCT), currency);
+        : normalizeLineItems(ownLines(mergeLawyerLineItems(lineItems, [], DEFAULT_MARGIN_PCT), pid), currency);
       const { costSubtotal, total, earnings } = computeQuoteMath(normalizedLineItems);
       const quoteId = nanoId(14);
 
@@ -195,10 +204,10 @@ export default function providerQuotesRouter(app: Express) {
         templateId: typeof templateId === "string" ? templateId : null,
         blocks: Array.isArray(blocks) ? blocks : null,
         paymentSchedule: normalizedSchedule,
-        providerIds: Array.isArray(providerIds) ? providerIds : [],
+        providerIds: [pid, ...(Array.isArray(providerIds) ? providerIds.filter((x: unknown) => typeof x === "string" && x !== pid) : [])],
         providerSnapshots: Array.isArray(providerSnapshots) ? providerSnapshots : [],
         notes: notes?.trim() || null,
-        status,
+        status: "draft",
         approvers: await loadQuoteApprovers(),
         approvals: [],
         comments: [],
@@ -238,12 +247,22 @@ export default function providerQuotesRouter(app: Express) {
       const existing = findQuote(quotes, quoteId);
       if (!existing) return res.status(404).json({ error: "Quote not found." });
 
+      // REL: lawyers never set a quote's status (no self-approval, no fake
+      // acceptance), and the fee is locked once staff are reviewing or the
+      // member has it.
+      if ("status" in (req.body ?? {}) && req.body.status !== existing.status) {
+        return res.status(400).json({ error: "Lawyers cannot change a quote's status. Submit it for approval instead." });
+      }
+      if (!LAWYER_EDITABLE_STATUSES.has(String(existing.status ?? "draft"))) {
+        return res.status(409).json({ error: "This quote is with the ILP team or the member now. Ask the team to send it back for changes." });
+      }
+      const pid = providerIdOf(req);
       const updates: Record<string, any> = { updatedAt: now };
       const changedFields: string[] = [];
 
       const scalarFields = [
-        // defaultMarginPct is staff-only.
-        "title", "currency", "notes", "status", "serviceType",
+        // defaultMarginPct is staff-only; status moves only through submit / staff routes.
+        "title", "currency", "notes", "serviceType",
         "clientDescription", "optionGroupId", "optionLabel", "role",
       ];
       for (const key of scalarFields) {
@@ -260,7 +279,7 @@ export default function providerQuotesRouter(app: Express) {
         const resolvedCurrency = updates.currency ?? existing.currency ?? "USD";
         const margin = typeof existing.defaultMarginPct === "number" ? existing.defaultMarginPct : DEFAULT_MARGIN_PCT;
         const normalizedGroups = normalizeLineGroups(
-          mergeLawyerLineGroups(req.body.lineGroups, existing.lineItems, margin) as any[],
+          ownLines(mergeLawyerLineGroups(req.body.lineGroups, existing.lineItems, margin) as any[], pid, true),
           resolvedCurrency,
         );
         const derivedLineItems = normalizedGroups ? flattenLineGroups(normalizedGroups) : [];
@@ -275,7 +294,7 @@ export default function providerQuotesRouter(app: Express) {
         const resolvedCurrency = updates.currency ?? existing.currency ?? "USD";
         const margin = typeof existing.defaultMarginPct === "number" ? existing.defaultMarginPct : DEFAULT_MARGIN_PCT;
         const normalizedLineItems = normalizeLineItems(
-          mergeLawyerLineItems(req.body.lineItems, existing.lineItems, margin),
+          ownLines(mergeLawyerLineItems(req.body.lineItems, existing.lineItems, margin), pid),
           resolvedCurrency,
         );
         const math = computeQuoteMath(normalizedLineItems);
@@ -287,7 +306,8 @@ export default function providerQuotesRouter(app: Express) {
       }
 
       if ("providerIds" in (req.body ?? {})) {
-        updates.providerIds = Array.isArray(req.body.providerIds) ? req.body.providerIds : [];
+        const extra = Array.isArray(req.body.providerIds) ? req.body.providerIds.filter((x: unknown) => typeof x === "string" && x !== pid) : [];
+        updates.providerIds = [pid, ...extra];
         changedFields.push("providerIds");
       }
       if ("providerSnapshots" in (req.body ?? {})) {
@@ -365,6 +385,15 @@ export default function providerQuotesRouter(app: Express) {
         clientToken: null,
         clientAcceptedAt: null,
         clientAcceptedBy: null,
+        // REL: the member-flow spellings too, or the copy reads as accepted (schemas/quoteStatus.ts).
+        acceptedAt: null,
+        acceptedBy: null,
+        declinedAt: null,
+        sentAt: null,
+        typedFullName: null,
+        consent: null,
+        consentAt: null,
+        providerIds: [providerIdOf(req)],
         contractSnapshot: null,
         createdAt: now,
         createdBy: actor,
@@ -427,6 +456,11 @@ export default function providerQuotesRouter(app: Express) {
       const actor = providerEmailOf(req);
 
       const quotes = await readQuotes(id);
+      const target = findQuote(quotes, quoteId);
+      if (!target) return res.status(404).json({ error: "Quote not found." });
+      if (!LAWYER_EDITABLE_STATUSES.has(String(target.status ?? "draft"))) {
+        return res.status(409).json({ error: "Only a draft can be deleted. Ask the ILP team about a quote they are reviewing or sent." });
+      }
       const nextQuotes = quotes.filter((q) => (q?.quoteId ?? q?.id) !== quoteId);
       await writeQuotes(id, nextQuotes);
       log(`[providerQuotes] Quote ${quoteId} deleted for client ${id} by ${actor}`);
@@ -736,83 +770,14 @@ export default function providerQuotesRouter(app: Express) {
   );
 
   // ── POST send-to-client ───────────────────────────────────────────────────
+  // REL: quotes reach members only from staff, after ILP's price is set
+  // (POST /api/dashboard/clients/:id/quotes/:quoteId/send-to-client).
   app.post(
     "/api/provider/clients/:id/quotes/:quoteId/send-to-client",
     requireProviderAuth,
-    asyncHandler(async (req: Request, res: Response) => {
-      const { id, quoteId } = req.params;
-      const doc = await requireAssignedClient(req, res);
-      if (!doc) return;
-      const actor = providerEmailOf(req);
-      const now = new Date().toISOString();
-
-      const quotes = await readQuotes(id);
-      const quote = findQuote(quotes, quoteId);
-      if (!quote) return res.status(404).json({ error: "Quote not found." });
-
-      if (quote.status !== "approved") {
-        return res.status(400).json({
-          error: `Quote must be approved before sending to client (current: ${quote.status}).`,
-        });
-      }
-
-      const clientToken = quote.clientToken ?? nanoId(32);
-      const statusPageUrl = `https://internationallegalpartner.com/status/${id}?quoteToken=${clientToken}`;
-
-      const existingLog = Array.isArray(quote.changeLog) ? quote.changeLog : [];
-      const nextQuotes = quotes.map((q) =>
-        (q?.quoteId ?? q?.id) === quoteId
-          ? {
-              ...q,
-              clientVisible: true,
-              sentToClientAt: now,
-              clientToken,
-              status: "sent_to_client",
-              updatedAt: now,
-              changeLog: [...existingLog, makeChangeEntry(actor, "sent_to_client", `Sent to client by ${actor}`)],
-            }
-          : q
-      );
-      await writeQuotes(id, nextQuotes);
-
-      const clientDoc = await get(CLIENTS_COLLECTION, id);
-      const clientEmail = resolveClientEmail(clientDoc ?? {}, id);
-      const clientName = clientDoc?.name ?? "Client";
-
-      if (clientEmail) {
-        try {
-          const quoteTitle = quote.title || "Quote";
-          const emailBody = `<div style="font-family:'Helvetica Neue',Arial,sans-serif;max-width:560px;margin:0 auto;padding:0;color:#1a1a2e;">
-            <div style="background:linear-gradient(135deg,#020d10 0%,#062028 100%);border-radius:14px 14px 0 0;padding:32px 28px 24px;">
-              <p style="margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(2,181,187,.8);">International Legal Partner</p>
-              <h1 style="margin:0 0 6px;font-size:22px;font-weight:800;color:#ffffff;line-height:1.25;">Your quote is ready</h1>
-              <p style="margin:0;font-size:14px;color:rgba(248,250,252,.65);">Hi ${clientName}, your personalized legal services quote has been prepared.</p>
-            </div>
-            <div style="background:#ffffff;padding:28px 28px 8px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
-              <p style="margin:0 0 20px;font-size:14px;color:#475569;line-height:1.6;">
-                Your quote <strong style="color:#0f172a;">"${quoteTitle}"</strong> is ready for your review in your secure client portal.
-              </p>
-              <div style="text-align:center;margin:28px 0;">
-                <a href="${statusPageUrl}" style="display:inline-block;background:#02b5bb;color:#020d10;padding:15px 32px;border-radius:10px;text-decoration:none;font-weight:800;font-size:15px;">View My Quote</a>
-              </div>
-            </div>
-            <div style="background:#f8fafc;padding:16px 28px;border-radius:0 0 14px 14px;border:1px solid #e2e8f0;border-top:none;">
-              <p style="margin:0;font-size:11px;color:#94a3b8;text-align:center;">Questions? Reply to this email. · International Legal Partner</p>
-            </div>
-          </div>`;
-          await enqueueEmail({
-            to: clientEmail,
-            subject: `Your quote is ready: "${quoteTitle}"`,
-            html: emailBody,
-          }, `quote_to_client_${id}_${quoteId}`).catch(() => {});
-          log(`[providerQuotes] Quote ${quoteId} sent to client ${clientEmail}`);
-        } catch (emailErr: any) {
-          log(`[providerQuotes] send-to-client email failed (non-fatal): ${emailErr?.message}`);
-        }
-      }
-
-      res.json({ success: true, quoteId, status: "sent_to_client", clientToken, statusPageUrl });
-    })
+    (_req: Request, res: Response) => {
+      res.status(403).json({ error: "The ILP team sends quotes to members once the price is set." });
+    },
   );
 
   // ── GET contract-pdf ──────────────────────────────────────────────────────
