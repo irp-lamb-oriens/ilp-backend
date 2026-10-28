@@ -35,7 +35,190 @@ export const COLLECTIONS = {
 } as const;
 
 export type Iso = string;
-export type CountryCode = "CR" | "PA" | "MX";
+export type CountryCode = "CO" | "CR" | "PA" | "MX" | "ES" | "PT";
+
+// ─── Countries (all six open; reference data from docs/research/<country>.md) ─
+/** Display order: alphabetical by English name. */
+export const COUNTRY_CODES: readonly CountryCode[] = ["CO", "CR", "MX", "PA", "PT", "ES"];
+
+export interface CountryTimeZone {
+  id: string; // IANA, e.g. "Europe/Madrid"
+  label: string; // plain English, e.g. "Mainland Spain and the Balearic Islands"
+}
+
+export interface CountryBody {
+  name: string;
+  url?: string; // only where the research opened or confirmed the page
+}
+
+export interface CountryInfo {
+  code: CountryCode;
+  name: string; // English name, no flag
+  slug: string; // landing page path, e.g. "costa-rica"
+  adjective: string; // "Costa Rican", for copy like "a Costa Rican company"
+  status: "open"; // every country is open for the check, joining and booking
+  currency: { code: string; name: string };
+  languages: string[]; // official first, then co-official
+  timeZones: CountryTimeZone[]; // first is the default
+  defaultTimeZone: string;
+  foreignerIds: string[]; // the IDs a foreign resident deals with
+  companyForms: string[]; // local company forms, e.g. "S.A.S."
+  lawyerBody: CountryBody & { numberLabel: string; verifyUrl?: string };
+  notaryBody: CountryBody;
+}
+
+export const COUNTRIES: Record<CountryCode, CountryInfo> = {
+  CO: {
+    code: "CO",
+    name: "Colombia",
+    slug: "colombia",
+    adjective: "Colombian",
+    status: "open",
+    currency: { code: "COP", name: "Colombian peso" },
+    languages: ["Spanish"],
+    timeZones: [{ id: "America/Bogota", label: "Colombia" }],
+    defaultTimeZone: "America/Bogota",
+    foreignerIds: ["Cédula de extranjería", "Visa (e-visa)", "NIT and RUT (tax ID)", "Salvoconducto"],
+    companyForms: ["S.A.S.", "S.A.", "Ltda."],
+    lawyerBody: {
+      name: "Consejo Superior de la Judicatura, Registro Nacional de Abogados",
+      url: "https://www.ramajudicial.gov.co/web/registro-nacional-de-abogados",
+      numberLabel: "Tarjeta profesional number",
+      verifyUrl: "https://vigenciaspublicas.ramajudicial.gov.co/Certificados.aspx",
+    },
+    notaryBody: { name: "Superintendencia de Notariado y Registro (SNR)", url: "https://www.supernotariado.gov.co" },
+  },
+  CR: {
+    code: "CR",
+    name: "Costa Rica",
+    slug: "costa-rica",
+    adjective: "Costa Rican",
+    status: "open",
+    currency: { code: "CRC", name: "Costa Rican colón" },
+    languages: ["Spanish"],
+    timeZones: [{ id: "America/Costa_Rica", label: "Costa Rica" }],
+    defaultTimeZone: "America/Costa_Rica",
+    foreignerIds: ["DIMEX", "NITE (tax ID without a DIMEX)", "Cédula jurídica (company ID)"],
+    companyForms: ["S.A.", "S.R.L."],
+    lawyerBody: { name: "Colegio de Abogados y Abogadas de Costa Rica", url: "https://www.abogados.or.cr", numberLabel: "Carné number" },
+    notaryBody: { name: "Dirección Nacional de Notariado (DNN)" },
+  },
+  PA: {
+    code: "PA",
+    name: "Panama",
+    slug: "panama",
+    adjective: "Panamanian",
+    status: "open",
+    currency: { code: "USD", name: "US dollar (balboa pegged 1:1)" },
+    languages: ["Spanish"],
+    timeZones: [{ id: "America/Panama", label: "Panama" }],
+    defaultTimeZone: "America/Panama",
+    foreignerIds: ["Carné de residente", "Cédula E", "RUC and NIT (tax IDs)"],
+    companyForms: ["S.A.", "Fundación de interés privado", "S. de R.L."],
+    lawyerBody: {
+      name: "Corte Suprema de Justicia, Sala Cuarta de Negocios Generales (idoneidad)",
+      url: "https://www.organojudicial.gob.pa/",
+      numberLabel: "Idoneidad number",
+    },
+    notaryBody: { name: "Notarías públicas de Panamá" },
+  },
+  MX: {
+    code: "MX",
+    name: "Mexico",
+    slug: "mexico",
+    adjective: "Mexican",
+    status: "open",
+    currency: { code: "MXN", name: "Mexican peso" },
+    languages: ["Spanish"],
+    timeZones: [
+      { id: "America/Mexico_City", label: "Central Mexico (most of the country)" },
+      { id: "America/Cancun", label: "Quintana Roo" },
+      { id: "America/Mazatlan", label: "Baja California Sur, Sinaloa and Nayarit" },
+      { id: "America/Hermosillo", label: "Sonora" },
+      { id: "America/Tijuana", label: "Baja California" },
+    ],
+    defaultTimeZone: "America/Mexico_City",
+    foreignerIds: ["FMM (visitor record)", "Tarjeta de Residente Temporal", "Tarjeta de Residente Permanente", "CURP", "RFC (tax ID)", "e.firma"],
+    companyForms: ["S.A. de C.V.", "S. de R.L. de C.V."],
+    lawyerBody: {
+      name: "Secretaría de Educación Pública, Dirección General de Profesiones",
+      url: "https://www.cedulaprofesional.sep.gob.mx",
+      numberLabel: "Cédula profesional number",
+    },
+    notaryBody: { name: "State notary colleges and the Colegio Nacional del Notariado Mexicano", url: "https://www.notariadomexicano.org.mx" },
+  },
+  ES: {
+    code: "ES",
+    name: "Spain",
+    slug: "spain",
+    adjective: "Spanish",
+    status: "open",
+    currency: { code: "EUR", name: "Euro" },
+    languages: ["Spanish", "Catalan", "Galician", "Basque"],
+    timeZones: [
+      { id: "Europe/Madrid", label: "Mainland Spain and the Balearic Islands" },
+      { id: "Atlantic/Canary", label: "Canary Islands" },
+    ],
+    defaultTimeZone: "Europe/Madrid",
+    foreignerIds: ["NIE (foreigner number)", "TIE (residence card)", "Padrón (town hall registration)"],
+    companyForms: ["S.L.", "S.A."],
+    lawyerBody: {
+      name: "A Colegio de Abogados (Consejo General de la Abogacía Española census)",
+      url: "https://www.abogacia.es/servicios-abogacia/censo-de-letrados/",
+      numberLabel: "Colegiado number",
+    },
+    notaryBody: { name: "Consejo General del Notariado", url: "https://www.notariado.org/" },
+  },
+  PT: {
+    code: "PT",
+    name: "Portugal",
+    slug: "portugal",
+    adjective: "Portuguese",
+    status: "open",
+    currency: { code: "EUR", name: "Euro" },
+    languages: ["Portuguese"],
+    timeZones: [
+      { id: "Europe/Lisbon", label: "Mainland Portugal and Madeira" },
+      { id: "Atlantic/Azores", label: "Azores" },
+    ],
+    defaultTimeZone: "Europe/Lisbon",
+    foreignerIds: ["NIF (tax number)", "NISS (social security number)", "Número de utente (health number)", "Título de residência (AIMA)"],
+    companyForms: ["Lda.", "Unipessoal Lda.", "S.A."],
+    lawyerBody: {
+      name: "Ordem dos Advogados",
+      url: "https://portal.oa.pt/advogados/pesquisa-de-advogados/",
+      numberLabel: "Cédula profissional number",
+    },
+    notaryBody: { name: "Ordem dos Notários", url: "https://www.notarios.pt" },
+  },
+};
+
+export const isCountryCode = (v: unknown): v is CountryCode =>
+  typeof v === "string" && (COUNTRY_CODES as readonly string[]).includes(v);
+
+/**
+ * A stored country value to a code: codes ("cr", "CR"), English or Spanish
+ * names ("Costa Rica", "Panamá", "España"). Older records hold "CR" or the
+ * name "Costa Rica", so both keep working. Unknown values give null.
+ */
+export function toCountryCode(v: unknown): CountryCode | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (!s) return null;
+  const up = s.toUpperCase();
+  if (isCountryCode(up)) return up;
+  const plain = s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s*\(.*\)$/, "");
+  const alias: Record<string, CountryCode> = { espana: "ES", "costa rica": "CR", panama: "PA", mexico: "MX", colombia: "CO", spain: "ES", portugal: "PT" };
+  if (alias[plain]) return alias[plain];
+  for (const c of COUNTRY_CODES) if (COUNTRIES[c].name.toLowerCase() === plain || COUNTRIES[c].slug === plain) return c;
+  return null;
+}
+
+/** English name of a code; the code itself when unknown. */
+export const countryName = (code: unknown): string => {
+  const c = toCountryCode(code);
+  return c ? COUNTRIES[c].name : String(code ?? "");
+};
 
 // ─── Pricing (master plan section 6) ───────────────────────────────────────
 export const PLAN_STANDARD = {
@@ -56,6 +239,9 @@ export interface LeadFinding {
   title: string; // plain language, "may require review"
   dueAt?: Iso;
   area: string; // e.g. "corporate", "property", "immigration", "vehicle"
+  windowStartAt?: Iso; // when the date is a window (or a by-ID-digit range), its first day
+  confidence?: "high" | "medium" | "low"; // research confidence; "low" shows "Ask your lawyer to confirm this date"
+  dueText?: string; // plain due rule, shown when there is no date (ongoing, event, unknown anchor)
 }
 
 export interface Lead {
@@ -63,7 +249,7 @@ export interface Lead {
   email: string;
   name?: string;
   country: CountryCode;
-  answers: Record<string, string | boolean | number>;
+  answers: Record<string, string | boolean | number | string[]>; // the country's question keys (multi-choice answers are lists)
   findings: LeadFinding[];
   source: string; // "deadline_check" | "alert" | "template" | ...
   createdAt: Iso;
@@ -250,6 +436,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "feedback.low_score": { type: "follow_up", dueInHours: 24, title: "Low rating: follow up" }, // P2 post-call ≤ 2 or monthly ≤ 6
   "call.link_failed": { type: "follow_up", dueInHours: 4, title: "Meet link failed: send link" }, // P3 calendar failure
   "privacy.request_received": { type: "privacy", dueInHours: 24, title: "Privacy request: respond by due date" }, // P6 data-rights request
+  "member.unassigned_country": { type: "follow_up", dueInHours: 24, title: "Match a lawyer licensed in the member's country" }, // COUNTRIES: no partner lawyer in the member's country yet
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────
@@ -261,7 +448,18 @@ export interface Obligation {
   title: string; // worded as "may require review"
   dueAt?: Iso;
   status: "upcoming" | "asked" | "handled" | "dismissed";
+  windowStartAt?: Iso;
+  confidence?: "high" | "medium" | "low"; // "low": members see "Ask your lawyer to confirm this date", not the date
+  dueText?: string;
 }
+
+/**
+ * The member's answers to their country's situation questions (the free
+ * check's questions plus the profile-only ones), stored on the client record
+ * under this key as { [questionKey]: string }. Keys and values are listed per
+ * country by GET /api/countries/:code/questions (server API/countries/rules).
+ */
+export const COUNTRY_ANSWERS_FIELD = "countryAnswers";
 
 // ─── Profile completeness (one function, all three portals) ───────────────
 export const PROFILE_SECTIONS = [
@@ -290,7 +488,7 @@ export const PROFILE_FIELDS: Record<ProfileSection, string[]> = {
  * profileCompleteness: they are optional or apply only to some members.
  */
 export const PROFILE_DETAIL_FIELDS: Record<ProfileSection, string[]> = {
-  identity: ["preferredName", "preferredLanguage", "residenceCountry", "residenceProvince", "residenceTown", "timezone"],
+  identity: ["preferredName", "preferredLanguage", "legalCountry", "residenceCountry", "residenceProvince", "residenceTown", "timezone"], // legalCountry: CountryCode the membership covers
   household: ["livesWithPartner", "childrenAtHome", "otherHousehold", "pets", "hasEmployees"],
   immigration: ["residencyCategory", "lastEntryDate"],
   property: ["propertyType", "propertyHolding"],
@@ -345,7 +543,7 @@ export const CLIENT_HIDDEN_FIELDS = [
 
 // ─── Lawyer availability (feeds booking slots) ────────────────────────────
 export interface WeeklyWindow {
-  day: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday, Costa Rica time
+  day: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = Sunday, in the lawyer's own time zone
   start: string; // "08:30"
   end: string; // "12:00"
 }
@@ -353,7 +551,7 @@ export interface WeeklyWindow {
 export interface LawyerAvailability {
   id: string; // = providerId
   providerId: string;
-  timezone: "America/Costa_Rica";
+  timezone: string; // IANA; defaults to the lawyer's country (COUNTRIES[c].defaultTimeZone), older docs hold "America/Costa_Rica"
   weekly: WeeklyWindow[];
   blackoutDates: string[]; // "2026-12-24"
   minLeadHours: number; // default 18
@@ -415,7 +613,7 @@ export interface Opportunity {
   closedAt?: Iso;
 }
 
-// ─── Privacy (Costa Rica Ley 8968; US-resident members) ───────────────────
+// ─── Privacy (ILP operates under Costa Rica Ley 8968; US-resident members) ─
 export type ConsentKind = "terms" | "privacy" | "recording" | "marketing_email" | "ai_assistant";
 
 export interface ConsentRecord {
