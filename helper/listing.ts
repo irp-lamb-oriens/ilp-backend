@@ -279,6 +279,22 @@ export function pageProducer<T, U = T>(
   };
 }
 
+/** Transform each batch on its way out (strip fields, add names); the tail passes through. */
+export function mapProducer<T, U>(produce: ListProducer<T>, fn: (items: T[], signal: AbortSignal) => Promise<U[]> | U[]): ListProducer<U> {
+  return async function* (signal) {
+    const it = produce(signal);
+    while (true) {
+      const n = await it.next();
+      if (n.done) return n.value;
+      if (signal.aborted) {
+        await it.return?.({ nextCursor: null, hasMore: false });
+        return { nextCursor: null, hasMore: false };
+      }
+      yield await fn(n.value, signal);
+    }
+  };
+}
+
 // ── Firestore pages ─────────────────────────────────────────────────────────
 
 export interface NativeQuery {

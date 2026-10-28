@@ -20,6 +20,12 @@
  *
  * Lawyer (requireProviderAuth; scoped to providerId; LAWYER_HIDDEN_FIELDS stripped):
  *   GET    /api/lawyer/consultations             ?from=&to= (ISO)
+ *
+ * LISTS: every list route above also answers the paged contract of
+ * helper/listing.ts (?limit, ?cursor, ?sort, ?dir, ?q, filters, NDJSON with
+ * ?stream=1) and keeps its old response when none of those is sent. The
+ * session's scope (clientId for members, providerId for lawyers) is always
+ * part of the query, so no cursor or filter can reach another account's rows.
  *   GET    /api/lawyer/matters
  *   GET    /api/lawyer/handoffs
  *   GET    /api/lawyer/members/:clientId         brief data for a member the lawyer works with
@@ -67,6 +73,9 @@ import {
 } from "./service.ts";
 import { onRecordCreated, onRecordUpdated } from "./events.ts";
 import { recordingWithdrawn } from "../privacy/policy.ts";
+import { isListRequest, type ListSpec, mapProducer, respondList } from "../../helper/listing.ts";
+import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
+import type { RecordCollection } from "../../db/records.ts";
 
 /** Query-string keys accepted as equality filters on staff lists. */
 const FILTER_KEYS = [
@@ -100,6 +109,36 @@ const SORT_KEY: Record<string, string> = {
   "csm-tasks": "dueAt",
   obligations: "dueAt",
 };
+
+type Rec = Record<string, unknown> & { id: string };
+
+/** LISTS: sorts per slug (first one is the default, with its direction). */
+const SLUG_SORTS: Record<string, { sorts: string[]; dir: "asc" | "desc" }> = {
+  leads: { sorts: ["createdAt", "name", "email"], dir: "desc" },
+  memberships: { sorts: ["createdAt", "periodEnd", "status"], dir: "desc" },
+  matters: { sorts: ["stageEnteredAt", "openedAt", "title"], dir: "asc" },
+  consultations: { sorts: ["scheduledAt", "status"], dir: "asc" },
+  handoffs: { sorts: ["approvedAt"], dir: "desc" },
+  "csm-tasks": { sorts: ["dueAt", "createdAt", "title"], dir: "asc" },
+  obligations: { sorts: ["dueAt", "title"], dir: "asc" },
+};
+
+/** Equality filters per slug. Matters keep country in memory: older matters have none (read as CR). */
+const slugEqKeys = (slug: string) => FILTER_KEYS.filter((k) => !(slug === "matters" && k === "country")).concat(slug === "matters" ? ["stage", "area"] : []);
+
+function slugSpec(slug: string, dir?: "asc" | "desc"): ListSpec<Rec> {
+  const cfg = SLUG_SORTS[slug];
+  return recordSpec<Rec>(SLUG_TO_COLLECTION[slug as keyof typeof SLUG_TO_COLLECTION] as RecordCollection, {
+    sorts: cfg.sorts,
+    defaultSort: cfg.sorts[0],
+    defaultDir: dir ?? cfg.dir,
+    eqFilters: slugEqKeys(slug),
+    filters: {
+      ...rangeFilters<Rec>(cfg.sorts[0]),
+      ...(slug === "matters" ? { country: (r: Rec, v: string) => String(r.country ?? "CR") === v } : {}),
+    },
+  });
+}
 
 const CLIENT_SLUGS = new Set(["memberships", "matters", "consultations", "handoffs", "obligations"]);
 
@@ -173,6 +212,12 @@ export default function membersRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const { slug } = req.params;
       if (!isSlug(slug)) return res.status(404).json({ error: "Unknown collection." });
+      if (isListRequest(req)) {
+        const spec = slugSpec(slug);
+        return respondList(req, res, spec, (p) => ({
+          produce: pageRecords<Rec>(SLUG_TO_COLLECTION[slug] as RecordCollection, {}, p, spec, slugEqKeys(slug)),
+        }));
+      }
       const limit = Math.min(Number(req.query.limit) || 500, 2000);
       const items = await findRecords(SLUG_TO_COLLECTION[slug], filtersFrom(req), {
         sortBy: SORT_KEY[slug],
@@ -262,17 +307,25 @@ export default function membersRouter(app: Express) {
       if (!id) return;
       const { slug } = req.params;
       if (!isSlug(slug) || !CLIENT_SLUGS.has(slug)) return res.status(404).json({ error: "Unknown collection." });
+      const clientSafe = (items: Record<string, unknown>[]) =>
+        forClient(slug === "consultations"
+          ? items.map((c) => ({
+            ...c,
+            transcript: undefined,
+            summary: (c.summary as Consultation["summary"])?.status === "confirmed" ? c.summary : undefined,
+          }))
+          : items);
+      if (isListRequest(req)) {
+        const spec = slugSpec(slug, slug === "consultations" || slug === "handoffs" ? "desc" : undefined);
+        // The member's own records only: clientId is the fixed scope, whatever the query says.
+        return respondList(req, res, spec, (p) => ({
+          produce: mapProducer(pageRecords<Rec>(SLUG_TO_COLLECTION[slug] as RecordCollection, { clientId: id }, p, spec, slugEqKeys(slug)), clientSafe),
+        }));
+      }
       const items = await findRecords<Record<string, unknown>>(SLUG_TO_COLLECTION[slug], { clientId: id }, {
         sortBy: SORT_KEY[slug],
       });
-      const safe = slug === "consultations"
-        ? items.map((c) => ({
-          ...c,
-          transcript: undefined,
-          summary: (c.summary as Consultation["summary"])?.status === "confirmed" ? c.summary : undefined,
-        }))
-        : items;
-      res.json({ items: forClient(safe) });
+      res.json({ items: clientSafe(items) });
     }),
   );
 
@@ -313,6 +366,12 @@ export default function membersRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const pid = lawyerId(req, res);
       if (!pid) return;
+      if (isListRequest(req)) {
+        const spec = slugSpec("consultations");
+        return respondList(req, res, spec, (p) => ({
+          produce: mapProducer(pageRecords<Rec>(COLLECTIONS.consultations, { providerId: pid }, p, spec, ["status", "clientId", "matterId"]), (items) => forLawyer(items)),
+        }));
+      }
       const from = typeof req.query.from === "string" ? req.query.from : "";
       const to = typeof req.query.to === "string" ? req.query.to : "";
       const items = (await findRecords<Consultation>(COLLECTIONS.consultations, { providerId: pid }, {
@@ -328,6 +387,12 @@ export default function membersRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const pid = lawyerId(req, res);
       if (!pid) return;
+      if (isListRequest(req)) {
+        const spec = slugSpec("matters");
+        return respondList(req, res, spec, (p) => ({
+          produce: mapProducer(pageRecords<Rec>(COLLECTIONS.matters, { assignedProviderId: pid }, p, spec, ["stage", "clientId", "area"]), (items) => forLawyer(items)),
+        }));
+      }
       const items = await findRecords<Matter>(COLLECTIONS.matters, { assignedProviderId: pid }, {
         sortBy: "stageEnteredAt",
       });
@@ -341,6 +406,13 @@ export default function membersRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const pid = lawyerId(req, res);
       if (!pid) return;
+      if (isListRequest(req)) {
+        const spec = slugSpec("handoffs");
+        return respondList(req, res, spec, (p) => ({
+          produce: mapProducer(pageRecords<Rec>(COLLECTIONS.handoffs, { providerId: pid }, p, spec, ["clientId", "matterId"]), (items) =>
+            forLawyer(items).map((h) => ({ ...h, csmTaskIds: undefined }))),
+        }));
+      }
       const items = await findRecords<Handoff>(COLLECTIONS.handoffs, { providerId: pid }, {
         sortBy: "approvedAt",
         desc: true,
