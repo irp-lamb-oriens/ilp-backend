@@ -21,15 +21,20 @@ import auditLog from "../../helper/auditLog.ts";
 import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import { auditAuth } from "../../helper/auth/audit.ts";
 import { SESSION_TTL_MS } from "../../helper/auth/cookies.ts";
-import { emitEvent, seedObligationsFromLead } from "../members/events.ts";
+import { emitEvent, obligationsFromLead, seedObligationsFromLead } from "../members/events.ts";
+import { createRecord, getRecord } from "../../db/records.ts";
+import { evaluateCheck, normalizeAnswers } from "../leads/deadlineCheck.ts";
+import { checkAnswersFromProfile, firstMatterFrom, intakeFindings, JOIN_PROFILE_KEYS, onboardingDetail } from "./joinIntake.ts";
 import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
   COLLECTIONS,
   type CountryCode,
+  type JoinIntake,
   type Lead,
+  type Matter,
   type Membership,
+  type Obligation,
   PLAN_STANDARD,
-  PROFILE_FIELDS,
 } from "../../schemas/contracts.ts";
 
 export type PaymentsMode = "stripe" | "manual";
@@ -55,11 +60,13 @@ function addMonths(iso: string, n: number): string {
 
 const filled = (v: unknown) => v !== undefined && v !== null && !(typeof v === "string" && v.trim() === "");
 
-/** Check answers → profile fields, keeping only keys named in PROFILE_FIELDS. */
+/**
+ * Check answers → profile fields, keeping only keys named in PROFILE_FIELDS
+ * or PROFILE_DETAIL_FIELDS (T3: hasEmployees and lastEntryDate now carry over).
+ */
 export function profileFromAnswers(answers: Record<string, unknown>): Doc {
-  const allowed = new Set(Object.values(PROFILE_FIELDS).flat());
   const out: Doc = {};
-  for (const [k, v] of Object.entries(answers)) if (allowed.has(k) && filled(v)) out[k] = v;
+  for (const [k, v] of Object.entries(answers)) if (JOIN_PROFILE_KEYS.has(k) && filled(v)) out[k] = v;
   return out;
 }
 
@@ -68,6 +75,17 @@ export interface JoinInput {
   fullName: string;
   phone?: string;
   leadId?: string;
+  /** T3 guided join: validated profile fields (joinIntake.ts parseJoinDetails). Win over the check answers. */
+  profile?: Doc;
+  /** T3 guided join: "what you need first"; becomes the first matter on activation. */
+  intake?: JoinIntake | null;
+}
+
+/** T3: the intake plus the dated findings its situation answers give (obligations on activation). */
+export function intakeWithFindings(intake: JoinIntake, profile: Doc, now = new Date()): JoinIntake {
+  const { answers } = normalizeAnswers(checkAnswersFromProfile(profile));
+  const findings = answers ? intakeFindings(evaluateCheck(answers, now)) : [];
+  return { ...intake, findings };
 }
 
 export interface JoinSession {
@@ -108,7 +126,8 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
     if (l && l.email === email) lead = l;
   }
   const country: CountryCode = lead?.country ?? "CR";
-  const profile = lead ? profileFromAnswers(lead.answers) : {};
+  // The form's answers are newer than the check's, so they win.
+  const profile = { ...(lead ? profileFromAnswers(lead.answers) : {}), ...profileFromAnswers(input.profile ?? {}) };
 
   const existing = (await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null;
   const prior = existing ? await membershipsFor(clientId) : [];
@@ -159,6 +178,7 @@ export async function startJoin(input: JoinInput): Promise<{ session: JoinSessio
     updatedAt: now,
   };
   if (lead) membership.sourceLeadId = lead.id;
+  if (input.intake) membership.intake = intakeWithFindings(input.intake, profile);
   membership.paymentRef = paymentsMode() === "stripe" ? "stripe:pending" : "manual";
   await patch(COLLECTIONS.memberships, membership.id, membership as unknown as Doc);
 
@@ -213,14 +233,64 @@ export async function activateMembership(
   }
   await patch(COLLECTIONS.clients, m.clientId, { membershipStatus: "active", memberSince: update.activatedAt, updatedAt: now })
     .catch(() => {});
+  // T3: the join form's "what you need first" becomes the first matter.
+  const firstMatter = m.intake ? await openFirstMatter(m, membershipId) : null;
   // Creates the onboarding CSM task (TASK_RULES); idempotent per membership.
-  await emitEvent("membership.activated", { clientId: m.clientId, sourceId: membershipId });
+  // T3: the task title carries the member's name and main question.
+  const client = m.intake ? (await get(COLLECTIONS.clients, m.clientId).catch(() => null)) as Doc | null : null;
+  const name = String(client?.fullName ?? client?.name ?? "");
+  await emitEvent("membership.activated", {
+    clientId: m.clientId,
+    sourceId: membershipId,
+    ...(firstMatter ? { matterId: firstMatter.id } : {}),
+    ...(m.intake ? { detail: onboardingDetail(name, m.intake) } : {}),
+  });
   await seedObligationsFromLead(m as unknown as Record<string, unknown>);
+  if (m.intake?.findings?.length) await seedObligationsFromIntake(m.clientId, m.country, m.intake);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   // Join confirmation email with the renewal terms (never throws; once per membership).
   await runHook("onActivated", { ...m, ...update } as MembershipDoc);
   return { ...m, ...update } as Membership;
+}
+
+/**
+ * T3: create the first matter from the membership's intake (once: the id is
+ * derived from the membership). Never throws; activation must not fail on it.
+ */
+async function openFirstMatter(m: Membership, membershipId: string): Promise<Matter | null> {
+  try {
+    const want = firstMatterFrom({
+      clientId: m.clientId,
+      membershipId,
+      intake: m.intake!,
+      profile: ((await get(COLLECTIONS.clients, m.clientId).catch(() => null)) ?? {}) as Doc,
+      country: m.country,
+    });
+    const existing = await getRecord<Matter>(COLLECTIONS.matters, want.id);
+    const matter = existing ?? await createRecord(COLLECTIONS.matters, want);
+    if (m.firstMatterId !== matter.id) await patch(COLLECTIONS.memberships, membershipId, { firstMatterId: matter.id });
+    if (!existing) log(`[payments] first matter ${matter.id} (${matter.area}) for ${m.clientId}`, "payments");
+    return matter;
+  } catch (err) {
+    log(`[payments] first matter not created for ${membershipId}: ${err instanceof Error ? err.message : err}`, "error");
+    return null;
+  }
+}
+
+/** T3: obligations from the join answers' findings (same ids as the check's, so no duplicates). Never throws. */
+async function seedObligationsFromIntake(clientId: string, country: Membership["country"], intake: JoinIntake): Promise<number> {
+  let n = 0;
+  try {
+    for (const o of obligationsFromLead(clientId, { country, findings: intake.findings ?? [] })) {
+      if (await getRecord<Obligation>(COLLECTIONS.obligations, o.id)) continue;
+      await createRecord(COLLECTIONS.obligations, o);
+      n++;
+    }
+  } catch (err) {
+    log(`[payments] obligations from join answers failed: ${err instanceof Error ? err.message : err}`, "error");
+  }
+  return n;
 }
 
 export async function readJoinSession(token: string): Promise<JoinSession | null> {

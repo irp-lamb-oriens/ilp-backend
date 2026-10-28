@@ -29,6 +29,7 @@ import { installLifecycleEmailHooks } from "../retention/lifecycleEmails.ts";
 import { registerRetentionRoutes } from "../retention/retentionRouter.ts";
 import { parseJoinConsents } from "../privacy/policy.ts";
 import { recordJoinConsents } from "../privacy/privacyRouter.ts";
+import { parseJoinDetails } from "./joinIntake.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -58,6 +59,8 @@ const joinLimiter = rateLimit({
  * Join funnel (W3, see membership.ts):
  *   GET  /api/payments/plan                       — plan + payments mode
  *   POST /api/payments/join                       — client + pending membership (+ Stripe Checkout URL)
+ *                                                   T3: optional { profile, intake } from the guided form
+ *                                                   (joinIntake.ts), 400 { error, errors: { field } }
  *   GET  /api/payments/join/:token                — membership status for the join page
  *   POST /api/payments/join/:token/portal-session — first portal session for a brand-new member
  *   POST /api/payments/stripe/webhook             — Stripe events (verified by fetching them back)
@@ -113,16 +116,28 @@ export default function paymentsRouter(app: Express) {
       const phone = sanitizeStr(body.phone).slice(0, 40);
       const leadId = sanitizeStr(body.leadId).slice(0, 100);
       if (!email || !EMAIL_RE.test(email) || email.length > 254) {
-        return res.status(400).json({ error: "Enter a valid email address." });
+        return res.status(400).json({ error: "Enter a valid email address.", errors: { email: "Enter a valid email address." } });
       }
-      if (!fullName) return res.status(400).json({ error: "Enter your full name." });
+      if (!fullName) return res.status(400).json({ error: "Enter your full name.", errors: { fullName: "Enter your full name." } });
+      // T3: the guided form's profile and "what you need first". The older
+      // short body (name, email, phone) skips this and joins as before.
+      const details = parseJoinDetails(body);
+      if (Object.keys(details.errors).length) {
+        return res.status(400).json({ error: "Some answers need a fix. Each one is marked on the form.", errors: details.errors });
+      }
       // P7: Terms and Privacy consents (with document versions) are part of
       // the join itself; no consent, no join. Marketing is optional.
       const consents = parseJoinConsents(body);
       if ("error" in consents) return res.status(400).json({ error: consents.error });
 
       try {
-        const { session, token, membership } = await startJoin({ email, fullName, phone, leadId });
+        const { session, token, membership } = await startJoin({
+          email,
+          fullName,
+          phone,
+          leadId,
+          ...(details.intake ? { profile: details.profile, intake: details.intake } : {}),
+        });
         await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
         // P2 funnel: remember the browser's anonymous id so the server can
         // attribute first_call_booked to the same visitor (no PII involved).
