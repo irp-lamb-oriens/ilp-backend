@@ -327,10 +327,33 @@ export async function queryCollection(
     ];
   }
 
+  return runStructuredQuery(collection, structured);
+}
+
+/**
+ * Full Firestore resource name of a document, for `__name__` cursors
+ * (`startAt` values in a structured query).
+ */
+export function documentName(collection: string, id: string): string {
+  const url = getFirestoreDocumentUrl(collection, id);
+  return decodeURIComponent(url.slice(url.indexOf("/projects/") + 1));
+}
+
+/**
+ * Run a raw structured query (orderBy, startAt, limit included as given) and
+ * decode the rows. `signal` aborts the HTTP request (lists stop reading when
+ * the client disconnects). Used by helper/listing.ts for cursor pages.
+ */
+export async function runStructuredQuery(
+  collection: string,
+  structured: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<FirestoreDocument[]> {
   const url = getFirestoreRunQueryUrl();
   const res = await firestoreRequest("query", collection, url, {
     method: "POST",
     body: JSON.stringify({ structuredQuery: structured }),
+    signal,
   });
 
   const results = (await res.json()) as Array<{

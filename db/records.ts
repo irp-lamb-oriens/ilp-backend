@@ -19,6 +19,7 @@ import query, { type QueryFilter } from "./query.ts";
 import getAll from "./getAll.ts";
 import { COLLECTIONS } from "../schemas/contracts.ts";
 import { derivedStamp, isPlaceholderId, PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
+import { searchTokens } from "../helper/listing.ts";
 
 export type RecordCollection =
   | typeof COLLECTIONS.leads
@@ -49,6 +50,52 @@ const PREFIX: Record<RecordCollection, string> = {
   csm_tasks: "task",
   obligations: "obl",
 };
+
+/**
+ * Fields whose words feed each record's `searchTokens` (helper/listing.ts).
+ * Dotted paths read into nested objects and arrays ("legalNextSteps.what").
+ * Kept current on every createRecord / updateRecord; older records get them
+ * from scripts/backfillSearchTokens.ts.
+ */
+export const SEARCH_FIELDS: Record<RecordCollection, string[]> = {
+  leads: ["name", "email", "country", "source"],
+  memberships: ["clientId", "csmEmail", "status", "country", "plan"],
+  matters: ["title", "area", "country", "stage", "question"],
+  consultations: ["question", "status", "clientId"],
+  handoffs: ["legalNextSteps.what", "clientId"],
+  csm_tasks: ["title", "type", "ownerEmail", "clientId"],
+  obligations: ["title", "country", "status"],
+};
+
+function readPath(doc: unknown, path: string): unknown[] {
+  let cur: unknown[] = [doc];
+  for (const part of path.split(".")) {
+    const next: unknown[] = [];
+    for (const v of cur) {
+      if (Array.isArray(v)) for (const x of v) next.push((x as Record<string, unknown> | null)?.[part]);
+      else if (v && typeof v === "object") next.push((v as Record<string, unknown>)[part]);
+    }
+    cur = next.flat();
+  }
+  return cur.filter((v) => v !== undefined && v !== null);
+}
+
+/** The values a record's search reads (the same ones its tokens come from). */
+export function recordSearchValues(collection: RecordCollection, doc: Record<string, unknown>): unknown[] {
+  return (SEARCH_FIELDS[collection] ?? []).map((f) => readPath(doc, f));
+}
+
+/** The `searchTokens` array for a record of `collection`. */
+export function recordSearchTokens(collection: RecordCollection, doc: Record<string, unknown>): string[] {
+  const fields = SEARCH_FIELDS[collection] ?? [];
+  return searchTokens(...fields.map((f) => readPath(doc, f)));
+}
+
+/** True when a write touches a field that feeds the search tokens. */
+function touchesSearch(collection: RecordCollection, fields: Record<string, unknown>): boolean {
+  const roots = new Set((SEARCH_FIELDS[collection] ?? []).map((f) => f.split(".")[0]));
+  return Object.keys(fields).some((k) => roots.has(k));
+}
 
 export function newId(collection: RecordCollection): string {
   return `${PREFIX[collection]}_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
@@ -103,7 +150,8 @@ export async function createRecord<T extends object>(
   const base = typeof given === "string" && given ? given : newId(collection);
   const id = ph && !isPlaceholderId(base) ? `${PLACEHOLDER_PREFIX}${base}` : base;
   const stamp = ph && (data as { placeholder?: unknown }).placeholder !== true ? derivedStamp() : {};
-  const doc = clean({ ...data, ...stamp, id }) as T & { id: string };
+  const base0 = clean({ ...data, ...stamp, id }) as Record<string, unknown>;
+  const doc = { ...base0, searchTokens: recordSearchTokens(collection, base0) } as unknown as T & { id: string };
   await put(collection, id, doc as unknown as Record<string, unknown>);
   return doc;
 }
@@ -119,6 +167,10 @@ export async function updateRecord<T>(
   const rest = { ...fields };
   delete rest.id;
   const cleaned = clean(rest);
+  delete (cleaned as Record<string, unknown>).searchTokens;
+  if (touchesSearch(collection, cleaned) || !Array.isArray((existing as Record<string, unknown>).searchTokens)) {
+    (cleaned as Record<string, unknown>).searchTokens = recordSearchTokens(collection, { ...(existing as Record<string, unknown>), ...cleaned });
+  }
   await patch(collection, id, cleaned);
   return { ...(existing as Record<string, unknown>), ...cleaned, id } as T;
 }

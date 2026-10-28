@@ -115,12 +115,12 @@ export function addMonths(iso: string, n: number): string {
 
 /** Remove fields lawyers must never see (margins, commercial notes). */
 export function forLawyer<T>(value: T): T {
-  return stripFields(value, LAWYER_HIDDEN_FIELDS);
+  return stripFields(value, [...LAWYER_HIDDEN_FIELDS, "searchTokens"]);
 }
 
 /** Remove fields clients must never see; handoffs also drop CSM task links. */
 export function forClient<T>(value: T): T {
-  return stripFields(value, [...CLIENT_HIDDEN_FIELDS, "csmTaskIds", "ownerEmail"]);
+  return stripFields(value, [...CLIENT_HIDDEN_FIELDS, "csmTaskIds", "ownerEmail", "searchTokens"]);
 }
 
 // ─── Membership ────────────────────────────────────────────────────────────
