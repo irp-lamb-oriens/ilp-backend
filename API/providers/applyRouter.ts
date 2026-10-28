@@ -17,6 +17,7 @@ import rateLimit from "express-rate-limit";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import auditLog from "../../helper/auditLog.ts";
 import log from "../../helper/log.ts";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import patch from "../../db/patch.ts";
@@ -118,6 +119,18 @@ export default function applyRouter(app: Express) {
       const items = rows
         .map(applicationView)
         .sort((a, b) => String((b.application as Doc | undefined)?.submittedAt ?? b.createdAt ?? "").localeCompare(String((a.application as Doc | undefined)?.submittedAt ?? a.createdAt ?? "")));
+      if (isListRequest(req)) {
+        const submitted = (d: Doc) => String((d.application as Doc | undefined)?.submittedAt ?? d.createdAt ?? "");
+        const spec: ListSpec<Doc> = {
+          sorts: { submittedAt: submitted, name: (d) => String(d.name ?? "").toLowerCase() },
+          defaultSort: "submittedAt",
+          defaultDir: "desc",
+          filters: { appStatus: (d, v) => d.status === v },
+          search: (d) => [d.name, d.email, d.legalAreas, d.jurisdictions, d.firmName],
+          id: (d) => String(d.id ?? ""),
+        };
+        return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(items, p, spec)) }));
+      }
       res.json({ items });
     }),
   );

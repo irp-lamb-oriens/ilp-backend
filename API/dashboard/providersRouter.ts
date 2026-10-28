@@ -30,6 +30,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -335,6 +336,20 @@ export default function providersRouter(app: Express) {
       if (activeOnly) providers = providers.filter((p) => p.active !== false);
       providers.sort((a, b) => String(a.name ?? "").localeCompare(String(b.name ?? "")));
       providers = providers.map(ensureContacts);
+      if (isListRequest(req)) {
+        type Row = (typeof providers)[number];
+        const spec: ListSpec<Row> = {
+          sorts: { name: (p) => String(p.name ?? "").toLowerCase(), createdAt: (p) => String(p.createdAt ?? "") },
+          defaultSort: "name",
+          filters: {
+            area: (p, v) => Array.isArray(p.legalAreas) && (p.legalAreas as unknown[]).map(String).includes(v),
+            jurisdiction: (p, v) => Array.isArray(p.jurisdictions) && (p.jurisdictions as unknown[]).map((x) => String(x).toUpperCase()).includes(v.toUpperCase()),
+            active: (p, v) => (v === "1" ? p.active !== false : v === "0" ? p.active === false : true),
+          },
+          search: (p) => [p.name, p.email, p.firmName, p.legalAreas, p.jurisdictions],
+        };
+        return respondList(req, res, spec, (lp) => ({ produce: pageProducer(pageRows(providers, lp, spec)) }));
+      }
       return res.json({ providers, count: providers.length });
     }),
   );

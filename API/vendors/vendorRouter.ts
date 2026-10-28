@@ -15,6 +15,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -97,6 +98,14 @@ export default function vendorRouter(app: Express) {
         return (a.companyName || "").localeCompare(b.companyName || "");
       });
 
+      if (isListRequest(req)) {
+        const spec: ListSpec<Vendor> = {
+          sorts: { companyName: (v) => (v.companyName || "").toLowerCase() },
+          defaultSort: "companyName",
+          search: (v) => [v.companyName, v.contactName, v.email, v.legalAreas, v.jurisdictions],
+        };
+        return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(vendors, p, spec)) }));
+      }
       res.json({ vendors, total: vendors.length });
     }),
   );

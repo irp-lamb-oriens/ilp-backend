@@ -70,6 +70,7 @@ import {
 import { buildExport, loadExportBundle } from "./exportData.ts";
 import { erasureBlocker, firestoreStore, planErasure, runErasure, subjectFor } from "./erasure.ts";
 import { registerCspReport } from "./cspReport.ts";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 
 type Doc = Record<string, unknown>;
 const env = (k: string) => Deno.env.get(k);
@@ -366,6 +367,34 @@ export default function privacyRouter(app: Express): void {
     asyncHandler(async (req: Request, res: Response) => {
       const all = req.query.status === "all";
       const rows = (await query(COLLECTIONS.privacyRequests, []).catch(() => [])) as unknown as PrivacyRequest[];
+      const nameOf = async (ids: string[]) => {
+        const names = new Map<string, string>();
+        await Promise.all([...new Set(ids)].map(async (id) => {
+          const c = (await get(COLLECTIONS.clients, id).catch(() => null)) as Doc | null;
+          names.set(id, c?.erased ? "(deleted member)" : String(c?.name ?? c?.fullName ?? c?.email ?? id));
+        }));
+        return names;
+      };
+      if (isListRequest(req)) {
+        // LISTS: names are looked up for each streamed chunk only, not for every request on file.
+        const spec: ListSpec<PrivacyRequest> = {
+          sorts: { dueAt: (r) => r.dueAt, createdAt: (r) => (r as unknown as Doc).createdAt as string },
+          defaultSort: "dueAt",
+          filters: {
+            status: (r, v) => (v === "all" ? true : v === "open" ? r.status === "received" || r.status === "in_review" : r.status === v),
+            kind: (r, v) => r.kind === v,
+          },
+          search: (r) => [r.id, r.kind, r.email, r.clientId],
+        };
+        const scoped = all || typeof req.query.status === "string" ? rows : rows.filter((r) => r.status === "received" || r.status === "in_review");
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(scoped, p, spec), async (chunk) => {
+            const names = await nameOf(chunk.map((r) => r.clientId));
+            const now = Date.now();
+            return chunk.map((r) => ({ ...r, memberName: names.get(r.clientId) ?? r.clientId, overdue: (r.status === "received" || r.status === "in_review") && Date.parse(r.dueAt) < now }));
+          }),
+        }));
+      }
       const list = rows
         .filter((r) => all || r.status === "received" || r.status === "in_review")
         .sort((a, b) => a.dueAt.localeCompare(b.dueAt))

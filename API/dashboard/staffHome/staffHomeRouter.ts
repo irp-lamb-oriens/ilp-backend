@@ -12,6 +12,10 @@
  *   POST /api/dashboard/staff/handoffs/:id/proposal-task      { title?, dueAt? } (idempotent per handoff)
  *   GET  /api/dashboard/staff/lawyers                         capacity per lawyer
  *
+ * LISTS: queue, members, timeline and lawyers also answer the paged contract
+ * of helper/listing.ts (?limit, ?cursor, ?sort, ?dir, ?q, filters, NDJSON);
+ * without those params they keep their old response.
+ *
  * Registered from dashboardRouter.ts, so main.ts is unchanged. Every route is
  * staff-only (requireDashboardAuth); writes are audited.
  */
@@ -45,8 +49,71 @@ import {
   DAY_MS,
   filterMembers,
   type MemberQuery,
+  type MemberRow,
   memberRows,
+  type TimelineEntry,
 } from "./compute.ts";
+import { isListRequest, type ListSpec, mapProducer, pageProducer, pageRows, respondList } from "../../../helper/listing.ts";
+import { pageRecords, recordSpec } from "../../../db/recordLists.ts";
+
+// ── LISTS: paged specs (helper/listing.ts) ──────────────────────────────────
+
+type TaskRec = CsmTask & Doc & { id: string };
+
+const QUEUE_SPEC: ListSpec<TaskRec> = recordSpec<TaskRec>(COLLECTIONS.csmTasks, {
+  sorts: ["dueAt", "createdAt", "title"],
+  defaultSort: "dueAt",
+  eqFilters: ["type", "clientId"],
+  filters: {
+    excludePlaceholder: (t, v) => v !== "1" || !isPlaceholderDoc(t),
+    overdue: (t, v) => v !== "1" || t.dueAt < new Date().toISOString(),
+  },
+});
+
+export const MEMBERS_SPEC: ListSpec<MemberRow> = {
+  sorts: {
+    name: (r) => r.name.toLowerCase(),
+    joined: (r) => r.activatedAt ?? "",
+    completeness: (r) => r.completeness,
+    renewal: (r) => r.periodEnd ?? "",
+  },
+  defaultSort: "name",
+  filters: {
+    status: (r, v) => r.status === v,
+    csm: (r, v) => (v === "none" ? !r.csmEmail : (r.csmEmail ?? "").toLowerCase() === v.toLowerCase()),
+    country: (r, v) => r.country === v,
+    ready: (r, v) => (v === "ready" ? r.consultationReady : v === "not_ready" ? !r.consultationReady : true),
+    excludePlaceholder: (r, v) => v !== "1" || !r.placeholder,
+  },
+  search: (r) => [r.name, r.email, r.clientId],
+  id: (r) => r.clientId,
+};
+
+export const TIMELINE_SPEC: ListSpec<TimelineEntry> = {
+  sorts: { at: (e) => e.at },
+  defaultSort: "at",
+  defaultDir: "desc",
+  filters: { kind: (e, v) => e.kind === v },
+  search: (e) => [e.title, e.body, e.actor],
+};
+
+interface CapacityRow {
+  id: string;
+  name: string;
+  email: string;
+  legalAreas: unknown[];
+  openMatters: number;
+  agingMatters: number;
+  callsNext7d: number;
+}
+
+export const LAWYERS_SPEC: ListSpec<CapacityRow> = {
+  sorts: { openMatters: (r) => r.openMatters, name: (r) => r.name.toLowerCase(), callsNext7d: (r) => r.callsNext7d, agingMatters: (r) => r.agingMatters },
+  defaultSort: "openMatters",
+  defaultDir: "desc",
+  filters: { area: (r, v) => r.legalAreas.map(String).includes(v) },
+  search: (r) => [r.name, r.email, r.legalAreas],
+};
 
 type Doc = Record<string, unknown>;
 
@@ -136,6 +203,43 @@ export default function staffHomeRouter(app: Express): void {
       const me = (req as AuthedRequest).dashboardUser ?? "";
       const ownerQ = qs(req, "owner");
       const owner = ownerQ === "all" ? undefined : ownerQ && ownerQ !== "me" ? ownerQ : me;
+      if (isListRequest(req)) {
+        const scope: Record<string, string> = owner ? { status: "open", ownerEmail: owner } : { status: "open" };
+        const enrich = async (batch: TaskRec[]) => {
+          const ids = [...new Set(batch.map((t) => t.clientId))];
+          const [clients, ms] = await Promise.all([
+            clientsById(ids),
+            Promise.all(ids.map((id) => findRecords<Membership>(COLLECTIONS.memberships, { clientId: id }, { sortBy: "createdAt", desc: true }))),
+          ]);
+          const status = new Map(ids.map((id, i) => [id, (ms[i].find((m) => m.status === "active") ?? ms[i][0])?.status ?? null]));
+          const now = new Date().toISOString();
+          return batch.map((t) => ({
+            ...t,
+            overdue: t.dueAt < now,
+            memberName: displayName(clients.get(t.clientId), t.clientId),
+            membershipStatus: status.get(t.clientId) ?? null,
+          }));
+        };
+        // Counts for the page header, once per list (first page only): open tasks are a bounded set.
+        let meta: Record<string, unknown> = { owner: owner ?? "all" };
+        if (!qs(req, "cursor")) {
+          const all = (await findRecords<CsmTask>(COLLECTIONS.csmTasks, scope))
+            .filter((t) => qs(req, "excludePlaceholder") !== "1" || !isPlaceholderDoc(t));
+          const now = new Date().toISOString();
+          meta = {
+            ...meta,
+            counts: {
+              open: all.length,
+              overdue: all.filter((t) => t.dueAt < now).length,
+              dueToday: all.filter((t) => t.dueAt.slice(0, 10) === now.slice(0, 10)).length,
+            },
+          };
+        }
+        return respondList(req, res, QUEUE_SPEC, (p) => ({
+          produce: mapProducer(pageRecords<TaskRec>(COLLECTIONS.csmTasks, scope, p, QUEUE_SPEC, ["type", "clientId"]), enrich),
+          meta,
+        }));
+      }
       const found = await findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open", ownerEmail: owner }, { sortBy: "dueAt" });
       const tasks = qs(req, "excludePlaceholder") === "1" ? found.filter((t) => !isPlaceholderDoc(t)) : found;
       const ids = [...new Set(tasks.map((t) => t.clientId))];
@@ -176,6 +280,10 @@ export default function staffHomeRouter(app: Express): void {
       ]);
       const clients = await clientsById(memberships.map((m) => m.clientId));
       const rows = memberRows(memberships, clients, openTasks);
+      if (isListRequest(req)) {
+        const csms = [...new Set(rows.map((r) => r.csmEmail).filter((e): e is string => !!e))].sort();
+        return respondList(req, res, MEMBERS_SPEC, (p) => ({ produce: pageProducer(pageRows(rows, p, MEMBERS_SPEC)), meta: { csms } }));
+      }
       const ready = qs(req, "ready");
       const q: MemberQuery = {
         status: qs(req, "status"),
@@ -222,6 +330,9 @@ export default function staffHomeRouter(app: Express): void {
         audit: auditRows,
         providerNames: names,
       });
+      if (isListRequest(req)) {
+        return respondList(req, res, TIMELINE_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, TIMELINE_SPEC)) }));
+      }
       res.json({ items: items.slice(0, 200) });
     }),
   );
@@ -294,7 +405,7 @@ export default function staffHomeRouter(app: Express): void {
   app.get(
     "/api/dashboard/staff/lawyers",
     requireDashboardAuth,
-    asyncHandler(async (_req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const now = Date.now();
       const in7 = new Date(now + 7 * DAY_MS).toISOString();
       const nowIso = new Date(now).toISOString();
@@ -320,7 +431,11 @@ export default function staffHomeRouter(app: Express): void {
           };
         })
         .sort((a, b) => b.openMatters - a.openMatters);
-      res.json({ items, unassignedMatters: open.filter((m) => !m.assignedProviderId).length });
+      const unassignedMatters = open.filter((m) => !m.assignedProviderId).length;
+      if (isListRequest(req)) {
+        return respondList(req, res, LAWYERS_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, LAWYERS_SPEC)), meta: { unassignedMatters } }));
+      }
+      res.json({ items, unassignedMatters });
     }),
   );
 }

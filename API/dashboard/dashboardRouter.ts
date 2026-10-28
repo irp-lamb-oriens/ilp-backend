@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import log from "../../helper/log.ts";
@@ -318,6 +319,29 @@ export default (app: Express) => {
       await ensureStageConfig();
       const docs = await fetchAllClientsWithIds();
       const clients = docs.map(({ docId, data }) => buildClientSummary(docId, data, isAdmin));
+      if (isListRequest(req)) {
+        // LISTS: the legacy client CRM, paged and searched on the server.
+        type Summary = ReturnType<typeof buildClientSummary>;
+        const spec: ListSpec<Summary> = {
+          sorts: {
+            lastUpdated: (c) => (c.lastUpdated ? String(c.lastUpdated) : ""),
+            name: (c) => `${c.name ?? ""} ${c.surname ?? ""}`.trim().toLowerCase(),
+            stage: (c) => String(c.stage ?? ""),
+          },
+          defaultSort: "lastUpdated",
+          defaultDir: "desc",
+          filters: {
+            stage: (c, v) => c.stage === v,
+            jurisdiction: (c, v) => String(c.jurisdiction ?? "").toUpperCase() === v.toUpperCase(),
+            pending: (c, v) => v !== "1" || Number(c.pendingCount ?? 0) > 0,
+          },
+          search: (c) => [c.name, c.surname, c.email, c.phone, c.legalArea, c.legalMatter, c.jurisdiction],
+        };
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(clients, p, spec)),
+          meta: { stages: getStageIds(), stageLabels: getStageLabels() },
+        }));
+      }
       clients.sort((a, b) => {
         const da = a.lastUpdated ? new Date(a.lastUpdated as string).getTime() : 0;
         const db = b.lastUpdated ? new Date(b.lastUpdated as string).getTime() : 0;
@@ -750,8 +774,19 @@ export default (app: Express) => {
   app.get(
     "/api/dashboard/pending-emails",
     requireDashboardAuth,
-    asyncHandler(async (_req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const rows = await query("email_queue", [{ field: "status", op: "EQUAL", value: "pending" }]).catch(() => []);
+      if (isListRequest(req)) {
+        type Row = Record<string, unknown> & { id: string };
+        const at = (r: Row) => String(r.scheduledFor ?? r.sendAt ?? r.createdAt ?? "");
+        const spec: ListSpec<Row> = {
+          sorts: { scheduledFor: at, createdAt: (r) => String(r.createdAt ?? "") },
+          defaultSort: "scheduledFor",
+          filters: { emailType: (r, v) => String(r.emailType ?? r.type ?? "") === v },
+          search: (r) => [r.to, r.subject, r.emailType, r.type, r.clientName, r.clientId],
+        };
+        return respondList(req, res, spec, (p) => ({ produce: pageProducer(pageRows(rows as Row[], p, spec)) }));
+      }
       res.json({ pending: rows });
     })
   );

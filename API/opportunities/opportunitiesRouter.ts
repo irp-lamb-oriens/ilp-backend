@@ -49,6 +49,7 @@ import {
   summarize,
 } from "./logic.ts";
 import { createOpportunityFromHandoff, getOpportunity, listOpportunities, memberCsm, saveOpportunity } from "./store.ts";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 
 type Doc = Record<string, unknown>;
 
@@ -158,6 +159,28 @@ export default function opportunitiesRouter(app: Express) {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const { f, items, clients, names } = await loadFiltered(req);
+      if (isListRequest(req)) {
+        // LISTS: filters as before; search, sort and the cursor page come from helper/listing.ts.
+        const list = filterOpportunities(items, { ...f, q: undefined }, names);
+        const spec: ListSpec<Opportunity> = {
+          sorts: {
+            updatedAt: (o) => o.updatedAt,
+            createdAt: (o) => o.createdAt,
+            valueCents: (o) => o.valueCents ?? 0,
+            title: (o) => o.title,
+            due: (o) => o.nextAction?.dueAt ?? "",
+          },
+          defaultSort: "updatedAt",
+          defaultDir: "desc",
+          search: (o) => [o.title, o.area, names.get(o.clientId), o.ownerEmail],
+        };
+        const owners = [...new Set(items.map((o) => o.ownerEmail).filter(Boolean))].sort();
+        const areas = [...new Set(items.map((o) => o.area).filter(Boolean))].sort();
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(list, p, spec), (chunk) => chunk.map((o) => row(o, clients))),
+          meta: { owners, areas },
+        }));
+      }
       const list = filterOpportunities(items, f, names);
       const owners = [...new Set(items.map((o) => o.ownerEmail).filter(Boolean))].sort();
       const areas = [...new Set(items.map((o) => o.area).filter(Boolean))].sort();

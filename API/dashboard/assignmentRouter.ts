@@ -17,6 +17,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -77,13 +78,36 @@ export default function assignmentRouter(app: Express) {
   app.get(
     "/api/dashboard/assignment/queue",
     requireDashboardAuth,
-    asyncHandler(async (_req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       const all = await fetchAllClientsWithIds();
       const unassigned = all
         .filter(({ data }) => !data.assignedProviderId)
         .map(({ docId, data }) => buildClientSummary(docId, data, true));
 
       const providers = await rankedProviders();
+      if (isListRequest(req)) {
+        type Summary = (typeof unassigned)[number];
+        const spec: ListSpec<Summary> = {
+          sorts: { name: (c) => `${c.name ?? ""} ${c.surname ?? ""}`.trim().toLowerCase(), lastUpdated: (c) => String(c.lastUpdated ?? "") },
+          defaultSort: "lastUpdated",
+          defaultDir: "desc",
+          search: (c) => [c.name, c.surname, c.email, c.legalArea, c.jurisdiction],
+        };
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(unassigned, p, spec)),
+          meta: {
+            unassignedCount: unassigned.length,
+            providers: providers.map((p) => ({
+              id: p.id,
+              name: p.name ?? null,
+              email: p.email ?? null,
+              score: scoreOf(p),
+              legalAreas: p.legalAreas ?? [],
+              jurisdictions: p.jurisdictions ?? [],
+            })),
+          },
+        }));
+      }
 
       res.json({
         unassigned,
