@@ -60,6 +60,7 @@ const SOURCE_KIND: Record<string, CsmTask["source"]["kind"]> = {
   quote: "quote",
   call: "consultation",
   privacy: "privacy_request",
+  obligation: "obligation",
 };
 
 export function isTaskEvent(name: string): name is EventName {
@@ -159,6 +160,12 @@ export function obligationsFromLead(clientId: string, lead: Pick<Lead, "country"
       ruleId: f.ruleId,
       title: f.title,
       status: "upcoming",
+      // DEADLINES: same shape as the Deadlines page's own records.
+      area: f.area,
+      source: "check",
+      remind: true,
+      needsDate: !f.dueAt || f.confidence === "low",
+      createdAt: new Date().toISOString(),
     };
     if (f.dueAt) o.dueAt = f.dueAt;
     if (f.windowStartAt) o.windowStartAt = f.windowStartAt;

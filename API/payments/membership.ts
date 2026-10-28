@@ -37,6 +37,7 @@ import { flagUnassignedCountry, hasLawyerIn } from "../calls/callService.ts";
 import { isPlaceholderId } from "../../helper/placeholder.ts";
 import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
+  ACCOUNT_TYPE_FIELD,
   COLLECTIONS,
   COUNTRY_ANSWERS_FIELD,
   countryName,
@@ -262,7 +263,8 @@ export async function activateMembership(
     await patch(COLLECTIONS.leads, m.sourceLeadId, { convertedClientId: m.clientId, convertedAt: now })
       .catch((err) => log(`[payments] lead ${m.sourceLeadId} not marked converted: ${err}`, "payments"));
   }
-  await patch(COLLECTIONS.clients, m.clientId, { membershipStatus: "active", memberSince: update.activatedAt, updatedAt: now })
+  // DEADLINES: a free account (saved deadlines from the free check) becomes a member on the same record.
+  await patch(COLLECTIONS.clients, m.clientId, { membershipStatus: "active", memberSince: update.activatedAt, [ACCOUNT_TYPE_FIELD]: "member", updatedAt: now })
     .catch(() => {});
   // T3: the join form's "what you need first" becomes the first matter.
   const firstMatter = m.intake ? await openFirstMatter(m, membershipId) : null;

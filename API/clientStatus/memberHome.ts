@@ -43,6 +43,7 @@ import {
   PROFILE_FIELDS,
   PROFILE_SECTIONS,
   COUNTRY_ANSWERS_FIELD,
+  accountTypeOf,
   toCountryCode,
 } from "../../schemas/contracts.ts";
 import { countryAnswersFrom, intakeFindings, profileFromCountryAnswers } from "../payments/joinIntake.ts";
@@ -70,6 +71,8 @@ import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED, bookingRecordingConsent } from "../privacy/policy.ts";
 import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import auditLog from "../../helper/auditLog.ts";
+import { memberOnly } from "./accountGuard.ts";
+import { registerMemberDeadlineRoutes } from "./memberDeadlines.ts";
 import {
   auditDocumentDownload,
   DOCUMENTS_COLLECTION,
@@ -162,6 +165,9 @@ async function chatPreservingDoc(clientId: string, message: string, email: strin
 }
 
 export function registerMemberHomeRoutes(app: Express) {
+  // DEADLINES: /me/deadlines (list, picker, add, change). Free accounts allowed.
+  registerMemberDeadlineRoutes(app);
+
   // ── Overview ─────────────────────────────────────────────────────────────
   app.get(
     "/api/client-status/me/home",
@@ -229,7 +235,9 @@ export function registerMemberHomeRoutes(app: Express) {
           .filter((c) => c.status === "completed")
           .slice(0, 5)
           .map((c) => ({ id: c.id, matterId: c.matterId, scheduledAt: c.scheduledAt, minutesUsed: c.minutesUsed, summary: c.summary?.text })),
-        obligations: bundle.obligations.filter((o) => o.status === "upcoming" || o.status === "asked"),
+        obligations: bundle.obligations.filter((o) => (o.status === "upcoming" || o.status === "asked") && !o.dismissedAt),
+        // DEADLINES: "free" (saved deadlines from the free check, no membership) or "member".
+        account: { type: accountTypeOf(bundle.client, bundle.membership) },
         completeness: bundle.completeness,
         profile: Object.fromEntries(
           [
@@ -252,6 +260,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.get(
     "/api/client-status/me/slots",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -269,6 +278,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.post(
     "/api/client-status/me/consultations",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -339,6 +349,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.post(
     "/api/client-status/me/obligations/:oid/ask",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -515,6 +526,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.get(
     "/api/client-status/me/money",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -527,6 +539,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.post(
     "/api/client-status/me/quotes/:qid/accept",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -574,6 +587,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.get(
     "/api/client-status/me/messages",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -598,6 +612,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.post(
     "/api/client-status/me/messages",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
@@ -621,6 +636,7 @@ export function registerMemberHomeRoutes(app: Express) {
   app.post(
     "/api/client-status/me/lily",
     requireClientAuth,
+    memberOnly,
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;

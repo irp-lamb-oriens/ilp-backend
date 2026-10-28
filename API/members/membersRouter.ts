@@ -16,7 +16,8 @@
  * Client (requireClientAuth; scoped to the session's clientId):
  *   GET    /api/member/home                      client-safe bundle
  *   GET    /api/member/:slug                     memberships | matters | consultations | handoffs | obligations
- *   PATCH  /api/member/obligations/:id           { status: "asked" | "dismissed" }
+ *   PATCH  /api/member/obligations/:id           { status: "asked" | "dismissed" }, or the Deadlines fields
+ *                                                 (userDueAt, status upcoming|handled, remind, dismissed, notes)
  *
  * Lawyer (requireProviderAuth; scoped to providerId; LAWYER_HIDDEN_FIELDS stripped):
  *   GET    /api/lawyer/consultations             ?from=&to= (ISO)
@@ -72,6 +73,7 @@ import {
   withDefaults,
 } from "./service.ts";
 import { onRecordCreated, onRecordUpdated } from "./events.ts";
+import { parseDeadlinePatch } from "./deadlines.ts";
 import { recordingWithdrawn } from "../privacy/policy.ts";
 import { isListRequest, type ListSpec, mapProducer, respondList } from "../../helper/listing.ts";
 import { pageRecords, rangeFilters, recordSpec } from "../../db/recordLists.ts";
@@ -377,13 +379,23 @@ export default function membersRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const id = memberId(req, res);
       if (!id) return;
-      const status = req.body?.status;
-      if (status !== "asked" && status !== "dismissed") {
-        return res.status(400).json({ error: "status must be 'asked' or 'dismissed'." });
-      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const status = body.status;
       const o = await getRecord<Obligation>(COLLECTIONS.obligations, req.params.id);
       if (!o || o.clientId !== id) return res.status(404).json({ error: "Not found." });
-      const after = await updateRecord<Obligation>(COLLECTIONS.obligations, o.id, { status, askedAt: nowIso() });
+      let fields: Record<string, unknown>;
+      if (Object.keys(body).length === 1 && status === "asked") {
+        fields = { status, askedAt: nowIso() };
+      } else if (Object.keys(body).length === 1 && status === "dismissed") {
+        // Older callers: "dismissed" is the Deadlines page's Remove (dismissedAt, undo restores it).
+        fields = { status, askedAt: nowIso(), dismissedAt: nowIso() };
+      } else {
+        // DEADLINES: the same fields as PATCH /api/client-status/me/deadlines/:id.
+        const parsed = parseDeadlinePatch(body, o);
+        if ("error" in parsed) return res.status(400).json({ error: parsed.error });
+        fields = parsed as Record<string, unknown>;
+      }
+      const after = await updateRecord<Obligation>(COLLECTIONS.obligations, o.id, fields);
       if (after) await onRecordUpdated("obligations", o as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>, { actor: (req as AuthedRequest).clientUser });
       res.json(forClient(after));
     }),
