@@ -552,7 +552,12 @@ export default function lawyerHomeRoutes(app: Express) {
         };
         return respondList(req, res, spec, (lp) => ({
           produce: pageProducer(pageRows(payments, lp, spec)),
-          meta: { currency: summary.currency, totals: summary.totals, byMatter: summary.byMatter },
+          meta: {
+            currency: summary.currency,
+            totals: summary.totals,
+            byMatter: summary.byMatter,
+            counts: { paid: payments.filter((x) => x.paid === true).length, pending: payments.filter((x) => x.paid !== true).length },
+          },
         }));
       }
       res.json(summary);
