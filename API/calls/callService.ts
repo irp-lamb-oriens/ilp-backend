@@ -41,7 +41,9 @@ import {
   toCountryCode,
 } from "../../schemas/contracts.ts";
 import { emitEvent, taskIdFor } from "../members/events.ts";
-import { applicationBlocksCalls } from "../providers/applyLogic.ts";
+import { applicationBlocksCalls, isProviderBookable } from "../providers/applyLogic.ts";
+import { syncTransaction } from "../../db/lock.ts";
+import { claimSlot, releaseSlot, withLawyerSlots } from "./slotClaims.ts";
 import { RECORDING_WITHDRAWN_MESSAGE, recordingAllowedFor } from "../privacy/policy.ts";
 import {
   currentMembership,
@@ -191,8 +193,9 @@ async function heldBy(providerId: string, fromMs: number, excludeId?: string): P
  */
 export async function slotsFor(providerId: string, now = new Date(), excludeId?: string): Promise<string[]> {
   // T2: a lawyer whose application is in review (or declined) offers no times.
+  // REL: nor does a lawyer staff switched off (active: false) or a missing profile.
   const provider = (await get("providers", providerId).catch(() => null)) as Doc | null;
-  if (applicationBlocksCalls(provider)) return [];
+  if (!isProviderBookable(provider)) return [];
   const availability = await loadAvailability(providerId);
   const held = await heldBy(providerId, now.getTime(), excludeId);
   let busy: Array<{ start: string; end: string }> = [];
@@ -233,19 +236,40 @@ export const providerCountries = (p: Doc | null | undefined): string[] =>
 export async function routeLawyer(clientId: string, matterId?: string): Promise<string | null> {
   const matters = await findRecords<Matter>(COLLECTIONS.matters, { clientId }, { sortBy: "openedAt", desc: true });
   const m = (matterId ? matters.find((x) => x.id === matterId) : null) ?? matters.find((x) => !x.closedAt && x.assignedProviderId);
-  if (m?.assignedProviderId) return m.assignedProviderId;
+  // REL: an assigned lawyer who is no longer bookable (switched off, in review) is skipped.
+  if (m?.assignedProviderId && await bookable(m.assignedProviderId)) return m.assignedProviderId;
   const client = (await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null;
   const assigned = str(client?.assignedProviderId);
-  if (assigned) return assigned;
+  if (assigned && await bookable(assigned)) return assigned;
+  return routeNewLawyer(clientId, matterId, undefined, { client, matters });
+}
+
+const bookable = async (providerId: string) => isProviderBookable((await get("providers", providerId).catch(() => null)) as Doc | null);
+
+/**
+ * REL: the lawyer routing would pick for this member now, ignoring any
+ * current assignment: licensed in the member's country, specialty match,
+ * least loaded (placeholder lawyers only for placeholder members), else
+ * DEFAULT_PROVIDER_ID when licensed there. `exclude` skips one lawyer
+ * (offboarding). Null when nobody can take the call.
+ */
+export async function routeNewLawyer(
+  clientId: string,
+  matterId?: string,
+  exclude?: string,
+  pre?: { client?: Doc | null; matters?: Matter[] },
+): Promise<string | null> {
+  const matters = pre?.matters ?? await findRecords<Matter>(COLLECTIONS.matters, { clientId }, { sortBy: "openedAt", desc: true });
+  const client = pre?.client !== undefined ? pre.client : ((await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null);
   const matter = matterId ? matters.find((x) => x.id === matterId) : matters.find((x) => !x.closedAt);
   const country = toCountryCode(matter?.country) ?? await memberCountry(clientId, client);
   const fallbackId = Deno.env.get("DEFAULT_PROVIDER_ID") || null;
   const fallbackDoc = fallbackId ? ((await get("providers", fallbackId).catch(() => null)) as Doc | null) : null;
-  const fallback = fallbackId && providerCountries(fallbackDoc).includes(country) ? fallbackId : null;
+  const fallback = fallbackId && fallbackId !== exclude && isProviderBookable(fallbackDoc) && providerCountries(fallbackDoc).includes(country) ? fallbackId : null;
   const area = matter?.area ?? str(client?.legalArea) ?? null;
   try {
     // Placeholder (seed) lawyers only ever take placeholder members, and the reverse.
-    const candidates = await lawyerCandidates(area, await isPlaceholderClient(clientId));
+    const candidates = (await lawyerCandidates(area, await isPlaceholderClient(clientId))).filter((c) => c.providerId !== exclude);
     return pickLawyer(area, candidates, fallback, country);
   } catch (err) {
     log(`[calls] routing failed for ${clientId}: ${err instanceof Error ? err.message : err}`, "error");
@@ -411,11 +435,11 @@ export async function sendBookingEmails(c: CallRecord, people?: CallPeople): Pro
   try {
     if (who.member.email) {
       const m = callBookedMemberEmail({ firstName: who.member.firstName, lawyerName: who.lawyer.name, whenLabel: whenLabel(c.scheduledAt, who.member.timezone), meetUrl: c.meetUrl, portalUrl: memberHomeUrl() });
-      await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
+      await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_booked_${c.id}_${c.providerId}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
     }
     if (who.lawyer.email) {
       const l = callBookedLawyerEmail({ lawyerName: who.lawyer.name, memberName: who.member.name, whenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), question: c.question, briefUrl: lawyerBriefUrl(c.id) });
-      await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_booked_${c.id}_${c.scheduledAt}_lawyer`);
+      await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_booked_${c.id}_${c.providerId}_${c.scheduledAt}_lawyer`);
     }
   } catch (err) {
     log(`[calls] booking emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -453,6 +477,7 @@ export async function cancelCall(c: CallRecord, actor: Actor, reason?: string): 
     );
   }
   if (c.chargedAt && !c.restoredAt) await restoreCall(c, actor);
+  await releaseSlot(c.providerId, c.scheduledAt, c.id);
   await audit(actor, "consultation.cancelled", c, { reason });
   const who = await peopleFor(c);
   try {
@@ -466,6 +491,19 @@ export async function cancelCall(c: CallRecord, actor: Actor, reason?: string): 
     log(`[calls] cancel emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
   }
   return updated ?? c;
+}
+
+/**
+ * REL: move a call to `newIso` if that start is still free for its lawyer:
+ * under the lawyer's slot lock, re-check the offered slots (unless staff
+ * force it) and claim the start time, then reschedule. Null when taken.
+ */
+export async function moveCallIfFree(c: CallRecord, newIso: string, actor: Actor, opts: { force?: boolean } = {}): Promise<CallRecord | null> {
+  const claimed = await withLawyerSlots(c.providerId, async () => {
+    if (!opts.force && !(await slotsFor(c.providerId, new Date(), c.id)).includes(newIso)) return false;
+    return (await claimSlot(c.providerId, newIso, c.id)) || !!opts.force;
+  });
+  return claimed ? await rescheduleCall(c, newIso, actor) : null;
 }
 
 /**
@@ -493,6 +531,7 @@ export async function rescheduleCall(c: CallRecord, newIso: string, actor: Actor
   } else {
     updated = await attachMeeting(updated, who);
   }
+  await releaseSlot(c.providerId, old, c.id);
   await audit(actor, "consultation.rescheduled", c, { from: old, to: newIso });
   try {
     const args = (tz: string) => ({ change: "rescheduled" as const, oldWhenLabel: whenLabel(old, tz), newWhenLabel: whenLabel(newIso, tz), meetUrl: updated.meetUrl });
@@ -514,7 +553,16 @@ export async function rescheduleCall(c: CallRecord, newIso: string, actor: Actor
  * The lawyer waited 10 minutes and the member did not join: status no_show,
  * and the call plus its booked minutes are charged once (chargedAt).
  */
-export async function markNoShow(c: CallRecord, actor: Actor): Promise<{ call: CallRecord; membership: Membership | null }> {
+export async function markNoShow(c0: CallRecord, actor: Actor): Promise<{ call: CallRecord; membership: Membership | null; already?: boolean }> {
+  // REL: one charge even when the button is pressed twice at once (lock + re-read).
+  return await syncTransaction(COLLECTIONS.consultations, c0.id, async () => {
+    const c = (await getRecord<CallRecord>(COLLECTIONS.consultations, c0.id)) ?? c0;
+    if (c.status === "no_show") return { call: c, membership: null, already: true };
+    return await markNoShowLocked(c, actor);
+  });
+}
+
+async function markNoShowLocked(c: CallRecord, actor: Actor): Promise<{ call: CallRecord; membership: Membership | null }> {
   const minutes = c.durationMin || PLAN_STANDARD.callLengthMin;
   let membership: Membership | null = null;
   const fields: Doc = { status: "no_show", noShowAt: nowIso(), noShowMarkedBy: actor.email, endedAt: nowIso() };
@@ -536,7 +584,20 @@ export async function markNoShow(c: CallRecord, actor: Actor): Promise<{ call: C
 }
 
 /** CSM: give back a charged call (no-show or otherwise). Idempotent via restoredAt. */
-export async function restoreCall(c: CallRecord, actor: Actor): Promise<Membership | null> {
+export async function restoreCall(c0: CallRecord, actor: Actor): Promise<Membership | null> {
+  return (await restoreCallOnce(c0, actor)).membership;
+}
+
+/** REL: lock + re-read, so two clicks restore once; `restored` is false for the second. */
+export async function restoreCallOnce(c0: CallRecord, actor: Actor): Promise<{ restored: boolean; membership: Membership | null }> {
+  return await syncTransaction(COLLECTIONS.consultations, c0.id, async () => {
+    const c = (await getRecord<CallRecord>(COLLECTIONS.consultations, c0.id)) ?? c0;
+    if (!c.chargedAt || c.restoredAt) return { restored: false, membership: null };
+    return { restored: true, membership: await restoreCallLocked(c, actor) };
+  });
+}
+
+async function restoreCallLocked(c: CallRecord, actor: Actor): Promise<Membership | null> {
   if (!c.chargedAt || c.restoredAt) return null;
   const m = await currentMembership(c.clientId);
   let updated: Membership | null = null;

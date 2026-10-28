@@ -131,6 +131,28 @@ export async function createDocument(
 }
 
 /**
+ * Create a document at a fixed id only if none exists (REL: slot claims).
+ * True when created; false when the id is taken (Firestore answers 409).
+ */
+export async function createDocumentIfAbsent(
+  collection: string,
+  id: string,
+  data: Record<string, unknown>,
+): Promise<boolean> {
+  const url = `${getFirestoreCollectionUrl(collection)}?documentId=${encodeURIComponent(id)}`;
+  try {
+    await firestoreRequest("create", `${collection}/${id}`, url, {
+      method: "POST",
+      body: JSON.stringify(toFirestoreDocument(data)),
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof FirestoreError && err.status === 409) return false;
+    throw err;
+  }
+}
+
+/**
  * Full-document replace. Firestore REST has no PUT verb; a PATCH without an
  * updateMask replaces the entire document (clearing unspecified fields).
  */

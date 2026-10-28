@@ -45,8 +45,8 @@ import {
   markNoShow,
   pullMeetTranscript,
   recordingStillAllowed,
-  rescheduleCall,
-  restoreCall,
+  moveCallIfFree,
+  restoreCallOnce,
   saveAvailability,
   sendBookingEmails,
   setConsent,
@@ -144,7 +144,8 @@ export default function callsRouter(app: Express) {
       if (!c) return;
       const ok = noShowCheck(c, new Date());
       if (!ok.ok) return res.status(409).json({ error: ok.reason });
-      const { call } = await markNoShow(c, { email: lawyerEmail(req), role: "lawyer" });
+      const { call, already } = await markNoShow(c, { email: lawyerEmail(req), role: "lawyer" });
+      if (already) return res.status(409).json({ error: "This call is already marked as a no-show." });
       res.json({ id: call.id, status: call.status, noShowAt: (call as unknown as Record<string, unknown>).noShowAt ?? null });
     }),
   );
@@ -254,10 +255,9 @@ export default function callsRouter(app: Express) {
       if (!iso) return res.status(400).json({ error: "Pick a new time." });
       // Staff may place a call outside the offered slots (they talked to both sides).
       const force = req.body?.force === true;
-      if (!force && !(await slotsFor(c.providerId, new Date(), c.id)).includes(iso)) {
-        return res.status(409).json({ error: "That time is not open for this lawyer. Pass force: true to book it anyway." });
-      }
-      res.json(forStaff(await rescheduleCall(c, iso, { email: staffEmail(req), role: "staff" })));
+      const moved = await moveCallIfFree(c, iso, { email: staffEmail(req), role: "staff" }, { force });
+      if (!moved) return res.status(409).json({ error: "That time is not open for this lawyer. Pass force: true to book it anyway." });
+      res.json(forStaff(moved));
     }),
   );
 
@@ -269,7 +269,8 @@ export default function callsRouter(app: Express) {
       if (!c) return;
       if (!c.chargedAt) return res.status(409).json({ error: "This call was not charged, so there is nothing to restore." });
       if (c.restoredAt) return res.status(409).json({ error: "This call was already restored." });
-      const membership = await restoreCall(c, { email: staffEmail(req), role: "staff" });
+      const { restored, membership } = await restoreCallOnce(c, { email: staffEmail(req), role: "staff" });
+      if (!restored) return res.status(409).json({ error: "This call was already restored." });
       res.json({ restored: true, membership });
     }),
   );
@@ -337,10 +338,9 @@ export default function callsRouter(app: Express) {
       if (!ok.ok) return res.status(409).json({ error: ok.reason });
       const iso = parseIso(req.body?.scheduledAt);
       if (!iso) return res.status(400).json({ error: "Pick a new time." });
-      if (!(await slotsFor(c.providerId, new Date(), c.id)).includes(iso)) {
-        return res.status(409).json({ error: "That time was just taken. Please pick another." });
-      }
-      res.json({ consultation: forMember(await rescheduleCall(c, iso, actor)) });
+      const moved = await moveCallIfFree(c, iso, actor);
+      if (!moved) return res.status(409).json({ error: "That time was just taken. Please pick another." });
+      res.json({ consultation: forMember(moved) });
     }),
   );
 
