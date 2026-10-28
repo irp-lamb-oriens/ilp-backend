@@ -10,7 +10,7 @@
  *   POST  /api/client-status/me/consultations           { scheduledAt, question, matterId?, recordingConsent? } (P3: Meet link, emails)
  *   (P3 cancel / reschedule / consent / join routes live in API/calls/callsRouter.ts)
  *   POST  /api/client-status/me/obligations/:id/ask     "Ask my lawyer" → question for the next call
- *   PATCH /api/client-status/me/profile                 { values: { field: value } } (PROFILE_FIELDS only)
+ *   PATCH /api/client-status/me/profile                 { values: { field: value } } (PROFILE_FIELDS + PROFILE_DETAIL_FIELDS)
  *   GET   /api/client-status/me/documents               metadata list
  *   POST  /api/client-status/me/documents               raw file body + ?matterId&category&fileName (or legacy JSON dataBase64)
  *   GET   /api/client-status/me/documents/:id/file      download (audited; private bucket, see helper/storage.ts)
@@ -37,6 +37,7 @@ import {
   type Matter,
   type Obligation,
   PLAN_STANDARD,
+  PROFILE_DETAIL_FIELDS,
   PROFILE_FIELDS,
   PROFILE_SECTIONS,
 } from "../../schemas/contracts.ts";
@@ -96,8 +97,9 @@ export const DOCUMENT_CATEGORIES = [
   "other",
 ] as const;
 
+// T3: the detail keys (preferred name, household, property type…) are editable too; they do not count toward completeness.
 const EDITABLE_PROFILE_KEYS = new Set(
-  PROFILE_SECTIONS.flatMap((s) => PROFILE_FIELDS[s]).filter((k) => k !== "email"),
+  PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).filter((k) => k !== "email"),
 );
 
 type Doc = Record<string, unknown>;
@@ -222,7 +224,7 @@ export function registerMemberHomeRoutes(app: Express) {
         obligations: bundle.obligations.filter((o) => o.status === "upcoming" || o.status === "asked"),
         completeness: bundle.completeness,
         profile: Object.fromEntries(
-          PROFILE_SECTIONS.flatMap((s) => PROFILE_FIELDS[s]).map((k) => [k, profile[k] ?? null]),
+          PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).map((k) => [k, profile[k] ?? null]),
         ),
         pendingQuestions: Array.isArray(bundle.client.pendingQuestions) ? bundle.client.pendingQuestions : [],
       }));
