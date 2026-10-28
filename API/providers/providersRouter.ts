@@ -6,6 +6,7 @@ import patch from "../../db/patch.ts";
 import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import type { SessionUser } from "../../helper/auth/types.ts";
+import applyRouter from "./applyRouter.ts";
 
 /**
  * Vetted legal partner profiles. Provider-side supply:
@@ -13,6 +14,9 @@ import type { SessionUser } from "../../helper/auth/types.ts";
  */
 export default (app: Express) => {
   log("Providers router initialized.");
+
+  // T2: public lawyer application + staff review (applyRouter.ts).
+  applyRouter(app);
 
   // Public: list vetted providers (lean — credentials gated to staff).
   app.get(

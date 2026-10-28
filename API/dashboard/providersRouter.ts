@@ -50,6 +50,9 @@ export type LegalArea =
   | "family_estate"
   | "litigation"
   | "compliance"
+  | "tax"
+  | "vehicle"
+  | "labor"
   | "other";
 
 export interface ProviderContact {
@@ -103,6 +106,9 @@ export const LEGAL_AREA_LABELS: Record<LegalArea, string> = {
   family_estate: "Family & Estate (wills, estates, family law)",
   litigation: "Litigation (disputes, representation)",
   compliance: "Compliance (regulatory, AML, data protection)",
+  tax: "Tax (corporate and personal returns)",
+  vehicle: "Vehicles (transfers, marchamo, imports)",
+  labor: "Labor and domestic staff",
   other: "Other / Custom",
 };
 
@@ -118,7 +124,7 @@ function generateProviderId(): string {
 
 const VALID_AREAS = new Set<string>([
   "immigration", "corporate", "real_estate", "notary",
-  "family_estate", "litigation", "compliance", "other",
+  "family_estate", "litigation", "compliance", "tax", "vehicle", "labor", "other",
 ]);
 
 function validateAreas(areas: unknown): LegalArea[] {
