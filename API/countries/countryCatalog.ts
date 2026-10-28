@@ -13,6 +13,10 @@
  * before any customer-facing deadline is treated as authoritative.
  */
 
+import { COUNTRIES, COUNTRY_CODES, type CountryCode, toCountryCode } from "../../schemas/contracts.ts";
+import type { CountryRule, DueRule, RuleArea } from "./rules/engine.ts";
+import { ALL_RULES, rulesFor } from "./rules/index.ts";
+
 export type PriorityCategory =
   | "Residency"
   | "Tax"
@@ -294,15 +298,12 @@ export const LEGAL_PRIORITIES: LegalPriority[] = [
   },
 ];
 
-/** All supported country codes, in display order. */
-export const SUPPORTED_COUNTRIES: Array<{ code: string; name: string }> = [
-  { code: "CR", name: "Costa Rica" },
-  { code: "PA", name: "Panama" },
-  { code: "MX", name: "Mexico" },
-  { code: "CO", name: "Colombia" },
-  { code: "ES", name: "Spain" },
-  { code: "PT", name: "Portugal" },
-];
+/** All supported country codes, in display order (all six open). */
+export const SUPPORTED_COUNTRIES: Array<{ code: CountryCode; name: string; status: "open" }> = COUNTRY_CODES.map((code) => ({
+  code,
+  name: COUNTRIES[code].name,
+  status: COUNTRIES[code].status,
+}));
 
 /** Priorities for a single country, in stable order. */
 export function prioritiesForCountry(country: string): LegalPriority[] {
@@ -321,170 +322,29 @@ export function priorityById(id: string): LegalPriority | undefined {
  * code ("CR", "PA"). Normalize both to the catalog's alpha-2 code.
  */
 export function countryCodeFromName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const s = value.trim().toLowerCase();
-  if (!s) return null;
-
-  const byName: Record<string, string> = {
-    "costa rica": "CR",
-    "costa rica (cr)": "CR",
-    panama: "PA",
-    "panamá": "PA",
-    mexico: "MX",
-    "méxico": "MX",
-    colombia: "CO",
-    spain: "ES",
-    españa: "ES",
-    portugal: "PT",
-  };
-
-  if (byName[s]) return byName[s];
-
-  const upper = s.toUpperCase();
-  const known = new Set(SUPPORTED_COUNTRIES.map((c) => c.code));
-  if (known.has(upper)) return upper;
-
-  return null;
+  return toCountryCode(value);
 }
 
 // ─── Free deadline check rules ─────────────────────────────────────────────
 /**
- * Rules for the public free deadline check (POST /api/leads/deadline-check).
- * Each rule says which answers make it relevant (`when`), how its next date
- * is computed (`due`), and how to explain it in one plain sentence. The route
- * evaluates these generically, so a new country is data only.
+ * Rules for the public free deadline check (POST /api/leads/deadline-check)
+ * and the member's obligations: every obligation from the six research files
+ * (docs/research/<country>.md), imported into ./rules/<code>.ts. Each rule
+ * says which answers make it relevant (`when`), how its next date is computed
+ * (`due`) and how to explain it in one plain sentence. The check evaluates
+ * them generically, so a country is data only.
  *
- * Wording rules: every title ends in "may require review"; every `meaning`
- * says what this usually means, never what will happen. Reference data, to be
- * validated by a partner lawyer before launch in each country.
+ * Wording: every title ends in "may require review"; every `meaning` says
+ * what this usually means. Reference data with `reviewedByCounsel: false`,
+ * to be confirmed by a partner lawyer in each country.
  */
-export type CheckArea = "immigration" | "property" | "corporate" | "vehicle" | "employment";
+export type CheckArea = RuleArea;
+export type CheckDue = DueRule;
+export type CheckRule = CountryRule;
 
-export type CheckDue =
-  /** Same calendar day every year (month 1-12). */
-  | { kind: "annual"; month: number; day: number }
-  /** Next of several calendar days each year (e.g. quarterly installments). */
-  | { kind: "installments"; dates: Array<[number, number]> }
-  /** Last day of the current month. */
-  | { kind: "monthEnd" }
-  /** A date the visitor gave, shifted by `offsetDays` (negative = before). */
-  | { kind: "fromAnswer"; field: string; offsetDays: number };
-
-export interface CheckRule {
-  id: string;
-  country: string;
-  area: CheckArea;
-  /** Optional link to a LEGAL_PRIORITIES entry the member can track later. */
-  priorityId?: string;
-  /** Every key must match one of the listed values for the rule to apply. */
-  when: Record<string, Array<string | boolean>>;
-  due: CheckDue;
-  title: string;
-  /** "What this usually means", one sentence. */
-  meaning: string;
-}
-
-export const CHECK_RULES: CheckRule[] = [
-  // ── Costa Rica ────────────────────────────────────────────────────────────
-  {
-    id: "CR_CHECK_DIMEX_RENEWAL",
-    country: "CR",
-    area: "immigration",
-    priorityId: "CR_RESIDENCY_DIMEX",
-    when: { residencyStatus: ["resident"] },
-    due: { kind: "fromAnswer", field: "residencyExpiresAt", offsetDays: -90 },
-    title: "DIMEX renewal may require review",
-    meaning:
-      "Residency renewals are usually filed in the three months before the card expires, and this is roughly when that window opens.",
-  },
-  {
-    id: "CR_CHECK_CCSS_MEMBER",
-    country: "CR",
-    area: "immigration",
-    priorityId: "CR_SOCIAL_CCSS",
-    when: { residencyStatus: ["resident"] },
-    due: { kind: "monthEnd" },
-    title: "Caja (CCSS) contributions may require review",
-    meaning:
-      "Residents are generally expected to keep their Caja health insurance current each month, and renewals usually check it.",
-  },
-  {
-    id: "CR_CHECK_VISITOR_STAY",
-    country: "CR",
-    area: "immigration",
-    when: { residencyStatus: ["visitor"] },
-    due: { kind: "fromAnswer", field: "lastEntryDate", offsetDays: 180 },
-    title: "Your permitted stay may require review",
-    meaning:
-      "Visitors can usually stay for the number of days stamped in their passport at entry, up to 180; this date assumes the full 180.",
-  },
-  {
-    id: "CR_CHECK_MUNICIPAL_TAX",
-    country: "CR",
-    area: "property",
-    priorityId: "CR_PROPERTY_MUNICIPAL",
-    when: { ownsProperty: [true] },
-    due: { kind: "installments", dates: [[3, 31], [6, 30], [9, 30], [12, 31]] },
-    title: "Municipal property tax may require review",
-    meaning:
-      "Property tax is paid to the local municipality, usually in quarterly installments or once a year, and this is the next usual installment date.",
-  },
-  {
-    id: "CR_CHECK_CORPORATION_TAX",
-    country: "CR",
-    area: "corporate",
-    priorityId: "CR_CORPORATE_ANNUAL",
-    when: { hasCompany: [true] },
-    due: { kind: "annual", month: 1, day: 31 },
-    title: "Annual corporation tax may require review",
-    meaning:
-      "Costa Rican corporations, active or not, usually pay the tax on legal entities (personas jurídicas) each January.",
-  },
-  {
-    id: "CR_CHECK_BENEFICIAL_OWNER",
-    country: "CR",
-    area: "corporate",
-    priorityId: "CR_CORPORATE_ANNUAL",
-    when: { hasCompany: [true] },
-    due: { kind: "annual", month: 4, day: 30 },
-    title: "Beneficial-owner declaration may require review",
-    meaning:
-      "Most corporations file a yearly statement of who ultimately owns them with the Central Bank registry (RTBF), usually during April.",
-  },
-  {
-    id: "CR_CHECK_MARCHAMO",
-    country: "CR",
-    area: "vehicle",
-    when: { ownsVehicle: [true] },
-    due: { kind: "annual", month: 12, day: 31 },
-    title: "Vehicle circulation permit (marchamo) may require review",
-    meaning:
-      "The marchamo is renewed every year; payment usually opens in November and closes on December 31.",
-  },
-  {
-    id: "CR_CHECK_AGUINALDO",
-    country: "CR",
-    area: "employment",
-    when: { hasEmployees: [true] },
-    due: { kind: "annual", month: 12, day: 20 },
-    title: "Year-end bonus (aguinaldo) may require review",
-    meaning:
-      "Employers, including households with a housekeeper or gardener, usually pay a thirteenth-month bonus by December 20.",
-  },
-  {
-    id: "CR_CHECK_EMPLOYER_CCSS",
-    country: "CR",
-    area: "employment",
-    when: { hasEmployees: [true] },
-    due: { kind: "monthEnd" },
-    title: "Employer registration and monthly Caja payments may require review",
-    meaning:
-      "Anyone with employees is usually registered as an employer with the Caja, pays contributions monthly and holds a work-risk policy.",
-  },
-];
+export const CHECK_RULES: CheckRule[] = ALL_RULES;
 
 /** Deadline-check rules for one country, in stable order. */
 export function checkRulesForCountry(country: string): CheckRule[] {
-  const code = String(country ?? "").trim().toUpperCase();
-  return CHECK_RULES.filter((r) => r.country === code);
+  return rulesFor(country);
 }
