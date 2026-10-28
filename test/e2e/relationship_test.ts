@@ -696,6 +696,12 @@ Deno.test("REL 13 member cancellation ends calls after the period; renewal reset
   assertEquals(consultation(ctx.c6).status, "cancelled", "calls after the end are cancelled");
   const today = await as(lawyerSession(ctx.A)).get("/api/provider/today?from=2026-11-23T00:00:00.000Z&to=2026-11-24T00:00:00.000Z");
   assertEquals(today.body.items.length, 0, "gone from the lawyer's day");
+  // The call moved to Carlos on 23 Oct was never completed or marked a no-show: the CSM gets a task.
+  const { callReminders } = await import("../../jobs/callReminders.ts");
+  const sweep = await callReminders(world.now());
+  assert(sweep.unresolved >= 1, json(sweep));
+  assert(tasks(ctx.M1).some((t) => t.title.startsWith("Call not wrapped up") && t.source?.id === ctx.c4), "call.outcome_missing task");
+  assert(!tasks(ctx.M1).some((t) => t.title.startsWith("Call not wrapped up") && t.source?.id === ctx.c1), "wrapped-up call: no task");
   // Alice did not pay on time: past due, then staff mark the renewal paid.
   assertEquals(membershipOf(ctx.M1).status, "past_due");
   assertEquals(membershipOf(ctx.M1).minutesUsed, 20);

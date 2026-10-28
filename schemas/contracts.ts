@@ -438,6 +438,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "privacy.request_received": { type: "privacy", dueInHours: 24, title: "Privacy request: respond by due date" }, // P6 data-rights request
   "member.unassigned_country": { type: "follow_up", dueInHours: 24, title: "Match a lawyer licensed in the member's country" }, // COUNTRIES: no partner lawyer in the member's country yet
   "obligation.needs_date_7d": { type: "follow_up", dueInHours: 72, title: "Help the member set dates for their deadlines" }, // DEADLINES: needsDate items older than 7 days
+  "call.outcome_missing": { type: "follow_up", dueInHours: 24, title: "Call not wrapped up: confirm the outcome and handoff with the lawyer" }, // REL: still booked a day after its end, or completed without a handoff after two days
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────

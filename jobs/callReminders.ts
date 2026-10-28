@@ -7,6 +7,7 @@
  *    link to the brief). Idempotent: `remindersSent` on the consultation
  *    records each key, and the email queue dedupes on (consultation, key, role).
  *    Which reminder is due is decided by `reminderToSend` (callLogic.ts, tested).
+ * 3. REL: calls nobody wrapped up get a CSM task ("call.outcome_missing").
  * 2. Calls that ended 10 minutes to 24 hours ago with recording consent and a
  *    Calendar event but no transcript: try to read the Meet transcript and
  *    draft a suggested summary, so the lawyer finds it ready on the call page.
@@ -19,7 +20,8 @@ import { enqueueEmail } from "../helper/emailQueue.ts";
 import { callReminderEmail } from "../helper/emailTemplates.ts";
 import { COLLECTIONS } from "../schemas/contracts.ts";
 import { findRecords, updateRecord } from "../API/members/service.ts";
-import { reminderToSend, transcriptFetchDue } from "../API/calls/callLogic.ts";
+import { callOutcomeMissing, reminderToSend, transcriptFetchDue } from "../API/calls/callLogic.ts";
+import { emitEvent } from "../API/members/events.ts";
 import {
   type CallRecord,
   lawyerBriefUrl,
@@ -32,7 +34,7 @@ import { draftSuggestion } from "../API/provider/lawyerHomeRoutes.ts";
 
 const HOUR = 3_600_000;
 
-export async function callReminders(now = new Date()): Promise<{ sent: number; transcripts: number }> {
+export async function callReminders(now = new Date()): Promise<{ sent: number; transcripts: number; unresolved: number }> {
   let sent = 0;
   let transcripts = 0;
   const booked = await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "booked" });
@@ -91,6 +93,25 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     }
   }
 
+  // REL: calls nobody wrapped up (no completion / no-show a day after the end,
+  // or no handoff two days after completion): one CSM task per call.
+  let unresolved = 0;
+  const open = [
+    ...booked,
+    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "in_progress" }).catch(() => [])),
+    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "completed" }).catch(() => [])),
+  ];
+  for (const c of open.filter((x) => callOutcomeMissing(x, now))) {
+    const ids = await emitEvent("call.outcome_missing", {
+      clientId: c.clientId,
+      matterId: c.matterId,
+      sourceId: c.id,
+      sourceKind: "consultation",
+      detail: `${c.status === "completed" ? "no handoff" : "no outcome"}, call of ${c.scheduledAt.slice(0, 16).replace("T", " ")} UTC`,
+    });
+    if (ids.length) unresolved++;
+  }
+
   if (sent || transcripts) log(`[callReminders] ${sent} reminder emails, ${transcripts} transcripts`);
-  return { sent, transcripts };
+  return { sent, transcripts, unresolved };
 }

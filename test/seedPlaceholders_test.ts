@@ -190,7 +190,7 @@ for (const size of ["demo", "pilot"] as const) {
     has("task status", ["open", "done", "cancelled"], C.csm_tasks.map((t) => t.status));
     has("task source", ["membership", "consultation", "handoff", "quote", "document", "privacy_request", "manual"], C.csm_tasks.map((t) => (t.source as { kind: string }).kind));
     assertEquals(C.csm_tasks.some((t) => t.status === "open" && String(t.dueAt) < NOW.toISOString()), true, "overdue task");
-    has("task rule events", Object.keys(TASK_RULES).filter((k) => !["call.link_failed"].includes(k)).map((k) => k.replace(/[^a-z0-9]+/gi, "_")),
+    has("task rule events", Object.keys(TASK_RULES).filter((k) => !["call.link_failed", "call.outcome_missing"].includes(k)).map((k) => k.replace(/[^a-z0-9]+/gi, "_")),
       [...new Set(C.csm_tasks.map((t) => String(t.id).replace(/^ph_task_/, "").split("__")[0]))]);
     has("obligation status", ["upcoming", "asked", "handled", "dismissed"], C.obligations.map((o) => o.status));
     has("privacy kind", ["access", "export", "rectify", "delete", "restrict"], C.privacy_requests.map((p) => p.kind));

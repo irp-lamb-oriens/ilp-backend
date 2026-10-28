@@ -254,3 +254,20 @@ Deno.test("routing by country: only lawyers licensed there; null when there is n
   assertEquals(pickLawyer("tax", c, "co_default", "CO"), "co_default"); // caller vouches for the fallback
   assertEquals(pickLawyer("corporate", c, "dflt"), "cr1"); // no country: as before
 });
+
+// ─── REL: calls nobody wrapped up ─────────────────────────────────────────
+Deno.test("callOutcomeMissing: booked a day after the end, completed two days without a handoff, not older than 30 days", async () => {
+  const { callOutcomeMissing } = await import("../API/calls/callLogic.ts");
+  const c = { scheduledAt: "2026-10-21T15:00:00.000Z", durationMin: 20 };
+  const at = (iso: string) => new Date(iso);
+  assertEquals(callOutcomeMissing({ ...c, status: "booked" }, at("2026-10-22T15:19:00.000Z")), false, "less than a day after the end");
+  assertEquals(callOutcomeMissing({ ...c, status: "booked" }, at("2026-10-22T15:20:00.000Z")), true);
+  assertEquals(callOutcomeMissing({ ...c, status: "in_progress" }, at("2026-10-23T00:00:00.000Z")), true);
+  assertEquals(callOutcomeMissing({ ...c, status: "completed", endedAt: "2026-10-21T15:20:00.000Z" }, at("2026-10-23T15:19:00.000Z")), false);
+  assertEquals(callOutcomeMissing({ ...c, status: "completed", endedAt: "2026-10-21T15:20:00.000Z" }, at("2026-10-23T15:20:00.000Z")), true);
+  assertEquals(callOutcomeMissing({ ...c, status: "completed", handoffId: "h1" }, at("2026-10-25T00:00:00.000Z")), false);
+  assertEquals(callOutcomeMissing({ ...c, status: "no_show" }, at("2026-10-25T00:00:00.000Z")), false);
+  assertEquals(callOutcomeMissing({ ...c, status: "cancelled" }, at("2026-10-25T00:00:00.000Z")), false);
+  assertEquals(callOutcomeMissing({ ...c, status: "booked" }, at("2026-11-21T00:00:00.000Z")), false, "older than 30 days");
+});
+

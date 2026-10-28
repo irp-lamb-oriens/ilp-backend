@@ -398,6 +398,29 @@ export function reminderToSend(
 
 // ─── Join, change, no-show ─────────────────────────────────────────────────
 
+/**
+ * REL: a call nobody wrapped up. Still booked or in progress a day after its
+ * booked end (no completion, no no-show: minutes never charged), or completed
+ * two days ago without a handoff (the member has no next step). Calls older
+ * than 30 days are left alone. Pure.
+ */
+export function callOutcomeMissing(
+  c: Pick<Consultation, "status" | "scheduledAt" | "durationMin" | "handoffId" | "endedAt">,
+  now: Date,
+): boolean {
+  const start = Date.parse(c.scheduledAt);
+  if (Number.isNaN(start)) return false;
+  const end = start + (c.durationMin || 20) * MIN;
+  const t = now.getTime();
+  if (t - start > 30 * DAY) return false;
+  if (c.status === "booked" || c.status === "in_progress") return t >= end + DAY;
+  if (c.status === "completed" && !c.handoffId) {
+    const ended = c.endedAt ? Date.parse(c.endedAt) : end;
+    return t >= (Number.isNaN(ended) ? end : ended) + 2 * DAY;
+  }
+  return false;
+}
+
 /** Join buttons are active from 10 minutes before until 30 minutes after the booked end. */
 export function joinOpen(c: Pick<Consultation, "scheduledAt" | "durationMin" | "status">, now: Date): boolean {
   if (c.status !== "booked" && c.status !== "in_progress") return false;
