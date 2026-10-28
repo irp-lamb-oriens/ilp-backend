@@ -21,6 +21,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
@@ -137,6 +138,20 @@ export default function providerDashboardRouter(app: Express) {
       ]);
 
       const clients = mine.map((doc) => buildClientSummary(doc.id, doc, false));
+      if (isListRequest(req)) {
+        type Summary = (typeof clients)[number];
+        const spec: ListSpec<Summary> = {
+          sorts: { lastUpdated: (c) => String(c.lastUpdated ?? ""), name: (c) => `${c.name ?? ""} ${c.surname ?? ""}`.trim().toLowerCase() },
+          defaultSort: "lastUpdated",
+          defaultDir: "desc",
+          filters: { stage: (c, v) => c.stage === v, area: (c, v) => c.legalArea === v },
+          search: (c) => [c.name, c.surname, c.email, c.legalArea, c.legalMatter, c.jurisdiction],
+        };
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(clients, p, spec)),
+          meta: { stages: getStageIds(), stageLabels: getStageLabels() },
+        }));
+      }
       clients.sort((a, b) => {
         const da = a.lastUpdated ? new Date(a.lastUpdated as string).getTime() : 0;
         const db = b.lastUpdated ? new Date(b.lastUpdated as string).getTime() : 0;

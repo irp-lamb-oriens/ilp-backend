@@ -42,6 +42,7 @@ import {
   updateRecord,
 } from "../members/service.ts";
 import { onRecordUpdated } from "../members/events.ts";
+import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import { ensureStageConfig, getStageLabel, isValidStage } from "../dashboard/automation/stageConfig.ts";
 import { getStageIds, getStageLabels } from "../dashboard/clientHelpers.ts";
 import { callLLMWithFallback } from "../chatbot/intelligence/llm.ts";
@@ -409,6 +410,44 @@ export default function lawyerHomeRoutes(app: Express) {
         findRecords<Consultation>(COLLECTIONS.consultations, { providerId: pid }),
       ]);
       const visible = matters.filter((m) => includeClosed || !m.closedAt);
+      if (isListRequest(req)) {
+        // LISTS: one column (?stage=) or the whole list, a page at a time. Names,
+        // obligations and next calls are loaded for the page's members only;
+        // a search also needs every member's name, so it loads those first.
+        const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+        const names = q ? await clientsById(visible.map((m) => m.clientId)) : new Map<string, Obj>();
+        const spec: ListSpec<Matter> = {
+          sorts: { stageEnteredAt: (m) => m.stageEnteredAt, openedAt: (m) => m.openedAt, title: (m) => m.title.toLowerCase() },
+          defaultSort: "stageEnteredAt",
+          filters: { stage: (m, v) => m.stage === v, area: (m, v) => m.area === v, country: (m, v) => String(m.country ?? "CR") === v },
+          search: (m) => [m.title, m.area, clientName(names.get(m.clientId) ?? null, ""), m.country],
+        };
+        const area = typeof req.query.area === "string" ? req.query.area : "";
+        const counts: Record<string, number> = {};
+        for (const m of visible) if (!area || m.area === area) counts[m.stage] = (counts[m.stage] ?? 0) + 1;
+        const stageIds = getStageIds();
+        for (const st of Object.keys(counts)) if (!stageIds.includes(st)) stageIds.push(st);
+        const areas = [...new Set(visible.map((m) => m.area).filter(Boolean))].sort();
+        const nowIso = new Date().toISOString();
+        return respondList(req, res, spec, (p) => ({
+          produce: pageProducer(pageRows(visible, p, spec), async (chunk) => {
+            const ids = [...new Set(chunk.map((m) => m.clientId))];
+            const [clients, obligationLists] = await Promise.all([
+              q ? Promise.resolve(names) : clientsById(ids),
+              Promise.all(ids.map((id) => findRecords<Obligation>(COLLECTIONS.obligations, { clientId: id }))),
+            ]);
+            const obligationsBy = new Map(ids.map((id, i) => [id, obligationLists[i]]));
+            const next = new Map<string, string>();
+            for (const c of cons) {
+              if (c.status !== "booked" || c.scheduledAt < nowIso) continue;
+              const cur = next.get(c.clientId);
+              if (!cur || c.scheduledAt < cur) next.set(c.clientId, c.scheduledAt);
+            }
+            return chunk.map((m) => buildCard(m, clients.get(m.clientId) ?? null, obligationsBy.get(m.clientId) ?? [], next.get(m.clientId) ?? null));
+          }, 8),
+          meta: { stages: stageIds, stageLabels: getStageLabels(), counts, areas, total: visible.length },
+        }));
+      }
       const clientIds = [...new Set(visible.map((m) => m.clientId))];
       const [clients, obligationLists] = await Promise.all([
         clientsById(clientIds),
@@ -501,7 +540,22 @@ export default function lawyerHomeRoutes(app: Express) {
         });
       }
       payments.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
-      res.json(summarizeFinance(pid, payments));
+      const summary = summarizeFinance(pid, payments);
+      if (isListRequest(req)) {
+        // LISTS: payments page by page; totals and the per-matter rollup ride in the meta line.
+        const spec: ListSpec<Obj> = {
+          sorts: { date: (p) => String(p.date ?? ""), amount: (p) => Number(p.amount) || 0 },
+          defaultSort: "date",
+          defaultDir: "desc",
+          filters: { paid: (p, v) => (v === "1" ? p.paid === true : v === "0" ? p.paid !== true : true), matter: (p, v) => String(p.matterId ?? p.quoteId ?? "") === v },
+          search: (p) => [p.clientName, p.matterTitle, p.quoteTitle, p.note],
+        };
+        return respondList(req, res, spec, (lp) => ({
+          produce: pageProducer(pageRows(payments, lp, spec)),
+          meta: { currency: summary.currency, totals: summary.totals, byMatter: summary.byMatter },
+        }));
+      }
+      res.json(summary);
     }),
   );
 }
