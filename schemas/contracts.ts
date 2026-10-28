@@ -91,6 +91,8 @@ export interface Membership {
   csmEmail?: string;
   paymentRef?: string; // Stripe id or "manual"
   sourceLeadId?: string; // lead that converted into this membership (free check)
+  intake?: JoinIntake; // T3: "what you need first" from the join form; becomes the first matter on activation
+  firstMatterId?: string; // T3: matter created from `intake` when the membership activated
   cancelledAt?: Iso;
   cancelAtPeriodEnd?: boolean; // member asked to cancel; access runs to periodEnd
   cancelReason?: string;
@@ -116,8 +118,28 @@ export interface Matter {
   stageEnteredAt: Iso;
   assignedProviderId?: string;
   nextStep?: NextStep;
+  nextStepSetAt?: Iso;
   openedAt: Iso;
   closedAt?: Iso;
+  // T3: a matter opened from the join form
+  source?: "join" | string;
+  question?: string; // the member's main question for the first call
+  deadlineAt?: Iso; // a date the member said the matter must meet
+  documentsOnHand?: DocumentOnHand[];
+}
+
+// ─── Join intake (T3: "What you need first" on /join) ─────────────────────
+/** Documents a new member says they already have. An empty list means "none yet". No uploads at join. */
+export const DOCUMENTS_ON_HAND = ["passport", "dimex", "property_title", "company_books", "vehicle_papers"] as const;
+export type DocumentOnHand = (typeof DOCUMENTS_ON_HAND)[number];
+
+export interface JoinIntake {
+  question: string; // main question for the first call
+  urgency: "deadline" | "soon" | "no_rush";
+  deadlineAt?: Iso; // when urgency = deadline
+  documentsOnHand: DocumentOnHand[]; // [] = none yet
+  findings?: LeadFinding[]; // check findings from the join answers; seeded as obligations on activation
+  submittedAt: Iso;
 }
 
 // ─── Consultation ──────────────────────────────────────────────────────────
@@ -260,6 +282,20 @@ export const PROFILE_FIELDS: Record<ProfileSection, string[]> = {
   property: ["ownsProperty", "propertyLocation"],
   company: ["hasCompany", "companyType"],
   vehicle: ["ownsVehicle"],
+};
+
+/**
+ * T3: more profile keys on the client record, shown and editable with their
+ * section and filled by the join form. They do NOT count toward
+ * profileCompleteness: they are optional or apply only to some members.
+ */
+export const PROFILE_DETAIL_FIELDS: Record<ProfileSection, string[]> = {
+  identity: ["preferredName", "preferredLanguage", "residenceCountry", "residenceProvince", "residenceTown", "timezone"],
+  household: ["livesWithPartner", "childrenAtHome", "otherHousehold", "pets", "hasEmployees"],
+  immigration: ["residencyCategory", "lastEntryDate"],
+  property: ["propertyType", "propertyHolding"],
+  company: ["companyCount", "companyUpToDate"],
+  vehicle: ["marchamoStatus"],
 };
 
 /** Consultation-ready when at least this share of fields is filled. */
