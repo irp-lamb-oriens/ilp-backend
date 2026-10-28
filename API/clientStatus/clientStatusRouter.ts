@@ -54,7 +54,8 @@ import { chatWithLily } from "../chatbot/services/lilyChatEngine.ts";
 import { aiAssistantAllowed } from "../privacy/privacyRouter.ts";
 import { AI_CONSENT_REQUIRED } from "../privacy/policy.ts";
 import { memberEmailLayout } from "../../helper/emailTemplates.ts";
-import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
+import { onQuoteAccepted } from "../finance/quoteAccepted.ts";
+import { accountTypeFor, membershipRequiredBody } from "./accountGuard.ts";
 import {
   countryCodeFromName,
   prioritiesForCountry,
@@ -277,6 +278,11 @@ export default (app: Express) => {
     asyncHandler(async (req: Request, res: Response, next: () => void) => {
       const r = req as Request & { isIrpStaff?: boolean; clientId?: string; clientUser?: string };
       const id = req.params.id;
+      // REL: free accounts (deadlines only) do not reach the member-only project routes.
+      const memberOnlyPath = /\/(lily|comment|accept-quote)(\/|$|\?)/.test(String(req.originalUrl ?? ""));
+      if (!r.isIrpStaff && memberOnlyPath && (await accountTypeFor(id)) === "free") {
+        return res.status(402).json(membershipRequiredBody());
+      }
       if (r.isIrpStaff || r.clientId === id) return next();
       const doc = await get(CLIENTS_COLLECTION, id);
       if (doc && clientMayAccessProject(doc, id, String(r.clientUser ?? ""))) return next();
@@ -786,8 +792,8 @@ export default (app: Express) => {
       });
 
       log(`[client-status] Quote accepted: project=${id} quote=${quoteId} by=${userEmail}`);
-      // P5/P7: linked opportunities move to won now, not on the next staff read (never throws).
-      await syncOpportunitiesForQuote(id, String(quoteId));
+      // REL: settlement opened (lawyer fee pending), audit, linked opportunities won. Never throws.
+      await onQuoteAccepted(id, { ...targetQuote, status: "accepted", clientAcceptedAt: nowIso }, { email: userEmail, role: "client" });
 
       // Fire-and-forget confirmation email.
       const clientEmail = resolvePrincipalEmail(doc, id);

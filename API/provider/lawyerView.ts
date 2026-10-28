@@ -29,6 +29,14 @@ export const PROVIDER_HIDDEN_FIELDS: readonly string[] = [
   "clientPrice",
   "rankIndex",
   "priorityRank",
+  // REL: the member's charges, payments and acceptance carry the client price,
+  // which next to the lawyer's own fee would reveal ILP's margin.
+  "charges",
+  "clientPayments",
+  "extraCharges",
+  "clientTotal",
+  "clientTotalMinor",
+  "quoteAcceptance",
 ];
 
 /** Client-record fields a lawyer may edit. Identity and ILP ranking are staff-only. */

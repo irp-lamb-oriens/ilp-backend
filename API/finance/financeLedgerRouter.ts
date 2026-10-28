@@ -32,6 +32,7 @@ import remove from "../../db/delete.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { FINANCE_ADMIN } from "./financeAuth.ts";
 import { fetchAcceptedQuotes, invalidateFinanceCache } from "./financeQuoteSource.ts";
+import { providerIdsOf } from "./quoteAccepted.ts";
 import {
   buildLedgerReport,
   DEFAULT_LEDGER_CATEGORIES,
@@ -320,9 +321,13 @@ export default function financeLedgerRouter(app: Application) {
         clientPayments: parseClientPayments(req.body?.clientPayments, errors),
         providerPayments: parseProviderPayments(req.body?.providerPayments, errors),
         extraCharges: parseExtraCharges(req.body?.extraCharges, errors),
+        // REL: the lawyer Finance query reads settlements by providerIds, so a
+        // payout stays visible to its lawyer after the member is reassigned.
+        providerIds: [] as string[],
         updatedAt: new Date().toISOString(),
         updatedBy: actor,
       };
+      doc.providerIds = providerIdsOf(doc.providerPayments);
 
       if (errors.length) return res.status(400).json({ error: errors.join("; ") });
 
