@@ -40,7 +40,11 @@ import {
   PROFILE_DETAIL_FIELDS,
   PROFILE_FIELDS,
   PROFILE_SECTIONS,
+  COUNTRY_ANSWERS_FIELD,
+  toCountryCode,
 } from "../../schemas/contracts.ts";
+import { countryAnswersFrom, intakeFindings, profileFromCountryAnswers } from "../payments/joinIntake.ts";
+import { evaluateCheck, normalizeAnswers } from "../leads/deadlineCheck.ts";
 import {
   clientView,
   createRecord,
@@ -53,7 +57,7 @@ import {
   updateRecord,
   withDefaults,
 } from "../members/service.ts";
-import { emitEvent, onRecordUpdated } from "../members/events.ts";
+import { emitEvent, obligationsFromLead, onRecordUpdated } from "../members/events.ts";
 import {
   ensureStageConfig,
   getClientVisibleStageDetails,
@@ -98,8 +102,9 @@ export const DOCUMENT_CATEGORIES = [
 ] as const;
 
 // T3: the detail keys (preferred name, household, property type…) are editable too; they do not count toward completeness.
+// COUNTRIES: legalCountry (the membership's country) is set by joining and by staff, not here.
 const EDITABLE_PROFILE_KEYS = new Set(
-  PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).filter((k) => k !== "email"),
+  PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).filter((k) => k !== "email" && k !== "legalCountry"),
 );
 
 type Doc = Record<string, unknown>;
@@ -224,7 +229,12 @@ export function registerMemberHomeRoutes(app: Express) {
         obligations: bundle.obligations.filter((o) => o.status === "upcoming" || o.status === "asked"),
         completeness: bundle.completeness,
         profile: Object.fromEntries(
-          PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).map((k) => [k, profile[k] ?? null]),
+          [
+            ...PROFILE_SECTIONS.flatMap((s) => [...PROFILE_FIELDS[s], ...PROFILE_DETAIL_FIELDS[s]]).map((k) => [k, profile[k] ?? null]),
+            // COUNTRIES: the member's country (membership first) and their answers to its situation questions.
+            ["legalCountry", toCountryCode(bundle.membership?.country) ?? toCountryCode(profile.legalCountry) ?? toCountryCode(profile.country) ?? "CR"],
+            [COUNTRY_ANSWERS_FIELD, profile[COUNTRY_ANSWERS_FIELD] ?? null],
+          ],
         ),
         pendingQuestions: Array.isArray(bundle.client.pendingQuestions) ? bundle.client.pendingQuestions : [],
       }));
@@ -366,15 +376,34 @@ export function registerMemberHomeRoutes(app: Express) {
       for (const [k, v] of Object.entries(values)) {
         if (EDITABLE_PROFILE_KEYS.has(k)) updates[k] = coerceProfileValue(v);
       }
-      if (!Object.keys(updates).length) return res.status(400).json({ error: "Nothing to save." });
       const client = (await get(CLIENTS, id)) as Doc | null;
       if (!client) return res.status(404).json({ error: "Not found." });
+      // COUNTRIES: the situation answers for the member's country, cleaned against its questions.
+      const rawCountry = values[COUNTRY_ANSWERS_FIELD];
+      let newFindings = 0;
+      if (rawCountry && typeof rawCountry === "object") {
+        const bundle0 = await memberBundle(id);
+        const country = toCountryCode(bundle0.membership?.country) ?? toCountryCode(client.legalCountry) ?? toCountryCode(client.country) ?? "CR";
+        const { answers } = countryAnswersFrom(country, rawCountry as Doc);
+        Object.assign(updates, { [COUNTRY_ANSWERS_FIELD]: answers, legalCountry: country }, profileFromCountryAnswers(country, answers));
+        // New answers can bring new dates: add the obligations that are not on the list yet (existing ones are left alone).
+        const checked = normalizeAnswers({ country, ...answers }).answers;
+        if (checked) {
+          for (const o of obligationsFromLead(id, { country, findings: intakeFindings(evaluateCheck(checked)) })) {
+            if (await getRecord<Obligation>(COLLECTIONS.obligations, o.id)) continue;
+            await createRecord(COLLECTIONS.obligations, o);
+            newFindings++;
+          }
+        }
+      }
+      if (!Object.keys(updates).length) return res.status(400).json({ error: "Nothing to save." });
       const clientFields = { ...((client.clientFields as Doc) ?? {}), ...updates };
       // Top level and clientFields both, so profileRecord() reads the new value
       // whichever place older code wrote it.
       await patch(CLIENTS, id, { ...updates, clientFields, updatedAt: nowIso() });
       const bundle = await memberBundle(id);
-      res.json({ completeness: bundle.completeness });
+      if (newFindings) log(`[member-home] ${newFindings} obligations added from the country answers of ${id}`);
+      res.json({ completeness: bundle.completeness, newObligations: newFindings });
     }),
   );
 
