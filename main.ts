@@ -58,6 +58,7 @@ import privacyRouter from "./API/privacy/privacyRouter.ts"; // P6
 import opportunitiesRouter from "./API/opportunities/opportunitiesRouter.ts"; // P5
 import journeysRouter from "./API/journeys/journeysRouter.ts"; // JOURNEYS
 import routingRouter from "./API/routing/routingRouter.ts"; // ROUTING
+import lawyerCommsRouter from "./API/lawyerComms/lawyerCommsRouter.ts"; // COMMS-P2
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -213,6 +214,7 @@ function createServer() {
     opportunitiesRouter(app); // P5: staff opportunities pipeline
     journeysRouter(app); // JOURNEYS: first-party journey analytics + A/B experiments
     routingRouter(app); // ROUTING: lawyer profiles, specialties, hidden ratings, routing, staff bell
+    lawyerCommsRouter(app); // COMMS-P2: lawyer feedback page and thresholds, work offers
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);

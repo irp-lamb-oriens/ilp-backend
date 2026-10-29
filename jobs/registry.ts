@@ -13,6 +13,8 @@ import { callReminders } from "./callReminders.ts"; // P3
 import { privacyRetention } from "./privacyRetention.ts"; // P6
 import { journeyAggregate } from "./journeyAggregate.ts"; // JOURNEYS
 import { rerouteOpenGaps } from "../API/routing/service.ts"; // ROUTING
+import { licenceExpirySweep, profileIncompleteSweep, weeklyDigest } from "../API/lawyerComms/notify.ts"; // COMMS-P2
+import { lawyerFeedbackSweep } from "../API/lawyerComms/feedback.ts"; // COMMS-P2
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -121,6 +123,25 @@ export const jobs: JobDef[] = [
     cron: "*/30 * * * *",
     handler: async () => {
       await rerouteOpenGaps("sweep");
+    },
+  },
+  // COMMS-P2: lawyers' weekly digest, Mondays 08:05 Costa Rica (UTC-6) = 14:05 UTC.
+  {
+    name: "lawyerWeeklyDigest",
+    cron: "5 14 * * 1",
+    handler: async () => {
+      await weeklyDigest();
+    },
+  },
+  // COMMS-P2: daily 09:25 Costa Rica: profile incomplete (3 days after approval), licence expiry
+  // (60 and 30 days), feedback coaching check, and on the 1st last month's feedback emails.
+  {
+    name: "lawyerDailySweeps",
+    cron: "25 15 * * *",
+    handler: async () => {
+      await profileIncompleteSweep();
+      await licenceExpirySweep();
+      await lawyerFeedbackSweep();
     },
   },
 ];
