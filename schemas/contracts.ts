@@ -42,6 +42,9 @@ export const COLLECTIONS = {
   lawyerRatings: "lawyer_ratings", // ROUTING: one rating summary per providerId (staff-only)
   routingGaps: "routing_gaps", // ROUTING: members nobody can take yet (one open gap per member and matter)
   staffNotifications: "staff_notifications", // ROUTING: the staff bell
+  lawyerFeedback: "lawyer_feedback", // COMMS-P2: one row per feedback email sent to a lawyer (counts and themes, no comments)
+  lawyerFeedbackConfig: "lawyer_feedback_config", // COMMS-P2: thresholds (doc "default")
+  workOffers: "work_offers", // COMMS-P2: paid work offered to lawyers in its specialty (accept or decline in the portal)
 } as const;
 
 export type Iso = string;
@@ -458,6 +461,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "call.outcome_missing": { type: "follow_up", dueInHours: 24, title: "Call not wrapped up: confirm the outcome and handoff with the lawyer" }, // REL: still booked a day after its end, or completed without a handoff after two days
   "routing.no_match": { type: "follow_up", dueInHours: 8, title: "Missing specialty for an assignment: find or add a lawyer" }, // ROUTING: no lawyer passes the router's checks
   "sales.call_unscheduled": { type: "follow_up", dueInHours: 24, title: "Sales call: set a time with the member" }, // ROUTING: no sales slot was free to book automatically
+  "call.summary_unconfirmed": { type: "follow_up", dueInHours: 8, title: "Call summary not confirmed: check with the lawyer" }, // COMMS-P2: summary ready, lawyer reminded after 24 h, still not confirmed 24 h later
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────
@@ -1340,6 +1344,8 @@ export interface LawyerLicence {
   verified: boolean;
   verifiedAt?: Iso;
   verifiedBy?: string;
+  /** COMMS-P2: when the licence or annual registration runs out (staff set it); emails at 60 and 30 days. */
+  expiresAt?: Iso;
 }
 
 /**
@@ -1531,3 +1537,95 @@ export const SALES_TEAM_ID = "ilp_sales";
 export const DEFAULT_SALES_EMAIL = "consultation@internationalrelocationpartner.com";
 /** A sales call: short, never charged against membership minutes. */
 export const SALES_CALL_LENGTH_MIN = 15;
+
+// ─── COMMS-P2: lawyer feedback program ────────────────────────────────────
+/**
+ * Thresholds for the monthly feedback email to each lawyer (staff edit them
+ * in Settings; doc lawyer_feedback_config/default). Scores are the hidden
+ * 0-100 rating (lawyerRating); lawyers never see that number, only their own
+ * star average and anonymized comments.
+ */
+export interface LawyerFeedbackConfig {
+  enabled: boolean;
+  /** Coaching when the rating is below this with at least coachingMinReviews reviews. */
+  coachingBelowScore: number;
+  coachingMinReviews: number;
+  /** A review with this many stars or fewer is a low score. */
+  lowStars: number;
+  /** Coaching also when this many low scores arrive within lowScoresWindowDays. */
+  lowScoresCount: number;
+  lowScoresWindowDays: number;
+  /** A recognition note when the rating is at least this with recognitionMinReviews reviews and no recent low scores. */
+  recognitionAtLeastScore: number;
+  recognitionMinReviews: number;
+  /** Star averages and comments are shown only over at least this many reviews, so no member can be singled out. */
+  minReviewsToShowDetail: number;
+  /** No second coaching email within this many days. */
+  coachingCooldownDays: number;
+}
+
+export const LAWYER_FEEDBACK_DEFAULTS: LawyerFeedbackConfig = {
+  enabled: true,
+  coachingBelowScore: 70,
+  coachingMinReviews: 5,
+  lowStars: 2,
+  lowScoresCount: 2,
+  lowScoresWindowDays: 30,
+  recognitionAtLeastScore: 90,
+  recognitionMinReviews: 5,
+  minReviewsToShowDetail: 3,
+  coachingCooldownDays: 30,
+};
+
+/** Allowed range of each numeric threshold (inclusive). */
+export const LAWYER_FEEDBACK_LIMITS: Record<Exclude<keyof LawyerFeedbackConfig, "enabled">, [number, number]> = {
+  coachingBelowScore: [0, 100],
+  coachingMinReviews: [1, 50],
+  lowStars: [1, 4],
+  lowScoresCount: [1, 20],
+  lowScoresWindowDays: [7, 180],
+  recognitionAtLeastScore: [0, 100],
+  recognitionMinReviews: [1, 50],
+  minReviewsToShowDetail: [1, 20],
+  coachingCooldownDays: [7, 180],
+};
+
+/** What a lawyer sees of their own reviews (never another lawyer's, never a member's name). */
+export interface LawyerFeedbackView {
+  /** Reviews the figures below are based on (null average when under minReviewsToShowDetail). */
+  periodLabel: string;
+  reviewsInPeriod: number;
+  averageStars: number | null;
+  comments: string[];
+  /** True when the period has too few reviews to show the average and comments. */
+  tooFewToShow: boolean;
+  minReviewsToShowDetail: number;
+  totalReviews: number;
+}
+
+// ─── COMMS-P2: paid work offered to lawyers ───────────────────────────────
+export type WorkOfferStatus = "offered" | "accepted" | "declined" | "taken" | "withdrawn";
+
+/**
+ * work_offers/{id}: an opportunity offered to one lawyer whose specialty and
+ * licence fit. The lawyer sees only the area, country, a short staff-written
+ * description and the dates; no member name, no estimated value.
+ */
+export interface WorkOffer {
+  id: string;
+  opportunityId: string;
+  providerId: string;
+  clientId: string; // staff and erasure only; never in a lawyer response
+  title: string;
+  area: string;
+  country: CountryCode;
+  description?: string;
+  status: WorkOfferStatus;
+  offeredAt: Iso;
+  offeredBy: string;
+  respondBy?: Iso;
+  respondedAt?: Iso;
+  declineReason?: string;
+  placeholder?: boolean;
+}
+
