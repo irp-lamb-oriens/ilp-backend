@@ -450,3 +450,128 @@ export function nextStepChangedEmail(o: {
     unsubscribeUrl: o.unsubscribeUrl,
   });
 }
+
+// ─── COMMS-P1: compliance notices, footer helpers, service emails ─────────
+
+/** Small print for staff and lawyer emails that are not about a member's legal matter. */
+export const ACCOUNT_FOOTER = "International Legal Partner (ILP). You get this email because of your ILP account.";
+
+/**
+ * Add the legal footer (and an optional unsubscribe line) to an HTML email
+ * built elsewhere (editable templates, older fixed HTML). Inserted before
+ * </body> when there is one, else appended. Never added twice.
+ */
+export function withLegalFooter(html: string, opts: { unsubscribeUrl?: string; unsubscribeLabel?: string } = {}): string {
+  const parts: string[] = [];
+  if (!html.includes(EMAIL_FOOTER) && !html.includes(escHtml(EMAIL_FOOTER))) parts.push(footerHtml());
+  if (opts.unsubscribeUrl && !html.includes(escHtml(opts.unsubscribeUrl))) {
+    parts.push(`<p style="margin:12px 0 0;font-size:13px;color:#7a8a96"><a href="${escHtml(opts.unsubscribeUrl)}" style="color:#7a8a96">${escHtml(opts.unsubscribeLabel ?? "Stop reminder emails")}</a></p>`);
+  }
+  if (!parts.length) return html;
+  const add = parts.join("");
+  const i = html.toLowerCase().lastIndexOf("</body>");
+  return i >= 0 ? `${html.slice(0, i)}${add}${html.slice(i)}` : `${html}${add}`;
+}
+
+/** Plain-text twin of withLegalFooter. */
+export function withLegalFooterText(text: string, opts: { unsubscribeUrl?: string; unsubscribeLabel?: string } = {}): string {
+  let out = text.includes(EMAIL_FOOTER) ? text : `${text.replace(/\s+$/, "")}\n\n${EMAIL_FOOTER}`;
+  if (opts.unsubscribeUrl && !out.includes(opts.unsubscribeUrl)) out += `\n\n${opts.unsubscribeLabel ?? "Stop reminder emails"}: ${opts.unsubscribeUrl}`;
+  return out;
+}
+
+/** Sign-in code for any portal (member, lawyer, staff), with the legal footer. */
+export function signInCodeEmail(o: { portal: "member" | "lawyer" | "staff"; code: string; minutes?: number }): MemberEmail {
+  const title = o.portal === "lawyer" ? "ILP lawyer portal" : o.portal === "staff" ? "ILP dashboard" : "ILP home";
+  const subject = o.portal === "lawyer" ? "Your ILP lawyer portal sign-in code" : o.portal === "staff" ? "Your ILP dashboard sign-in code" : "Your ILP sign-in code";
+  const minutes = o.minutes ?? 10;
+  const code = escHtml(o.code);
+  const html = `<!doctype html><html><body style="font-family:Helvetica,Arial,sans-serif;color:#202a33;line-height:1.55;font-size:16px;max-width:480px;margin:0 auto;padding:32px 16px">
+    <h1 style="color:${P2_NAVY};font-size:22px;margin:0 0 6px">${escHtml(title)}</h1>
+    <p style="margin:0 0 16px">Your sign-in code is:</p>
+    <p style="font-size:34px;font-weight:700;letter-spacing:8px;color:${P2_NAVY};font-family:monospace;margin:0 0 16px">${code}</p>
+    <p style="margin:0 0 8px;color:#4a5a66;font-size:14px">The code works for ${minutes} minutes. If you did not ask for it, you can ignore this email.</p>
+    ${footerHtml()}
+  </body></html>`;
+  const text = [`${title}`, "", `Your sign-in code is: ${o.code}`, "", `The code works for ${minutes} minutes. If you did not ask for it, you can ignore this email.`, "", EMAIL_FOOTER].join("\n");
+  return { subject, html, text };
+}
+
+/**
+ * Renewal notice 7 days before each automatic charge (US automatic-renewal
+ * laws): the amount, the charge date, and how to cancel online before it.
+ * Transactional: sent even to members who stopped reminder emails.
+ */
+export function renewalNoticeEmail(o: {
+  firstName?: string;
+  amountLabel: string; // "US$79.99"
+  chargeOn: string; // date label
+  cancelUrl: string;
+  moneyUrl: string;
+  termsUrl: string;
+  /** false: the member pays by transfer (manual mode), so the payment is due rather than charged. */
+  byCard?: boolean;
+}): MemberEmail {
+  const byCard = o.byCard !== false;
+  return memberEmailLayout({
+    subject: `Your ILP membership renews on ${o.chargeOn}`,
+    firstName: o.firstName,
+    paragraphs: [
+      byCard
+        ? `Your ILP membership renews automatically on ${o.chargeOn}. On that date we will charge ${o.amountLabel} to your card for the next month.`
+        : `Your ILP membership renews on ${o.chargeOn}. The payment for the next month, ${o.amountLabel}, is due on that date. Money in your ILP home shows how to pay.`,
+      byCard ? "You do not need to do anything to keep your membership." : "Your membership keeps working while the payment is on its way.",
+      `If you do not want to renew, cancel online before ${o.chargeOn} from Money in your ILP home (${o.cancelUrl}). You keep access until the end of the month you already paid for, and you are not charged again.`,
+    ],
+    cta: { label: "Cancel or manage membership", url: o.cancelUrl },
+    links: [
+      { label: "See your payments", url: o.moneyUrl },
+      { label: "Terms of Membership", url: o.termsUrl },
+    ],
+  });
+}
+
+/** The lawyer confirmed the next steps after a call (handoff). Service email, sent right away. */
+export function handoffNextStepsEmail(o: {
+  firstName?: string;
+  matterTitle?: string;
+  steps: Array<{ what: string; whoLabel: string; dueLabel?: string }>;
+  homeUrl: string;
+  unsubscribeUrl: string;
+}): MemberEmail {
+  const list = o.steps.map((s) => `${s.what} (${s.whoLabel}${s.dueLabel ? `, by ${s.dueLabel}` : ""})`);
+  return memberEmailLayout({
+    subject: o.matterTitle ? `Your next steps on ${o.matterTitle}` : "Your next steps after your ILP call",
+    firstName: o.firstName,
+    paragraphs: [
+      o.steps.length === 1
+        ? "Your lawyer confirmed the next step from your call:"
+        : "Your lawyer confirmed the next steps from your call:",
+      ...list,
+      "Your ILP team follows up on anything that needs us. The steps are also in your ILP home.",
+    ],
+    cta: { label: "See your next steps", url: o.homeUrl },
+    unsubscribeUrl: o.unsubscribeUrl,
+  });
+}
+
+/** Invoice sent by staff. No attachment: a link to Money in the ILP home. */
+export function invoiceReadyEmail(o: {
+  firstName?: string;
+  invoiceNumber: string;
+  totalLabel: string;
+  balanceLabel?: string; // set when something is still due
+  moneyUrl: string;
+  contactEmail: string;
+}): MemberEmail {
+  return memberEmailLayout({
+    subject: `Your ILP invoice ${o.invoiceNumber}`.trim(),
+    firstName: o.firstName,
+    paragraphs: [
+      `Your invoice ${o.invoiceNumber} for ${o.totalLabel} is ready. You can see it in Money in your ILP home.`.replace(/\s+/g, " "),
+      o.balanceLabel ? `The balance due is ${o.balanceLabel}.` : "This invoice is paid in full.",
+      `If you have a question about it, reply to this email or write to ${o.contactEmail}.`,
+    ],
+    cta: { label: "Open Money", url: o.moneyUrl },
+  });
+}

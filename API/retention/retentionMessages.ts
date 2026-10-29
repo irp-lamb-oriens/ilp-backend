@@ -3,7 +3,9 @@
  * ──────────────────────────────────────────────────────────────────────────
  * Non-transactional member messages (P2). Run daily by jobs/retentionSweep.ts.
  * All respect `clients.emailOptOut` and carry an unsubscribe link; all are
- * once-only per member per message.
+ * once-only per member per message. COMMS-P1 classes (mailer.ts `mayEmail`):
+ * obligations and next step are service emails; the check-in and the booking
+ * nudge are marketing and also need `marketingEmailConsent` not refused.
  *
  *   obligations  dates reaching 30 and 7 days out ("may require review"),
  *                one email per member per day listing every newly reached item;
@@ -16,7 +18,9 @@
  *   next step    a matter's next step (matter.nextStep or the newest handoff,
  *                same rule as the member Overview) changed since the last sweep;
  *                last seen value kept in `retention_state/ns_<matterId>`.
- *                The first sweep only records a baseline.
+ *                The first sweep only records a baseline. COMMS-P1: a handoff
+ *                emails right away (handoffEmail.ts) and records the same
+ *                state, so the sweep only catches other changes.
  */
 
 import get from "../../db/get.ts";
@@ -125,7 +129,7 @@ async function obligationsStep(to: MemberContact, now: Date, free = false): Prom
     unsubscribeUrl: await unsubscribeUrl(to.clientId),
     free,
   });
-  const sent = await sendOnce(`obligations_${to.clientId}_${crDay(now)}`, to, mail, { transactional: false });
+  const sent = await sendOnce(`obligations_${to.clientId}_${crDay(now)}`, to, mail, { kind: "service" });
   // Mark the stages reached (a "7" also covers a "30" never sent).
   for (const r of reached) {
     const marks = new Set([...(r.o.remindersSent ?? []), r.stage, ...(r.stage === "7" ? ["30"] : [])]);
@@ -149,7 +153,7 @@ async function checkInStep(to: MemberContact, m: Membership, now: Date): Promise
     feedbackUrl: `${site}/status/feedback?m=${month}`,
     unsubscribeUrl: await unsubscribeUrl(to.clientId),
   });
-  return (await sendOnce(`checkin_${m.id}_${month}`, to, mail, { transactional: false })) ? 1 : 0;
+  return (await sendOnce(`checkin_${m.id}_${month}`, to, mail, { kind: "marketing" })) ? 1 : 0;
 }
 
 async function nudgeStep(to: MemberContact, m: Membership, now: Date): Promise<number> {
@@ -163,7 +167,7 @@ async function nudgeStep(to: MemberContact, m: Membership, now: Date): Promise<n
     bookUrl: `${siteUrl()}/status/book`,
     unsubscribeUrl: await unsubscribeUrl(to.clientId),
   });
-  return (await sendOnce(`nudge_book_${m.id}`, to, mail, { transactional: false })) ? 1 : 0;
+  return (await sendOnce(`nudge_book_${m.id}`, to, mail, { kind: "marketing" })) ? 1 : 0;
 }
 
 async function nextStepStep(to: MemberContact, now: Date): Promise<number> {
@@ -192,7 +196,7 @@ async function nextStepStep(to: MemberContact, now: Date): Promise<number> {
     });
     // Key on the fingerprint: the same step never mails twice.
     const key = `nextstep_${matter.id}_${fp.replace(/[^A-Za-z0-9]/g, "").slice(0, 60)}_${fp.length}`;
-    if (await sendOnce(key, to, mail, { transactional: false })) n++;
+    if (await sendOnce(key, to, mail, { kind: "service" })) n++;
   }
   return n;
 }

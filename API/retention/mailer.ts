@@ -24,11 +24,44 @@ export const siteUrl = () =>
 export const apiUrl = () =>
   (Deno.env.get("PUBLIC_API_URL") || Deno.env.get("API_PUBLIC_URL") || "http://localhost:8000").replace(/\/$/, "");
 
+/**
+ * COMMS-P1: three classes of email.
+ *   transactional  payments, account, sign-in codes, calls, legal notices: always sent.
+ *   service        reminders and updates the person asked for (deadline
+ *                  reminders, next steps after a call): stopped only by the
+ *                  reminder unsubscribe (`clients.emailOptOut`).
+ *   marketing      check-ins, nudges, staff outreach campaigns: also need
+ *                  marketing consent not refused (`marketingEmailConsent !== false`)
+ *                  and no address-level suppression.
+ */
+export type EmailClass = "transactional" | "service" | "marketing";
+
+/** Pure: may this person get an email of this class? */
+export function mayEmail(
+  to: { optOut?: boolean; marketingConsent?: boolean | null; suppressed?: boolean },
+  cls: EmailClass,
+): boolean {
+  if (cls === "transactional") return true;
+  if (to.optOut) return false;
+  if (cls === "marketing") return to.marketingConsent !== false && !to.suppressed;
+  return true;
+}
+
+/** Pure: the client fields that decide `mayEmail`. */
+export function emailPrefsOf(c: Record<string, unknown> | null | undefined): { optOut: boolean; marketingConsent: boolean | null } {
+  return {
+    optOut: c?.emailOptOut === true,
+    marketingConsent: typeof c?.marketingEmailConsent === "boolean" ? c.marketingEmailConsent : null,
+  };
+}
+
 export interface MemberContact {
   clientId: string;
   email: string;
   firstName: string;
   optOut: boolean;
+  /** clients.marketingEmailConsent (null when never asked). */
+  marketingConsent?: boolean | null;
   /** Placeholder (seed) member: every message is skipped (helper/placeholder.ts). */
   placeholder?: boolean;
 }
@@ -47,7 +80,7 @@ export async function memberContact(clientId: string, record?: unknown): Promise
     clientId,
     email,
     firstName: full.trim().split(/\s+/)[0] ?? "",
-    optOut: c.emailOptOut === true,
+    ...emailPrefsOf(c),
     placeholder: isPlaceholderDoc({ ...c, id: clientId }) || isPlaceholderDoc(record),
   };
 }
@@ -56,16 +89,19 @@ export async function memberContact(clientId: string, record?: unknown): Promise
 export const queueKey = (key: string) => key.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 400);
 
 /**
- * Queue a member email once per key. Non-transactional messages are skipped
- * for members who opted out. Returns true when queued now.
+ * Queue a member email once per key. `kind` (or the older `transactional`
+ * flag: false = service) decides who may get it, see `mayEmail`. Returns true
+ * when queued now.
  */
 export async function sendOnce(
   key: string,
   to: MemberContact,
   mail: MemberEmail,
-  opts: { transactional: boolean },
+  opts: { transactional?: boolean; kind?: EmailClass },
 ): Promise<boolean> {
-  if (!opts.transactional && to.optOut) return false;
+  const kind: EmailClass = opts.kind ?? (opts.transactional ? "transactional" : "service");
+  if (!mayEmail(to, kind)) return false;
+  if (kind === "marketing" && await isSuppressed(to.email)) return false;
   if (to.placeholder) {
     logSkipped("member email", key);
     return false;
@@ -102,6 +138,35 @@ async function hmac(data: string): Promise<string> {
 }
 
 export const unsubscribeToken = (clientId: string) => hmac(`unsub:${clientId}`);
+
+// ─── Address-level suppression (COMMS-P1) ─────────────────────────────────
+// A person without a client record (a free-check lead) unsubscribes by
+// address. Marketing to that address stops; service and account emails do not.
+
+export const SUPPRESSIONS = "email_suppressions";
+export const suppressionId = (email: string) =>
+  `sup_${email.trim().toLowerCase().replace(/[^a-z0-9]/g, "_")}`.slice(0, 400);
+
+export async function isSuppressed(email: string): Promise<boolean> {
+  if (!email) return false;
+  const d = (await get(SUPPRESSIONS, suppressionId(email)).catch(() => null)) as Record<string, unknown> | null;
+  return !!d && d.active !== false;
+}
+
+export const leadUnsubscribeToken = (leadId: string) => hmac(`unsub:lead:${leadId}`);
+
+export async function verifyLeadUnsubscribe(leadId: string, token: string): Promise<boolean> {
+  if (!leadId || !token || token.length !== 32) return false;
+  const want = await leadUnsubscribeToken(leadId);
+  let diff = 0;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Signed unsubscribe link for a free-check lead (no client record yet). */
+export async function leadUnsubscribeUrl(leadId: string): Promise<string> {
+  return `${apiUrl()}/api/retention/unsubscribe?l=${encodeURIComponent(leadId)}&t=${await leadUnsubscribeToken(leadId)}`;
+}
 
 export async function verifyUnsubscribe(clientId: string, token: string): Promise<boolean> {
   if (!clientId || !token || token.length !== 32) return false;
