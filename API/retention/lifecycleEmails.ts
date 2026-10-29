@@ -9,6 +9,9 @@
  *   cancellation confirmed (member asked to cancel)
  *   renewal receipt  (a new paid period started)
  *   join confirmed   (membership activated: renewal terms and how to cancel, P7)
+ *   renewal notice   7 days before each renewal charge: amount, date, cancel
+ *                    link (COMMS-P1, US automatic-renewal laws), from the
+ *                    daily retention sweep; the CSM renewal task stays
  *
  * `installLifecycleEmailHooks()` attaches the immediate ones to
  * payments/lifecycle.ts; `dunningSweep()` (daily, from jobs/retentionSweep.ts)
@@ -22,6 +25,7 @@ import {
   cancellationConfirmedEmail,
   joinConfirmedEmail,
   paymentFailedEmail,
+  renewalNoticeEmail,
   renewalReceiptEmail,
 } from "../../helper/emailTemplates.ts";
 import { COLLECTIONS, PLAN_STANDARD } from "../../schemas/contracts.ts";
@@ -129,6 +133,57 @@ export async function sendJoinConfirmed(m: MembershipDoc): Promise<boolean> {
   const to = await memberContact(m.clientId, m);
   if (!to) return false;
   return sendOnce(`join_confirmed_${m.id}`, to, joinConfirmation(m, to.firstName), { transactional: true });
+}
+
+// ─── Renewal notice (COMMS-P1) ────────────────────────────────────────────
+
+/** Days before the renewal date when the notice goes out. */
+export const RENEWAL_NOTICE_DAYS = 7;
+
+/**
+ * Pure: an active membership that renews (no cancel requested) within the
+ * next RENEWAL_NOTICE_DAYS. Placeholder records are filtered by memberContact.
+ */
+export function renewalNoticeDue(m: Pick<MembershipDoc, "status" | "periodEnd" | "cancelAtPeriodEnd">, now: Date): boolean {
+  if (m.status !== "active" || m.cancelAtPeriodEnd || !m.periodEnd) return false;
+  const left = Date.parse(m.periodEnd) - now.getTime();
+  return Number.isFinite(left) && left >= 0 && left <= RENEWAL_NOTICE_DAYS * DAY_MS;
+}
+
+/** Pure: the notice for one membership. Exported for tests. */
+export function renewalNotice(m: Pick<MembershipDoc, "periodEnd" | "paymentRef">, firstName?: string) {
+  return renewalNoticeEmail({
+    firstName,
+    amountLabel: usd(PLAN_STANDARD.monthlyCents),
+    chargeOn: dateLabel(m.periodEnd),
+    cancelUrl: `${siteUrl()}/status/money/cancel`,
+    moneyUrl: moneyUrl(),
+    termsUrl: `${siteUrl()}/terms`,
+    byCard: byCard(m as MembershipDoc),
+  });
+}
+
+/** One notice per membership per renewal date. Transactional (a legal notice). */
+export async function sendRenewalNotice(m: MembershipDoc): Promise<boolean> {
+  const to = await memberContact(m.clientId, m);
+  if (!to) return false;
+  return sendOnce(`renewal_notice_${m.id}_${String(m.periodEnd).slice(0, 10)}`, to, renewalNotice(m, to.firstName), { kind: "transactional" });
+}
+
+/** Daily: every active membership renewing within 7 days gets its notice once. */
+export async function renewalNoticeSweep(now: Date = new Date()): Promise<number> {
+  const rows = (await query(COLLECTIONS.memberships, [{ field: "status", op: "EQUAL", value: "active" }])
+    .catch(() => [])) as unknown as MembershipDoc[];
+  let n = 0;
+  for (const m of rows) {
+    if (!renewalNoticeDue(m, now)) continue;
+    try {
+      if (await sendRenewalNotice(m)) n++;
+    } catch (err) {
+      log(`[retention] renewal notice ${m.id} failed: ${err instanceof Error ? err.message : err}`, "error");
+    }
+  }
+  return n;
 }
 
 let installed = false;
