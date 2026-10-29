@@ -17,7 +17,7 @@ interface Mail {
 const FOOTER = "International Legal Partner (ILP). You get this email because you applied to take member calls as a partner lawyer.";
 
 function layout(subject: string, name: string, paragraphs: string[], cta?: { label: string; url: string }): Mail {
-  const hello = name ? `Hola ${name},` : "Hola,";
+  const hello = name ? `Hi ${name},` : "Hello,"; // COMMS-P1: English
   const ps = paragraphs.map((p) => `<p style="margin:0 0 14px">${esc(p)}</p>`).join("");
   const button = cta
     ? `<p style="margin:20px 0"><a href="${esc(cta.url)}" style="background:#5cccf7;color:#123b5d;padding:11px 18px;text-decoration:none;border-radius:999px;font-weight:600;display:inline-block">${esc(cta.label)}</a></p>`

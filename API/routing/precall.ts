@@ -39,12 +39,14 @@ type Doc = Record<string, unknown>;
 const DAY = 86_400_000;
 const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
-/** The lawyer's email language: their choice, else Portuguese for Portugal-only lawyers, else Spanish. */
-export function emailLanguageFor(provider: Doc | null | undefined): LawyerEmailLanguage {
-  const v = provider?.emailLanguage;
-  if (v === "es" || v === "pt" || v === "en") return v;
-  const countries = (Array.isArray(provider?.jurisdictions) ? provider!.jurisdictions as unknown[] : [provider?.country]).map(toCountryCode).filter(Boolean);
-  return countries.length && countries.every((c) => c === "PT") ? "pt" : "es";
+/**
+ * The lawyer's email language. COMMS-P1 (owner decision 2026-10-28): every ILP
+ * email is in English, so this is always "en". The stored `emailLanguage`
+ * field is kept on the profile but no longer changes the language; the
+ * Spanish and Portuguese word sets stay in emails.ts, unused by default.
+ */
+export function emailLanguageFor(_provider?: Doc | null): LawyerEmailLanguage {
+  return "en";
 }
 
 const AREA_ES: Record<string, string> = { immigration: "Migración y residencia", real_estate: "Inmuebles", corporate: "Sociedades", tax: "Impuestos", vehicle: "Vehículos", family_estate: "Familia y sucesiones", labor: "Laboral", notarial: "Actos notariales", disputes: "Litigios", banking: "Banca y cumplimiento" };

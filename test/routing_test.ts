@@ -15,6 +15,7 @@ import { stripFields } from "../db/records.ts";
 import { buildPreCallBrief, sendPreCallEmail } from "../API/routing/precall.ts";
 import { preCallLawyerEmail, whenIn } from "../API/routing/emails.ts";
 import { clearPlaceholderCache } from "../helper/placeholder.ts";
+import { zoneLabel } from "../API/calls/callLogic.ts";
 
 /**
  * ROUTING: hidden ratings, the router (filters, ranking, tie-break,
@@ -334,10 +335,11 @@ Deno.test("pre-call email: question, profile, documents by name, lawyer's time z
     assert(await sendPreCallEmail(c as never, "booked"));
     const mail = world.emails().find((m) => m.to === "pt1@lawyers-rt.io")!;
     assert(mail, "lawyer email queued");
-    assert(mail.subject.startsWith("Nova chamada ILP: Grace Whitfield"), mail.subject);
+    // COMMS-P1: every lawyer email is in English, Portugal included.
+    assert(mail.subject.startsWith("New ILP call: Grace Whitfield"), mail.subject);
     // 15:00 UTC on 3 November is 15:00 in Lisbon (winter time).
-    assert(mail.text.includes("15:00"), "time in the lawyer's zone");
-    assert(mail.text.includes("Lisbon"), "zone named");
+    assert(mail.text.includes("3:00 PM"), "time in the lawyer's zone");
+    assert(mail.text.includes(zoneLabel("Europe/Lisbon")), "zone named");
     for (const part of ["Can I renew my residence card from Chicago?", "D7 holder", "Lagos, Faro", "passport-scan.pdf (identity)", "Residence card renewal may require review", "https://meet.google.com/abc-defg-hij", "/lawyer/calls/call1"]) {
       assert(mail.text.includes(part), `missing ${part}`);
     }
@@ -349,7 +351,7 @@ Deno.test("pre-call email: question, profile, documents by name, lawyer's time z
   }
 });
 
-Deno.test("pre-call email: Spanish by default, times in the lawyer's zone", () => {
+Deno.test("pre-call email: the Spanish word set still renders (no longer the default), times in the lawyer's zone", () => {
   const brief = buildPreCallBrief({
     consultation: { id: "c", clientId: "x", matterId: "m", providerId: "L", question: "¿Cómo renuevo el DIMEX?", scheduledAt: "2026-11-03T15:00:00.000Z" },
     client: { fullName: "Robert Hayes", legalCountry: "CR", timezone: "America/Denver", hasCompany: true, companyType: "SA" },
@@ -381,12 +383,12 @@ Deno.test("reminders: the lawyer's 24 h and 1 h reminders carry the brief; a sal
     await callReminders(world.now());
     const lawyer24 = world.emails().filter((m) => m.to === "cr9@lawyers-rt.io");
     assertEquals(lawyer24.length, 1);
-    assert(lawyer24[0].subject.startsWith("Recordatorio: llamada con Grace Whitfield mañana"), lawyer24[0].subject);
+    assert(lawyer24[0].subject.startsWith("Reminder: call with Grace Whitfield tomorrow"), lawyer24[0].subject);
     assert(lawyer24[0].text.includes("DIMEX renewal"));
     assertEquals(world.emails().filter((m) => m.to === "consultation@internationalrelocationpartner.com").length, 1, "sales inbox reminded");
     world.setNow("2026-10-29T14:05:00.000Z");
     await callReminders(world.now());
-    const lawyer1h = world.emails().filter((m) => m.to === "cr9@lawyers-rt.io" && /en una hora/.test(m.subject));
+    const lawyer1h = world.emails().filter((m) => m.to === "cr9@lawyers-rt.io" && /in one hour/.test(m.subject));
     assertEquals(lawyer1h.length, 1);
     assertEquals(world.doc("consultations", "c9")!.remindersSent, ["24h", "1h"]);
   } finally {
