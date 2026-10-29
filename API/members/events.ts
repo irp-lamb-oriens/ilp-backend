@@ -28,6 +28,7 @@ import { createRecord, findRecords, getRecord, updateRecord } from "../../db/rec
 import { recordFirstCallBooked } from "../analytics/funnel.ts"; // P2
 import { handoffNeedsOpportunity } from "../opportunities/logic.ts"; // P5
 import { createOpportunityFromHandoff } from "../opportunities/store.ts"; // P5
+import { sendHandoffNextSteps } from "../retention/handoffEmail.ts"; // COMMS-P1
 
 export type EventName = keyof typeof TASK_RULES;
 import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
@@ -273,6 +274,10 @@ async function run(slug: string, before: Doc | null, after: Doc): Promise<string
   // P5: commercial notes on a handoff (at creation or added later by staff) open an opportunity.
   if (slug === "handoffs" && handoffNeedsOpportunity(before, after)) {
     await createOpportunityFromHandoff(after);
+  }
+  // COMMS-P1: handoff.approved emails the confirmed next steps to the member right away (service class).
+  if (slug === "handoffs" && !before) {
+    await sendHandoffNextSteps(after);
   }
   if (slug === "handoffs" && ids.length && after.id) {
     const prev = Array.isArray(after.csmTaskIds) ? (after.csmTaskIds as string[]) : [];
