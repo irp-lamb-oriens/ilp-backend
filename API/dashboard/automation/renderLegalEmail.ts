@@ -1,5 +1,5 @@
 /**
- * renderLegalEmail.ts — renders the six legal-pipeline email types for the
+ * renderLegalEmail.ts — renders the seven legal-pipeline email types for the
  * ILP Emails tab (trigger-email + email-preview).
  *
  * Resolution order per email type:
@@ -14,13 +14,20 @@ import {
   getTemplateOverride,
   interpolate,
 } from "./templateRender.ts";
+import { withLegalFooter } from "../../../helper/emailTemplates.ts";
+
+/**
+ * COMMS-P1: every rendered legal email (default or staff override) ends with
+ * the legal footer (EMAIL_FOOTER), added at render time so an edited template
+ * cannot drop it.
+ */
 
 /** Canonical legal email-type → default subject. */
 export const LEGAL_EMAIL_SUBJECTS: Record<string, string> = {
   scoping_intro: "Welcome to International Legal Partner",
   legal_review_update: "Update on your legal matter",
   quote_ready: "Your legal quote is ready",
-  quote_accepted_confirmation: "Quote accepted — next steps",
+  quote_accepted_confirmation: "Quote accepted: next steps",
   filing_started: "We've started your filing",
   matter_closed: "Your matter is complete",
   filing_deadline_reminder: "Reminder: your filing deadline is approaching",
@@ -43,7 +50,7 @@ export const LEGAL_EMAIL_DEFAULT_BODY: Record<string, string> = {
   quote_ready: `<!doctype html><html><body style="font-family:sans-serif;color:#18181B;line-height:1.6">
     <h2>Your legal quote is ready</h2>
     <p>Hi {{name}},</p>
-    <p>We've prepared a quote for your <strong>{{legalArea}}</strong> matter.</p>
+    <p>We have prepared a quote for your {{#legalArea}}<strong>{{legalArea}}</strong> {{/legalArea}}matter{{#quoteTitle}}: {{quoteTitle}}{{/quoteTitle}}. You can read it and accept it in your ILP home.</p>
     {{#statusPageUrl}}<p><a href="{{statusPageUrl}}" style="background:#123b5d;color:#fff;padding:10px 16px;text-decoration:none;border-radius:6px">Review your quote</a></p>{{/statusPageUrl}}
   </body></html>`,
   quote_accepted_confirmation: `<!doctype html><html><body style="font-family:sans-serif;color:#18181B;line-height:1.6">
@@ -105,7 +112,7 @@ export function renderLegalEmail(
   if (override && override.bodyHtml) {
     return {
       subject: interpolate(override.subject || LEGAL_EMAIL_SUBJECTS[emailType] || emailType, data),
-      bodyHtml: renderConditional(interpolate(override.bodyHtml, data), data),
+      bodyHtml: withLegalFooter(renderConditional(interpolate(override.bodyHtml, data), data)),
     };
   }
 
@@ -114,8 +121,29 @@ export function renderLegalEmail(
 
   return {
     subject: interpolate(subject, data),
-    bodyHtml: body ? renderConditional(interpolate(body, data), data) : "<p></p>",
+    bodyHtml: withLegalFooter(body ? renderConditional(interpolate(body, data), data) : "<p></p>"),
   };
+}
+
+/**
+ * COMMS-P1: the email class of each type when staff send it by hand. All
+ * seven are updates about the person's own matter (service). A send tagged
+ * with an outreach campaign is marketing instead (see emailClassForSend).
+ */
+export const LEGAL_EMAIL_CLASS: Record<string, "service" | "marketing"> = {
+  scoping_intro: "service",
+  legal_review_update: "service",
+  quote_ready: "service",
+  quote_accepted_confirmation: "service",
+  filing_started: "service",
+  matter_closed: "service",
+  filing_deadline_reminder: "service",
+};
+
+/** Pure: the class of a staff send. An outreach campaign is always marketing. */
+export function emailClassForSend(emailType: string, campaign?: unknown): "service" | "marketing" {
+  if (typeof campaign === "string" && campaign.trim()) return "marketing";
+  return LEGAL_EMAIL_CLASS[emailType] ?? "marketing";
 }
 
 /** The set of email types the Emails tab can preview/send. */

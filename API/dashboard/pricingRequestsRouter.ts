@@ -35,6 +35,7 @@ import auditLog, { auditFrom } from "../../helper/auditLog.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import { callLLMWithFallback, type LlmRequest } from "../chatbot/intelligence/llm.ts";
 import type { SessionUser } from "../../helper/auth/types.ts";
+import { withLegalFooter } from "../../helper/emailTemplates.ts"; // COMMS-P1
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -403,7 +404,7 @@ export default function pricingRequestsRouter(app: Express) {
         const pricingDeskEmail = Deno.env.get("PRICING_DESK_EMAIL") || "pricing@internationallegalpartner.com";
         const subject = `Pricing Request #${sent.index} — ${clientName}`;
         await enqueueEmail(
-          { to: pricingDeskEmail, subject, html },
+          { to: pricingDeskEmail, subject, html: withLegalFooter(html) }, // COMMS-P1: legal footer
           `pricing_request_${requestId}`,
         );
       } catch (emailErr) {

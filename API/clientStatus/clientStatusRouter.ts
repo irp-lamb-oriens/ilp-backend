@@ -798,7 +798,7 @@ export default (app: Express) => {
       // Fire-and-forget confirmation email.
       const clientEmail = resolvePrincipalEmail(doc, id);
       const acceptMail = memberEmailLayout({
-        subject: `Quote accepted — ${String(targetQuote.title ?? quoteId)}`,
+        subject: `Quote accepted: ${String(targetQuote.title ?? quoteId)}`,
         paragraphs: ["Thank you for accepting your quote. Your legal team will be in touch to confirm next steps."],
       });
       void enqueueEmail(

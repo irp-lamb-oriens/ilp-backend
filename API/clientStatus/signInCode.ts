@@ -10,6 +10,7 @@
 import log from "../../helper/log.ts";
 import { sendEmailTransport } from "../../config/integrations.ts";
 import { emailToDocId, issueOtp } from "../../helper/auth/otp.ts";
+import { signInCodeEmail } from "../../helper/emailTemplates.ts"; // COMMS-P1
 
 export const CLIENT_OTP_COLLECTION = "client_status_otps";
 
@@ -29,23 +30,8 @@ export async function sendClientSignInCode(email: string, projectId: string): Pr
     return { ok: false, status: 500, error: "Failed to send verification code." };
   }
   try {
-    await sendEmailTransport({
-      to: normalizedEmail,
-      subject: "Your ILP Client Portal Login Code",
-      html: `
-            <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 24px;">
-              <div style="text-align: center; margin-bottom: 32px;">
-                <h1 style="color: #123b5d; font-size: 24px; margin: 0;">ILP Client Portal</h1>
-                <p style="color: #4a5a66; font-size: 14px; margin-top: 8px;">Secure Login Code</p>
-              </div>
-              <div style="background: #eff7fb; border-radius: 12px; padding: 32px; text-align: center;">
-                <p style="color: #202a33; font-size: 16px; margin: 0 0 16px;">Your verification code is:</p>
-                <div style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #123b5d; font-family: monospace; padding: 16px; background: white; border-radius: 8px; display: inline-block;">${code}</div>
-                <p style="color: #7a8a96; font-size: 13px; margin-top: 16px;">This code expires in 10 minutes.</p>
-              </div>
-            </div>
-          `,
-    });
+    const mail = signInCodeEmail({ portal: "member", code }); // COMMS-P1: legal footer
+    await sendEmailTransport({ to: normalizedEmail, subject: mail.subject, html: mail.html, text: mail.text });
     log(`[client-status] OTP sent to ${normalizedEmail}`);
     return { ok: true };
   } catch (err) {

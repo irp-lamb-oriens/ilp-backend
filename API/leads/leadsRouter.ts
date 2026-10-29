@@ -9,6 +9,8 @@ import { emailToDocId, generateSessionToken } from "../../helper/auth/otp.ts";
 import patch from "../../db/patch.ts";
 import rateLimit from "express-rate-limit";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
+import { EMAIL_FOOTER } from "../../helper/emailTemplates.ts"; // COMMS-P1
+import { leadUnsubscribeUrl } from "../retention/mailer.ts"; // COMMS-P1
 import { COLLECTIONS, countryName as nameOf, type CountryCode, type Lead, type Membership, type Obligation, toCountryCode } from "../../schemas/contracts.ts";
 import { type CheckFinding, evaluateCheck, normalizeAnswers } from "./deadlineCheck.ts";
 import query from "../../db/query.ts";
@@ -86,7 +88,12 @@ export const firestoreClaimStore: ClaimStore = {
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
-function findingsEmailHtml(findings: CheckFinding[], country: CountryCode): string {
+/**
+ * The free deadline check email. COMMS-P1: legal footer and a signed
+ * unsubscribe link (the person has no account yet; the link stops emails to
+ * this address about the check). Exported for tests.
+ */
+export function findingsEmailHtml(findings: CheckFinding[], country: CountryCode, unsubscribeUrl?: string): string {
   const site = Deno.env.get("PUBLIC_SITE_URL") || "https://ilp.legal";
   const rows = findings.length
     ? findings.map((f) => {
@@ -103,7 +110,9 @@ function findingsEmailHtml(findings: CheckFinding[], country: CountryCode): stri
   return `<div style="font-family:Helvetica,Arial,sans-serif;font-size:17px;line-height:1.6;color:#202a33;max-width:560px">
 <p>Here is what may apply to you in ${esc(countryName(country))}, based on your answers. These are general dates, not legal advice; a lawyer can confirm what applies to you.</p>
 <ul style="padding-left:20px">${rows}</ul>
-<p><a href="${esc(site)}/join" style="color:#123b5d">Have a lawyer review this with ILP</a></p></div>`;
+<p><a href="${esc(site)}/join" style="color:#123b5d">Have a lawyer review this with ILP</a></p>
+<p style="margin:24px 0 0;font-size:13px;color:#4a5a66">${esc(EMAIL_FOOTER)}</p>
+<p style="margin:12px 0 0;font-size:13px;color:#7a8a96">You get this email because you asked for your free deadline check on the ILP website.${unsubscribeUrl ? ` <a href="${esc(unsubscribeUrl)}" style="color:#7a8a96">Stop emails about this check</a>.` : ""}</p></div>`;
 }
 
 /**
@@ -162,7 +171,7 @@ export default (app: Express) => {
       enqueueEmail({
         to: email,
         subject: "Your free deadline check from ILP",
-        html: findingsEmailHtml(findings, answers.country),
+        html: findingsEmailHtml(findings, answers.country, await leadUnsubscribeUrl(id)),
       }).catch((err) => log(`[leads] findings email not queued: ${err}`, "leads"));
 
       res.status(201).json({ findings, saved: true, leadId: id });
