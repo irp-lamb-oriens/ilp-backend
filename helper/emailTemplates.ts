@@ -498,6 +498,24 @@ export function signInCodeEmail(o: { portal: "member" | "lawyer" | "staff"; code
 }
 
 /**
+ * COMMS-P4: five wrong sign-in codes in a row (any portal). The code stops
+ * working; recovery steps. Transactional (account security).
+ */
+export function signInLockoutEmail(o: { portal: "member" | "lawyer" | "staff"; signInUrl: string; supportEmail: string; minutes?: number }): MemberEmail {
+  const where = o.portal === "lawyer" ? "the ILP lawyer portal" : o.portal === "staff" ? "the ILP dashboard" : "your ILP home";
+  return memberEmailLayout({
+    subject: "Your ILP sign-in code was blocked",
+    paragraphs: [
+      `Someone entered a wrong sign-in code for ${where} 5 times in a row with this email address. To protect your account, that code no longer works.`,
+      `If it was you: go back to the sign-in page, ask for a new code and use the newest email we send. Each code works for ${o.minutes ?? 10} minutes and only once.`,
+      "If it was not you: you do not need to do anything. Nobody can sign in without a code sent to this inbox. Do not share sign-in codes with anyone; ILP never asks for them.",
+      `If this keeps happening, or you cannot sign in, write to ${o.supportEmail}.`,
+    ],
+    cta: { label: "Go to sign-in", url: o.signInUrl },
+  });
+}
+
+/**
  * Renewal notice 7 days before each automatic charge (US automatic-renewal
  * laws): the amount, the charge date, and how to cancel online before it.
  * Transactional: sent even to members who stopped reminder emails.

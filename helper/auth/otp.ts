@@ -61,6 +61,7 @@ export function isAllowedDomain(email: string): boolean {
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import remove from "../../db/delete.ts";
+import { sendLockoutEmail } from "./lockout.ts"; // COMMS-P4
 
 export const OTP_TTL_MS = 10 * 60 * 1000;
 export const MAX_OTP_ATTEMPTS = 5;
@@ -155,6 +156,8 @@ export async function verifyOtp(
     const next = attempts + 1;
     if (next >= MAX_OTP_ATTEMPTS) {
       await remove(collection, docId).catch(() => {});
+      // COMMS-P4: tell the address owner, with recovery steps (once a day per portal).
+      await sendLockoutEmail(collection, doc.email);
       return { ok: false, status: 429, error: "Too many attempts. Please request a new code." };
     }
     await put(collection, docId, { ...doc, attempts: next });
