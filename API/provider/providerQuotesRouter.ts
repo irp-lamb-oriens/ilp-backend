@@ -47,6 +47,7 @@ import {
   buildQuoteDescriptionInput,
   hashQuoteDescriptionInput,
   generateQuoteClientDescription,
+  quotePendingApprovalEmail,
 } from "../dashboard/quotesRouter.ts";
 import { buildContractSnapshot } from "../dashboard/contractSnapshot.ts";
 import { resolveQuoteTemplateBlocks } from "../dashboard/contractTemplate.ts";
@@ -529,19 +530,9 @@ export default function providerQuotesRouter(app: Express) {
       }
 
       try {
-        const quoteTitle = quote.title || "New Quote";
-        const emailBody = `<div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;padding:32px 24px;">
-          <h2 style="color:#02b5bb;margin:0 0 8px;">Quote Pending Approval</h2>
-          <p style="color:#475569;margin:0 0 12px;">Lawyer <strong>${actor}</strong> has submitted <strong>"${quoteTitle}"</strong> for client <code>${id}</code>.</p>
-          ${noteToApprovers?.trim() ? `<p style="background:#f3f4f6;padding:12px;border-radius:6px;"><strong>Note from requester:</strong><br>${noteToApprovers.trim()}</p>` : ""}
-          <p style="color:#94a3b8;font-size:11px;margin-top:24px;">International Legal Partner · Quotes System</p>
-        </div>`;
+        const mail = quotePendingApprovalEmail({ by: "Lawyer", actor, quoteTitle: quote.title || "New Quote", clientId: id, note: noteToApprovers });
         for (const approverEmail of approvers) {
-          await enqueueEmail({
-            to: approverEmail,
-            subject: `[ILP] Quote pending approval: "${quoteTitle}"`,
-            html: emailBody,
-          }).catch(() => {});
+          await enqueueEmail({ to: approverEmail, ...mail }).catch(() => {});
         }
       } catch (emailErr: any) {
         log(`[providerQuotes] Submit email failed (non-fatal): ${emailErr?.message}`);

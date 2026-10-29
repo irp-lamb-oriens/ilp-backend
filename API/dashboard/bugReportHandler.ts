@@ -12,6 +12,22 @@ import log from "../../helper/log.ts";
 
 const TEAM_EMAIL = Deno.env.get("TEAM_EMAIL") ?? "team@internationallegalpartner.com";
 
+const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** The team email for a bug report (COMMS-P5: pure, escaped, exported for the email previews). */
+export function bugReportEmail(r: { title: string; description?: string; url?: string; actor: string }): { subject: string; html: string } {
+  return {
+    subject: `Bug report: ${r.title}`,
+    html: `<div style="font-family:sans-serif;max-width:540px">
+        <h2>Bug report</h2>
+        <p><strong>${esc(r.title)}</strong></p>
+        <p>${esc(r.description || "(no description)")}</p>
+        <p>URL: ${esc(r.url || "not given")}</p>
+        <p>Reported by: ${esc(r.actor)}</p>
+      </div>`,
+  };
+}
+
 export async function handleBugReport(
   req: Request,
   res: Response,
@@ -37,17 +53,7 @@ export async function handleBugReport(
   const id = await post("bug_reports", report);
 
   void enqueueEmail(
-    {
-      to: TEAM_EMAIL,
-      subject: `🐛 Bug report: ${report.title}`,
-      html: `<div style="font-family:sans-serif;max-width:540px">
-        <h2>Bug report</h2>
-        <p><strong>${report.title}</strong></p>
-        <p>${report.description || "(no description)"}</p>
-        <p>URL: ${report.url || "—"}</p>
-        <p>Reported by: ${actor}</p>
-      </div>`,
-    },
+    { to: TEAM_EMAIL, ...bugReportEmail({ title: report.title, description: report.description, url: report.url, actor }) },
     `bug_${id}`,
   ).catch((e) => log(`[bug-report] team email failed: ${e}`));
 

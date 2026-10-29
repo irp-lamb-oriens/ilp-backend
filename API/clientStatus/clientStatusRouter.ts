@@ -259,6 +259,14 @@ function buildSafeSummary(doc: Record<string, unknown>, projectId: string) {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+/** The member's confirmation after accepting a quote (COMMS-P5: pure, exported for the email previews). */
+export function quoteAcceptedMemberEmail(quoteTitle: string) {
+  return memberEmailLayout({
+    subject: `Quote accepted: ${quoteTitle}`,
+    paragraphs: ["Thank you for accepting your quote. Your legal team will be in touch to confirm next steps."],
+  });
+}
+
 export default (app: Express) => {
   log("Client Status router initialized.");
 
@@ -797,10 +805,7 @@ export default (app: Express) => {
 
       // Fire-and-forget confirmation email.
       const clientEmail = resolvePrincipalEmail(doc, id);
-      const acceptMail = memberEmailLayout({
-        subject: `Quote accepted: ${String(targetQuote.title ?? quoteId)}`,
-        paragraphs: ["Thank you for accepting your quote. Your legal team will be in touch to confirm next steps."],
-      });
+      const acceptMail = quoteAcceptedMemberEmail(String(targetQuote.title ?? quoteId));
       void enqueueEmail(
         { to: clientEmail, subject: acceptMail.subject, html: acceptMail.html, text: acceptMail.text },
         `quote_accept_${id}_${quoteId}`,

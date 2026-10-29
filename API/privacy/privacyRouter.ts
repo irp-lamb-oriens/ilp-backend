@@ -158,14 +158,47 @@ async function memberEmailOf(clientId: string, fallback: string): Promise<{ emai
 const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "America/Costa_Rica" });
 
-function sendPrivacyEmail(to: string, firstName: string | undefined, subject: string, paragraphs: string[], key: string): void {
-  if (!to) return;
-  const mail = memberEmailLayout({
+/** COMMS-P5: the three privacy emails, pure (exported for the email previews). */
+export function privacyEmail(firstName: string | undefined, subject: string, paragraphs: string[]) {
+  return memberEmailLayout({
     subject,
     firstName,
     paragraphs,
     cta: { label: "Your data and privacy", url: `${siteUrl()}/status/privacy` },
   });
+}
+
+export function privacyReceivedEmail(o: { firstName?: string; kindLabel: string; requestId: string; createdOn: string; dueOn: string; deletion: boolean }) {
+  return privacyEmail(o.firstName, `We received your request: ${o.kindLabel.toLowerCase()}`, [
+    `We received your request (${o.kindLabel.toLowerCase()}) on ${o.createdOn}. Reference: ${o.requestId}.`,
+    `We will answer by ${o.dueOn}. We may ask you to confirm your identity before we act on it.`,
+    ...(o.deletion
+      ? ["Deleting your account ends your membership. Invoices and payment records are kept for as long as the law requires, and proof of your consents is kept with your email replaced by a code."]
+      : []),
+    "If you did not make this request, reply to this email straight away.",
+  ]);
+}
+
+export function privacyDecisionEmail(o: { firstName?: string; kindLabel: string; requestId: string; status: "completed" | "refused"; note: string }) {
+  return privacyEmail(o.firstName, o.status === "completed" ? "Your privacy request is complete" : "About your privacy request", [
+    `Your request (${o.kindLabel.toLowerCase()}, reference ${o.requestId}) is ${o.status === "completed" ? "complete" : "refused"}.`,
+    o.note,
+    ...(o.status === "refused"
+      ? ["If you disagree, reply to this email. You can also complain to Costa Rica's data protection agency (PRODHAB) or, if you live in the US, your state's privacy regulator."]
+      : []),
+  ]);
+}
+
+export function privacyErasedEmail(o: { requestId: string }) {
+  return privacyEmail(undefined, "Your ILP account has been deleted", [
+    `We deleted your ILP account and the personal data in our member systems (reference ${o.requestId}).`,
+    "We keep invoices and payment records for as long as the law requires, and a record that you consented and asked for deletion, with your email replaced by a code.",
+    "Copies held by our providers (for example Stripe and Google) and in our backups expire on their own schedules, described in our Privacy Policy.",
+  ]);
+}
+
+function sendPrivacyEmail(to: string, mail: { subject: string; html: string; text: string }, key: string): void {
+  if (!to) return;
   enqueueEmail({ to, subject: mail.subject, html: mail.html, text: mail.text }, key.replace(/[^A-Za-z0-9_-]/g, "_"))
     .catch((err) => log(`[privacy] email ${key} not queued: ${err instanceof Error ? err.message : err}`, "error"));
 }
@@ -343,16 +376,7 @@ export default function privacyRouter(app: Express): void {
       const who = await memberEmailOf(clientId, email);
       sendPrivacyEmail(
         who.email || email,
-        who.firstName,
-        `We received your request: ${REQUEST_LABEL[kind].toLowerCase()}`,
-        [
-          `We received your request (${REQUEST_LABEL[kind].toLowerCase()}) on ${dayLabel(pr.createdAt)}. Reference: ${pr.id}.`,
-          `We will answer by ${dayLabel(dueAt)}. We may ask you to confirm your identity before we act on it.`,
-          ...(kind === "delete"
-            ? ["Deleting your account ends your membership. Invoices and payment records are kept for as long as the law requires, and proof of your consents is kept with your email replaced by a code."]
-            : []),
-          "If you did not make this request, reply to this email straight away.",
-        ],
+        privacyReceivedEmail({ firstName: who.firstName, kindLabel: REQUEST_LABEL[kind], requestId: pr.id, createdOn: dayLabel(pr.createdAt), dueOn: dayLabel(dueAt), deletion: kind === "delete" }),
         `privacy_ack_${pr.id}`,
       );
       res.status(201).json({ request: pr });
@@ -440,15 +464,7 @@ export default function privacyRouter(app: Express): void {
         const who = await memberEmailOf(r.clientId, r.email);
         sendPrivacyEmail(
           who.email || r.email,
-          who.firstName,
-          status === "completed" ? "Your privacy request is complete" : "About your privacy request",
-          [
-            `Your request (${REQUEST_LABEL[r.kind].toLowerCase()}, reference ${r.id}) is ${status === "completed" ? "complete" : "refused"}.`,
-            note,
-            ...(status === "refused"
-              ? ["If you disagree, reply to this email. You can also complain to Costa Rica's data protection agency (PRODHAB) or, if you live in the US, your state's privacy regulator."]
-              : []),
-          ],
+          privacyDecisionEmail({ firstName: who.firstName, kindLabel: REQUEST_LABEL[r.kind], requestId: r.id, status: status === "completed" ? "completed" : "refused", note }),
           `privacy_${status}_${r.id}`,
         );
       }
@@ -499,17 +515,7 @@ export default function privacyRouter(app: Express): void {
       await closePrivacyTask(id, r.clientId, `Deletion ran: ${result.lines.filter((l) => l.count).map((l) => `${l.collection} ${l.count}`).join(", ")}`);
       await auditLog({ actor, action: "privacy.erasure_completed", target: `clients/${r.clientId}`, meta: { requestId: id, lines: result.lines.map(({ collection, action, count }) => ({ collection, action, count })), filesDeleted: result.filesDeleted, fileErrors: result.fileErrors } });
       // Last message to the address; the email queue copy is purged by the retention job.
-      sendPrivacyEmail(
-        subject.email,
-        undefined,
-        "Your ILP account has been deleted",
-        [
-          `We deleted your ILP account and the personal data in our member systems (reference ${id}).`,
-          "We keep invoices and payment records for as long as the law requires, and a record that you consented and asked for deletion, with your email replaced by a code.",
-          "Copies held by our providers (for example Stripe and Google) and in our backups expire on their own schedules, described in our Privacy Policy.",
-        ],
-        `privacy_erased_${id}`,
-      );
+      sendPrivacyEmail(subject.email, privacyErasedEmail({ requestId: id }), `privacy_erased_${id}`);
       res.json({ ok: true, ...result, manualSteps: ERASURE_MANUAL_STEPS });
     }),
   );

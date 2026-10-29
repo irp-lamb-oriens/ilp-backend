@@ -172,6 +172,61 @@ function renumberOptions(options: unknown[]): Record<string, unknown>[] {
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
+/**
+ * The internal pricing-desk email (COMMS-P5: pure, exported for the email
+ * previews; `esc` now really escapes, and values are escaped once).
+ */
+export function pricingRequestEmail(o: {
+  index: unknown;
+  clientName: string;
+  clientEmail: string;
+  actor: string;
+  options: Array<Record<string, unknown>>;
+  originLabel?: unknown;
+  originNotes?: unknown;
+  destinationLabel?: unknown;
+  destinationNotes?: unknown;
+}): { subject: string; html: string } {
+  const esc = (v: unknown) =>
+    String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const optionsHtml = o.options.length
+    ? o.options.map((opt) => {
+      const items = Array.isArray(opt.items) ? (opt.items as string[]) : [];
+      const bullets = items.length
+        ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;font-size:13px;">${items.map((it) => `<li>${esc(it)}</li>`).join("")}</ul>`
+        : `<p style="margin:6px 0 0;color:#94a3b8;font-size:12px;font-style:italic;">No line items listed.</p>`;
+      return `<div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+              <p style="margin:0;font-weight:700;color:#0f172a;font-size:13px;">Option ${esc(opt.index)} · ${esc(opt.serviceLine || "not given")}</p>
+              <p style="margin:8px 0 0;color:#475569;font-size:12px;">Please quote a complete service including:</p>
+              ${bullets}
+            </div>`;
+    }).join("")
+    : `<div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+              <p style="margin:0;color:#475569;font-size:12px;">No specific options were provided. Please quote based on the legal area / jurisdiction and any notes above.</p>
+            </div>`;
+  const rows: Array<{ label: string; value: string }> = [
+    { label: "Client", value: o.clientName },
+    { label: "Email", value: o.clientEmail },
+    { label: "Origin", value: `${String(o.originLabel || "not given")}${o.originNotes ? ` (${String(o.originNotes)})` : ""}` },
+    { label: "Destination", value: `${String(o.destinationLabel || "not given")}${o.destinationNotes ? ` (${String(o.destinationNotes)})` : ""}` },
+    { label: "Options", value: String(o.options.length) },
+  ];
+  const html = `
+          <div style="font-family:'Jost',sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#fafbfc;border-radius:16px;">
+            <h1 style="font-size:22px;font-weight:800;color:#0f172a;margin:0 0 16px;">Pricing request #${esc(o.index)}: ${esc(o.clientName)}</h1>
+            <p style="font-size:14px;color:#334155;line-height:1.6;margin:0 0 16px;">
+              Operator <strong>${esc(o.actor)}</strong> has requested a quote for <strong>${esc(o.clientName)}</strong>
+              (<code>${esc(o.clientEmail)}</code>). The requested service options are below.
+            </p>
+            <div style="margin-top:14px;">${optionsHtml}</div>
+            <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+              ${rows.map((r) => `<tr><td style="padding:6px 8px;color:#64748b;font-size:13px;font-weight:600;">${r.label}</td><td style="padding:6px 8px;color:#0f172a;font-size:13px;">${esc(r.value)}</td></tr>`).join("")}
+            </table>
+          </div>
+        `;
+  return { subject: `Pricing request #${String(o.index)}: ${o.clientName}`, html };
+}
+
 export default function pricingRequestsRouter(app: Express) {
   log("Pricing requests router initialized.");
   const base = "/api/dashboard/clients/:id/pricing-requests";
@@ -353,56 +408,19 @@ export default function pricingRequestsRouter(app: Express) {
 
       // ── Compose + send the internal pricing-desk email ────────────────────
       try {
-        const esc = (v: unknown) =>
-          String(v ?? "").replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">");
-        const optionsHtml = options.length
-          ? options.map((o) => {
-            const items = Array.isArray(o.items) ? (o.items as string[]) : [];
-            const bullets = items.length
-              ? `<ul style="margin:6px 0 0;padding-left:18px;color:#334155;font-size:13px;">${
-                items.map((it) => `<li>${esc(it)}</li>`).join("")
-              }</ul>`
-              : `<p style="margin:6px 0 0;color:#94a3b8;font-size:12px;font-style:italic;">No line items listed.</p>`;
-            return `<div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-              <p style="margin:0;font-weight:700;color:#0f172a;font-size:13px;">Option ${o.index} · ${esc(o.serviceLine || "—")}</p>
-              <p style="margin:8px 0 0;color:#475569;font-size:12px;">Please quote a complete service including:</p>
-              ${bullets}
-            </div>`;
-          }).join("")
-          : `<div style="margin:0 0 14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-              <p style="margin:0;color:#475569;font-size:12px;">No specific options were provided — please quote based on the legal area / jurisdiction and any notes above.</p>
-            </div>`;
-
-        const rows: Array<{ label: string; value: string }> = [
-          { label: "Client", value: clientName },
-          { label: "Email", value: clientEmail },
-          {
-            label: "Origin",
-            value: `${sent.originLabel || "—"}${originNotes ? ` (${esc(originNotes)})` : ""}`,
-          },
-          {
-            label: "Destination",
-            value: `${sent.destinationLabel || "—"}${destinationNotes ? ` (${esc(destinationNotes)})` : ""}`,
-          },
-        ];
-        rows.push({ label: "Options", value: String(options.length) });
-
-        const html = `
-          <div style="font-family:'Jost',sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#fafbfc;border-radius:16px;">
-            <h1 style="font-size:22px;font-weight:800;color:#0f172a;margin:0 0 16px;">Pricing Request #${sent.index} — ${esc(clientName)}</h1>
-            <p style="font-size:14px;color:#334155;line-height:1.6;margin:0 0 16px;">
-              Operator <strong>${esc(actor)}</strong> has requested a quote for <strong>${esc(clientName)}</strong>
-              (<code>${esc(clientEmail)}</code>). The requested service options are below.
-            </p>
-            <div style="margin-top:14px;">${optionsHtml}</div>
-            <table style="width:100%;border-collapse:collapse;margin-top:16px;">
-              ${rows.map((r) => `<tr><td style="padding:6px 8px;color:#64748b;font-size:13px;font-weight:600;">${r.label}</td><td style="padding:6px 8px;color:#0f172a;font-size:13px;">${esc(r.value)}</td></tr>`).join("")}
-            </table>
-          </div>
-        `;
+        const { subject, html } = pricingRequestEmail({
+          index: sent.index,
+          clientName,
+          clientEmail,
+          actor,
+          options,
+          originLabel: sent.originLabel,
+          originNotes,
+          destinationLabel: sent.destinationLabel,
+          destinationNotes,
+        });
 
         const pricingDeskEmail = Deno.env.get("PRICING_DESK_EMAIL") || "pricing@internationallegalpartner.com";
-        const subject = `Pricing Request #${sent.index} — ${clientName}`;
         await enqueueEmail(
           { to: pricingDeskEmail, subject, html: withLegalFooter(html) }, // COMMS-P1: legal footer
           `pricing_request_${requestId}`,
