@@ -10,6 +10,7 @@ import type { Request, Response } from "express";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import log from "../../helper/log.ts";
+import { isQuoteAwaitingClient, quoteKey } from "../../schemas/quoteStatus.ts";
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -50,6 +51,46 @@ export function createSuggestions(
     movedByActor: actor,
     status: "pending",
   }));
+}
+
+// ─── COMMS-P4: no second quote email ───────────────────────────────────────
+
+/**
+ * The quote "Send to client" already emailed and that is still waiting for
+ * the member's answer (newest first), or null. Pure.
+ */
+export function emailedQuote(doc: Record<string, unknown>): { quoteId: string; sentAt: string } | null {
+  const quotes = Array.isArray(doc.quotes) ? (doc.quotes as Array<Record<string, unknown>>) : [];
+  const sent = quotes
+    .filter((q) => isQuoteAwaitingClient(q) && typeof q.sentToClientAt === "string" && q.sentToClientAt)
+    .sort((a, b) => String(b.sentToClientAt).localeCompare(String(a.sentToClientAt)))[0];
+  return sent ? { quoteId: quoteKey(sent), sentAt: String(sent.sentToClientAt) } : null;
+}
+
+/**
+ * Moving a matter to "quote sent" suggests the quote_ready email. When "Send
+ * to client" already emailed the quote, that suggestion is left out (staff
+ * would send the same quote twice). Pure: returns what to keep and what was
+ * skipped (for the activity log).
+ */
+export function dropAlreadySent(
+  suggestions: EmailSuggestion[],
+  doc: Record<string, unknown>,
+): { keep: EmailSuggestion[]; skipped: Array<EmailSuggestion & { quoteId: string; sentAt: string }> } {
+  const q = emailedQuote(doc);
+  if (!q) return { keep: suggestions, skipped: [] };
+  const keep: EmailSuggestion[] = [];
+  const skipped: Array<EmailSuggestion & { quoteId: string; sentAt: string }> = [];
+  for (const s of suggestions) {
+    if (s.emailType === "quote_ready") skipped.push({ ...s, status: "sent", ...q });
+    else keep.push(s);
+  }
+  return { keep, skipped };
+}
+
+/** "Send to client" emailed the quote: pending quote_ready suggestions are done. Pure. */
+export function withoutPendingQuoteReady<T extends Record<string, unknown>>(list: T[]): T[] {
+  return list.filter((s) => !(s?.status === "pending" && s.emailType === "quote_ready"));
 }
 
 export function buildSuggestionActivityEntries(

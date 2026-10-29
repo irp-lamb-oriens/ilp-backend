@@ -47,6 +47,7 @@ import {
 } from "./pendingActions.ts";
 import {
   createSuggestions,
+  dropAlreadySent,
   buildSuggestionActivityEntries,
   handleDismissEmailSuggestion,
 } from "./emailSuggestions.ts";
@@ -400,10 +401,21 @@ export default (app: Express) => {
       const previousStage = computeStage(doc);
       const nowIso = new Date().toISOString();
 
-      const newSuggestions = createSuggestions(stage, actor, nowIso);
+      // COMMS-P4: no quote_ready suggestion when "Send to client" already emailed the quote.
+      const { keep: newSuggestions, skipped } = dropAlreadySent(createSuggestions(stage, actor, nowIso), doc as Record<string, unknown>);
       const activityEntries: Array<Record<string, unknown>> = [
         { type: "stage_change", from: previousStage, to: stage, actor, timestamp: nowIso },
         ...buildSuggestionActivityEntries(newSuggestions, nowIso),
+        ...skipped.map((s) => ({
+          type: "email_suggestion_skipped",
+          emailType: s.emailType,
+          reason: "already_sent",
+          quoteId: s.quoteId,
+          sentAt: s.sentAt,
+          triggeredByStage: stage,
+          actor: "system",
+          timestamp: nowIso,
+        })),
       ];
 
       const updatePayload: Record<string, unknown> = {

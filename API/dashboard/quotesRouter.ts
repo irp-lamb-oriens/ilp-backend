@@ -45,6 +45,7 @@ import { buildContractPdfBuffer, contractFileName } from "./contractPdf.ts";
 import { loadQuoteApprovers, isQuoteApprover } from "./automation/quoteApprovers.ts";
 import { resolveClientEmail } from "./clientHelpers.ts";
 import { renderLegalEmail } from "./automation/renderLegalEmail.ts"; // COMMS-P1
+import { withoutPendingQuoteReady } from "./emailSuggestions.ts"; // COMMS-P4
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -918,6 +919,10 @@ export default function quotesRouter(app: Express) {
               ...(clientDoc?.placeholder === true ? { placeholder: true } : {}),
             }, `quote_to_client_${id}_${quoteId}`).catch(() => {});
             log(`[quotesRouter] Quote ${quoteId} sent to client ${clientEmail}`);
+            // COMMS-P4: the quote is emailed, so a pending quote_ready suggestion is done.
+            const pendingSugs = Array.isArray(clientDoc?.pendingEmailSuggestions) ? (clientDoc!.pendingEmailSuggestions as Array<Record<string, unknown>>) : [];
+            const left = withoutPendingQuoteReady(pendingSugs);
+            if (left.length !== pendingSugs.length) await patch(CLIENTS_COLLECTION, id, { pendingEmailSuggestions: left }).catch(() => {});
           } catch (emailErr: any) {
             log(`[quotesRouter] send-to-client email failed (non-fatal): ${emailErr?.message}`);
           }
