@@ -36,6 +36,7 @@ export const COLLECTIONS = {
   journeyDaily: "journey_daily",
   experiments: "experiments",
   outreach: "outreach",
+  journeyExposures: "journey_exposures", // one doc per experiment × visitor (built by the aggregation job)
 } as const;
 
 export type Iso = string;
@@ -798,6 +799,19 @@ export const JOURNEY_DEVICES: readonly JourneyDevice[] = ["phone", "tablet", "de
 
 /** Query parameter an outreach link carries (opaque outreach id). */
 export const OUTREACH_PARAM = "o";
+/**
+ * Header the browser adds to existing requests (free check, claim, join,
+ * lawyer application) so the server can link the visitor to the lead or
+ * account it creates. A body field `visitorId` is read too.
+ */
+export const JOURNEY_VISITOR_HEADER = "x-ilp-visitor";
+/** Field on `clients` and `leads` docs holding the journey link (JourneyTrack). Staff-only. */
+export const JOURNEY_TRACK_FIELD = "journeyTrack";
+/** Paths an outreach click may redirect to (prefix match on whole segments; anything else goes to "/"). */
+export const JOURNEY_REDIRECT_PREFIXES: readonly string[] = [
+  "/", "/check", "/join", "/pricing", "/status", "/attorneys", "/countries", "/deadlines", "/guides", "/blog", "/legal", "/about",
+  "/colombia", "/costa-rica", "/mexico", "/panama", "/portugal", "/spain",
+];
 /** Browser storage key for the random first-party visitor id. */
 export const JOURNEY_VISITOR_KEY = "ilp_vid";
 /** Browser storage key for the visitor's analytics opt-out ("1" = opted out). */
@@ -827,7 +841,7 @@ export interface JourneyEvent {
   channel: JourneyChannel;
   utm?: JourneyUtm; // each value ≤ 80 chars, [a-z0-9._-] only
   type: JourneyEventType;
-  step?: FunnelStepId; // type = "step"
+  step?: FunnelStepId; // type = "step"; on click / form_error, the step the form belongs to (e.g. check_start, target "q5")
   path: string; // pathname only, no query string; ids in the path are replaced by ":id"
   target?: string; // click / form_error: a component or field id (≤ 64 chars, [a-z0-9._-]), never free text
   durationMs?: number; // heartbeat / exit: time on the page since the last heartbeat or view
@@ -845,7 +859,11 @@ export type JourneyEventInput = Omit<JourneyEvent, "id" | "clientId" | "leadId" 
   at?: Iso;
 };
 
-/** POST /api/journey/events body. `optOut: true` (or DNT / Sec-GPC headers) → nothing stored. */
+/**
+ * POST /api/journey/events body (application/json, or text/plain holding the
+ * same JSON for navigator.sendBeacon). `optOut: true` (or DNT / Sec-GPC
+ * headers) → nothing stored. Max 32 KB, JOURNEY_BATCH_MAX events.
+ */
 export interface JourneyEventsRequest {
   events: JourneyEventInput[];
   optOut?: boolean;
@@ -923,7 +941,11 @@ export interface Outreach {
 }
 
 // ─── Daily aggregate (journey_daily) ──────────────────────────────────────
-/** One doc per day × source × channel × country × device × experiment variant. Routes read these, not raw events. */
+/**
+ * One doc per day × source × channel × country × device × experiment variant
+ * (placeholder events go to separate docs with ph_ ids). Routes read these,
+ * not raw events. Visitor counts are distinct per day, summed over a range.
+ */
 export interface JourneyDaily {
   id: string; // day|source|channel|country|device|exp=variant (or "-")
   day: string; // "2026-10-28" (UTC)
@@ -939,6 +961,8 @@ export interface JourneyDaily {
   pages: Record<string, { views: number; exits: number; ms: number[] }>; // path → views, exits, time histogram
   transitions: Record<string, number>; // "fromStep>toStep" and "page:/a>/b" → visitors
   exits: Record<string, number>; // last path of a session → sessions
+  stepExits: Record<string, Record<string, number>>; // furthest step that day → last path → visitors who stopped there
+  dwellMs: Partial<Record<FunnelStepId, number[]>>; // histogram: time at the furthest step before the last event of the day
   formErrors: Record<string, Record<string, number>>; // step → target → count
   builtAt: Iso;
   placeholder?: boolean;
@@ -948,6 +972,32 @@ export interface JourneyDaily {
 export const JOURNEY_MS_BUCKETS: readonly number[] = [
   1000, 3000, 5000, 10000, 20000, 30000, 60000, 120000, 300000, 600000, 1800000, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000,
 ];
+
+/** journey_exposures: a visitor's first exposure to a running experiment and the steps reached after it. */
+export interface JourneyExposure {
+  id: string; // <experimentKey>__<visitorId>
+  experiment: string;
+  variant: string;
+  visitorId: string;
+  source: JourneySource;
+  firstAt: Iso;
+  steps: Partial<Record<FunnelStepId, Iso>>; // first time each step was reached at or after firstAt
+  placeholder?: boolean;
+}
+
+/** Stored on a clients / leads doc under JOURNEY_TRACK_FIELD. Staff-only (never in member or lawyer payloads). */
+export interface JourneyTrack {
+  visitorId: string;
+  source: JourneySource;
+  channel: JourneyChannel;
+  outreachId?: string;
+  country?: CountryCode;
+  device?: JourneyDevice;
+  variants?: Record<string, string>;
+  firstAt: Iso;
+  furthestStep?: FunnelStepId; // furthest member-funnel step reached
+  furthestAt?: Iso;
+}
 
 // ─── Staff read models (GET /api/dashboard/journeys/*) ───────────────────
 export interface JourneyRange {
@@ -962,7 +1012,11 @@ export interface JourneyFilters {
   device?: JourneyDevice;
   experiment?: string;
   variant?: string;
+  excludePlaceholder?: boolean; // ?excludePlaceholder=1
 }
+
+/** ?funnel= on GET /funnel and /stuck: which ordered step list. Default "member". */
+export type JourneyFunnelKind = "member" | "outbound" | "lawyer";
 
 export interface JourneyFunnelRow {
   step: FunnelStepId;
@@ -975,8 +1029,9 @@ export interface JourneyFunnelRow {
   dropOff: number; // visitors of the previous row minus this row's (0 for the first)
 }
 
-/** GET /funnel?from&to&source&channel&country&device&experiment&variant&funnel=member|lawyer|outbound */
+/** GET /funnel?from&to&source&channel&country&device&experiment&variant&funnel=member|lawyer|outbound&excludePlaceholder=1 */
 export interface JourneyFunnel {
+  funnel: JourneyFunnelKind;
   range: JourneyRange;
   filters: JourneyFilters;
   rows: JourneyFunnelRow[];
@@ -1071,6 +1126,11 @@ export interface ExperimentVariantResult {
   guardrails?: { step: FunnelStepId; rate: number }[];
 }
 
+/** GET /experiments → { items }; GET /experiments/:id and every write → { experiment }. */
+export interface ExperimentListResponse {
+  items: Experiment[];
+}
+
 /** GET /experiments/:id/results */
 export interface ExperimentResult {
   experimentId: string;
@@ -1096,4 +1156,21 @@ export interface OutboundRow {
 export interface JourneyOutboundResponse {
   range: JourneyRange;
   rows: OutboundRow[];
+}
+
+/** POST /api/dashboard/journeys/outreach: log a CSM call or a manual send; returns the tracked link to share. */
+export interface OutreachInput {
+  channel: OutreachChannel;
+  campaign: string; // slug
+  clientId?: string;
+  leadId?: string;
+  email?: string; // stored only as a SHA-256 hash
+  to?: string; // landing path for the link, default "/check"
+}
+
+export interface OutreachCreated {
+  outreach: Omit<Outreach, "email">;
+  link: string; // FRONTEND_URL + path + ?o=<id>
+  clickUrl: string; // API click redirect (records the click, then lands on `link`)
+  pixelUrl: string; // open pixel for emails
 }
