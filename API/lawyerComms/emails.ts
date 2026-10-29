@@ -277,7 +277,7 @@ export function monthlyFeedbackEmail(i: MonthlyFeedbackInput): MemberEmail {
     paragraphs: [
       counts,
       stats,
-      ...(i.recognition ? ["Members rate your calls highly and describe them as clear and useful. Thank you. It is a large part of why members stay with ILP."] : []),
+      ...(i.recognition ? ["Members rate your calls highly. Thank you. Calls like yours are a large part of why members stay with ILP."] : []),
     ],
     sections: !i.tooFewToShow && i.comments.length
       ? [{ title: "What members wrote", lines: i.comments, list: true }]
