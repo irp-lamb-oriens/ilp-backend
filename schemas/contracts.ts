@@ -45,6 +45,9 @@ export const COLLECTIONS = {
   lawyerFeedback: "lawyer_feedback", // COMMS-P2: one row per feedback email sent to a lawyer (counts and themes, no comments)
   lawyerFeedbackConfig: "lawyer_feedback_config", // COMMS-P2: thresholds (doc "default")
   workOffers: "work_offers", // COMMS-P2: paid work offered to lawyers in its specialty (accept or decline in the portal)
+  notifications: "notifications", // COMMS-P3: the bell for staff, CSMs and lawyers (per person or per audience)
+  csmContacts: "csm_contacts", // COMMS-P3: calls, emails and messages a CSM logs with a member
+  csmPlaybooks: "csm_playbooks", // COMMS-P3: staff edits of the CSM playbook emails (doc id = playbook id)
 } as const;
 
 export type Iso = string;
@@ -288,6 +291,7 @@ export interface Membership {
   callsIncluded: number;
   callsUsed: number;
   csmEmail?: string;
+  csmAssignedAt?: Iso; // COMMS-P3: when csmEmail was last set (new members in the CSM digest)
   paymentRef?: string; // Stripe id or "manual"
   sourceLeadId?: string; // lead that converted into this membership (free check)
   intake?: JoinIntake; // T3: "what you need first" from the join form; becomes the first matter on activation
@@ -1629,3 +1633,81 @@ export interface WorkOffer {
   placeholder?: boolean;
 }
 
+
+// ─── COMMS-P3: CSM portal, notifications and daily digest ─────────────────
+/**
+ * notifications/{id}: one row per bell item. `to` is the channel it belongs
+ * to, read with one equality query per channel:
+ *   "staff:*"            every staff member and admin (routing alerts, privacy)
+ *   "csm:*"              every CSM (a new member nobody looks after yet)
+ *   "csm:<email>"        one CSM (their own members: payment failed, low score…)
+ *   "staff:<email>"      one staff member
+ *   "lawyer:<providerId>" one lawyer
+ * `readBy` holds the lowercase emails (or provider ids) that read it.
+ */
+export type NotificationSeverity = "info" | "action" | "urgent";
+
+export interface AppNotification {
+  id: string;
+  kind: string; // e.g. "payment.failed", "member.assigned", "routing.no_match"
+  to: string;
+  title: string;
+  body?: string;
+  link?: string; // a path in the reader's portal (/csm/…, /dashboard/…, /lawyer/…)
+  clientId?: string;
+  matterId?: string;
+  severity: NotificationSeverity;
+  createdAt: Iso;
+  readBy: string[];
+  /** True when an email went out with it (privacy request, payment failed, missing specialty). */
+  emailed?: boolean;
+  placeholder?: boolean;
+}
+
+export type CsmContactChannel = "call" | "video" | "email" | "whatsapp" | "message" | "in_person";
+export const CSM_CONTACT_CHANNELS: readonly CsmContactChannel[] = ["call", "video", "email", "whatsapp", "message", "in_person"];
+
+/** csm_contacts/{id}: one touch point with a member, logged by a CSM (or by a template email send). */
+export interface CsmContact {
+  id: string;
+  clientId: string;
+  csmEmail: string; // who logged it
+  bookCsmEmail?: string; // the member's CSM when it was logged (counts for their book even when staff logged it)
+  channel: CsmContactChannel;
+  direction: "outbound" | "inbound";
+  reached: boolean; // false = tried and did not reach the member (voicemail, no answer)
+  summary: string;
+  at: Iso; // when the contact happened
+  taskId?: string; // the task it worked on
+  playbookId?: string; // template email sent from a playbook
+  createdAt: Iso;
+  placeholder?: boolean;
+}
+
+/** First contact with a new member is due within this many business hours of activation. */
+export const CSM_FIRST_CONTACT_SLA_HOURS = 24;
+
+/** Health bands (score 0 to 100). Shown as a labeled pill with reasons, never a bare colored dot. */
+export const HEALTH_BANDS = [
+  { id: "healthy", label: "Healthy", min: 75 },
+  { id: "watch", label: "Watch", min: 50 },
+  { id: "at_risk", label: "At risk", min: 0 },
+] as const;
+export type HealthBand = (typeof HEALTH_BANDS)[number]["id"] | "ended";
+
+export interface HealthReason {
+  code: string; // stable id, e.g. "payment_failed"
+  text: string; // plain English shown to the CSM
+  points: number; // points taken off (positive number)
+}
+
+export interface HealthScore {
+  score: number | null; // null when the membership ended
+  band: HealthBand;
+  label: string; // "At risk", "Watch", "Healthy", "Ended"
+  reasons: HealthReason[]; // biggest first
+}
+
+/** Playbook ids (default content lives on the server; staff may edit the email). */
+export const CSM_PLAYBOOK_IDS = ["welcome_call", "renewal", "payment_failed", "no_show"] as const;
+export type CsmPlaybookId = (typeof CSM_PLAYBOOK_IDS)[number];

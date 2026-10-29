@@ -511,6 +511,7 @@ export const TIMELINE_KIND_OPTIONS = opts([
   ["note", "Note"],
   ["audit", "Audit"],
   ["membership", "Membership"],
+  ["contact", "Contact"],
 ]);
 export const APPLICATION_STATUS_OPTIONS = opts([["pending_review", "Waiting for review"], ["changes_requested", "Changes requested"], ["declined", "Declined"]]);
 export const CONSULTATION_STATUS_OPTIONS = opts([["booked", "Booked"], ["in_progress", "In progress"], ["completed", "Completed"], ["no_show", "No-show"], ["cancelled", "Cancelled"]]);
@@ -533,7 +534,32 @@ export const DEADLINE_SOURCE_OPTIONS = opts([["check", "From the free check"], [
 
 // ── Server lists (every route that answers the helper/listing.ts contract) ──
 
+export const HEALTH_BAND_OPTIONS = opts([["at_risk", "At risk"], ["watch", "Watch"], ["healthy", "Healthy"], ["ended", "Ended"]]);
+
 export const LIST_SCHEMAS = {
+  // COMMS-P3: the CSM's book (/csm/book).
+  csmBook: defineListSchema({
+    id: "csm-book",
+    fields: [
+      { key: "name", label: "Member", type: "text", searchable: true, sortable: true },
+      { key: "email", label: "Email", type: "text", searchable: true, defaultVisible: false },
+      { key: "healthBand", label: "Health", type: "enum", options: HEALTH_BAND_OPTIONS, quick: true },
+      { key: "healthScore", label: "Health score", type: "number", sortable: true },
+      { key: "status", label: "Membership", type: "enum", options: MEMBERSHIP_STATUS_OPTIONS, quick: true },
+      { key: "completeness", label: "Profile", type: "number", unit: "percent", sortable: true },
+      { key: "consultationReady", label: "Consultation-ready", type: "boolean" },
+      { key: "daysSinceContact", label: "Days since contact", type: "number", unit: "days", sortable: true },
+      { key: "callsUsed", label: "Calls used", type: "number" },
+      { key: "deadlines14d", label: "Deadlines in 14 days", type: "number" },
+      { key: "openQuotes", label: "Open quotes", type: "number" },
+      { key: "openTasks", label: "Open tasks", type: "number", sortable: true },
+      { key: "periodEnd", label: "Renews", type: "date", sortable: true },
+      { key: "activatedAt", label: "Joined", type: "date", sortable: true, defaultVisible: false },
+      { key: "country", label: "Country", type: "country" },
+      { key: "unassigned", label: "No CSM yet", type: "boolean", defaultVisible: false },
+      { key: "placeholder", label: "Placeholder", type: "boolean", defaultVisible: false },
+    ],
+  }),
   staffQueue: defineListSchema({
     id: "staff-queue",
     fields: [
