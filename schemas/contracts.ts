@@ -37,6 +37,11 @@ export const COLLECTIONS = {
   experiments: "experiments",
   outreach: "outreach",
   journeyExposures: "journey_exposures", // one doc per experiment × visitor (built by the aggregation job)
+  specialties: "specialties", // ROUTING: editable specialty list (seeded from DEFAULT_SPECIALTIES)
+  reviews: "reviews", // ROUTING: one member review per call (staff-only)
+  lawyerRatings: "lawyer_ratings", // ROUTING: one rating summary per providerId (staff-only)
+  routingGaps: "routing_gaps", // ROUTING: members nobody can take yet (one open gap per member and matter)
+  staffNotifications: "staff_notifications", // ROUTING: the staff bell
 } as const;
 
 export type Iso = string;
@@ -317,6 +322,10 @@ export interface Matter {
   question?: string; // the member's main question for the first call
   deadlineAt?: Iso; // a date the member said the matter must meet
   documentsOnHand?: DocumentOnHand[];
+  // ROUTING
+  specialtyId?: string; // Specialty id the matter needs (inferred from the question, or set by staff)
+  counterparties?: string[]; // other parties (sellers, partners, employers): checked against lawyers' conflicts
+  routing?: RoutingDecision; // staff-only: the last routing decision ("Why this lawyer")
 }
 
 // ─── Join intake (T3: "What you need first" on /join) ─────────────────────
@@ -352,6 +361,9 @@ export interface Consultation {
   durationMin: number; // booked length, default 20
   minutesUsed?: number; // actual, charged against membership
   status: ConsultationStatus;
+  kind?: "member" | "sales"; // ROUTING: "sales" = a short call with the ILP team while no lawyer matches (absent = member call)
+  salesEmail?: string; // ROUTING: the sales inbox the sales call is assigned to
+  routing?: RoutingDecision; // ROUTING: staff-only, how the lawyer was picked at booking
   question?: string; // what the member wants to ask
   consent: { recording: ConsentState; at?: Iso; by?: string; where?: string }; // by: role that answered; where: booking | join | privacy_page | …
   transcript?: string;
@@ -444,6 +456,8 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "member.unassigned_country": { type: "follow_up", dueInHours: 24, title: "Match a lawyer licensed in the member's country" }, // COUNTRIES: no partner lawyer in the member's country yet
   "obligation.needs_date_7d": { type: "follow_up", dueInHours: 72, title: "Help the member set dates for their deadlines" }, // DEADLINES: needsDate items older than 7 days
   "call.outcome_missing": { type: "follow_up", dueInHours: 24, title: "Call not wrapped up: confirm the outcome and handoff with the lawyer" }, // REL: still booked a day after its end, or completed without a handoff after two days
+  "routing.no_match": { type: "follow_up", dueInHours: 8, title: "Missing specialty for an assignment: find or add a lawyer" }, // ROUTING: no lawyer passes the router's checks
+  "sales.call_unscheduled": { type: "follow_up", dueInHours: 24, title: "Sales call: set a time with the member" }, // ROUTING: no sales slot was free to book automatically
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────
@@ -579,6 +593,12 @@ export const LAWYER_HIDDEN_FIELDS = [
   "margin",
   "platformFee",
   "commercialNotes",
+  // ROUTING: ratings and routing decisions are staff-only.
+  "routing",
+  "ratingScore",
+  "reviewCount",
+  "ratingStatus",
+  "lawyerRating",
 ] as const;
 
 /** Fields that must never appear in a client API response. */
@@ -589,6 +609,12 @@ export const CLIENT_HIDDEN_FIELDS = [
   "earnings",
   "commercialNotes",
   "priorityRank",
+  // ROUTING: ratings and routing decisions are staff-only.
+  "routing",
+  "ratingScore",
+  "reviewCount",
+  "ratingStatus",
+  "lawyerRating",
 ] as const;
 
 
@@ -1174,3 +1200,334 @@ export interface OutreachCreated {
   clickUrl: string; // API click redirect (records the click, then lands on `link`)
   pixelUrl: string; // open pixel for emails
 }
+
+// ─── Routing: lawyer profiles, specialties, ratings, assignment (ROUTING) ─
+/**
+ * ROUTING. Members never choose a lawyer: the router (server
+ * API/routing/router.ts) picks one from lawyer profiles, hidden ratings,
+ * availability and load, and the member sees only their lawyer and that
+ * lawyer's times. See docs/workstreams/ROUTING.md for the field research.
+ */
+
+/** Area groups. Matter.area values ("immigration", "real_estate", ...) are these ids. */
+export const AREA_GROUPS = [
+  { id: "immigration", label: "Immigration and residency" },
+  { id: "real_estate", label: "Property and real estate" },
+  { id: "corporate", label: "Companies" },
+  { id: "tax", label: "Tax" },
+  { id: "vehicle", label: "Vehicles" },
+  { id: "family_estate", label: "Family, wills and estates" },
+  { id: "labor", label: "Employment and household staff" },
+  { id: "notarial", label: "Notarial acts and documents" },
+  { id: "disputes", label: "Disputes and court cases" },
+  { id: "banking", label: "Banking and compliance" },
+] as const;
+export type AreaGroupId = (typeof AREA_GROUPS)[number]["id"];
+
+/** Older and research area words that mean a group (obligation areas, apply form areas). */
+export const AREA_GROUP_ALIASES: Record<string, AreaGroupId> = {
+  property: "real_estate",
+  realestate: "real_estate",
+  company: "corporate",
+  companies: "corporate",
+  vehicles: "vehicle",
+  estate: "family_estate",
+  family: "family_estate",
+  identity: "immigration",
+  cross_border: "tax",
+  employment: "labor",
+  litigation: "disputes",
+};
+
+/** A stored area value to its group; null for "general", "other" or unknown. */
+export function toAreaGroup(v: unknown): AreaGroupId | null {
+  if (typeof v !== "string") return null;
+  const k = v.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (AREA_GROUPS.some((g) => g.id === k)) return k as AreaGroupId;
+  return AREA_GROUP_ALIASES[k] ?? null;
+}
+
+/**
+ * One specialty a lawyer can take and a matter can need. Stored in the
+ * `specialties` collection (seeded from DEFAULT_SPECIALTIES, edited by staff in
+ * Settings → Specialties). Ids never change; renaming changes the label only.
+ */
+export interface Specialty {
+  id: string; // slug, e.g. "residency_visas"
+  label: string;
+  group: AreaGroupId;
+  countries: CountryCode[]; // [] = every country
+  description?: string;
+  active: boolean;
+  mergedInto?: string; // set when staff merged it into another specialty (then inactive)
+  order: number;
+  createdAt?: Iso;
+  updatedAt?: Iso;
+  updatedBy?: string;
+}
+
+const sp = (id: string, label: string, group: AreaGroupId, order: number, countries: CountryCode[] = [], description?: string): Specialty =>
+  ({ id, label, group, countries, active: true, order, ...(description ? { description } : {}) });
+
+/** Default list, from docs/research/<country>.md (obligation areas, licensing and notary roles). */
+export const DEFAULT_SPECIALTIES: Specialty[] = [
+  sp("residency_visas", "Residency applications and visas", "immigration", 10),
+  sp("residency_renewals", "Residency renewals and resident ID cards", "immigration", 11, [], "DIMEX, TIE, carné de residente, cédula de extranjería, título de residência."),
+  sp("permanent_residency", "Permanent residency", "immigration", 12),
+  sp("digital_nomad", "Digital nomad and remote-work stays", "immigration", 13),
+  sp("investor_residency", "Investor residency", "immigration", 14),
+  sp("citizenship", "Citizenship and naturalization", "immigration", 15),
+  sp("social_security", "Social security and public health registration", "immigration", 16, [], "CCSS in Costa Rica, Caja de Seguro Social in Panama, IMSS in Mexico, NISS in Portugal."),
+  sp("property_purchase", "Buying property: due diligence and closing", "real_estate", 20),
+  sp("property_sale", "Selling property", "real_estate", 21),
+  sp("land_titles", "Titles, surveys and boundaries", "real_estate", 22),
+  sp("property_tax", "Property taxes and municipal filings", "real_estate", 23),
+  sp("condominium", "Condominiums and owners' associations", "real_estate", 24),
+  sp("rentals_leases", "Rentals and leases", "real_estate", 25),
+  sp("maritime_zone", "Maritime zone concessions", "real_estate", 26, ["CR"], "Zona marítimo terrestre: concession fees (canon) and renewals."),
+  sp("bank_trust_restricted_zone", "Bank trusts (fideicomiso) in the restricted zone", "real_estate", 27, ["MX"]),
+  sp("company_formation", "Company formation", "corporate", 30),
+  sp("annual_corporate_filings", "Annual company filings and company taxes", "corporate", 31),
+  sp("beneficial_ownership", "Beneficial ownership registers", "corporate", 32, [], "RTBF in Costa Rica, RUB in Colombia, RCBE in Portugal, the Spanish and Panamanian registers."),
+  sp("company_cleanup", "Dormant company clean-up and dissolution", "corporate", 33),
+  sp("foundations", "Private interest foundations", "corporate", 34, ["PA"]),
+  sp("foreign_investment", "Foreign investment and business permits", "corporate", 35),
+  sp("personal_income_tax", "Personal income tax returns", "tax", 40),
+  sp("tax_residency", "Tax residency and cross-border tax", "tax", 41),
+  sp("rental_income_tax", "Rental income tax and VAT on rentals", "tax", 42),
+  sp("special_tax_regimes", "Special tax regimes for newcomers", "tax", 43, ["ES", "PT"], "Spain's regime for inbound workers and Portugal's IFICI (the former NHR)."),
+  sp("vehicle_import", "Vehicle import and customs", "vehicle", 50),
+  sp("vehicle_registration", "Vehicle registration, transfers and annual fees", "vehicle", 51),
+  sp("driver_licence", "Driver's licence exchange", "vehicle", 52),
+  sp("wills", "Wills", "family_estate", 60),
+  sp("probate", "Probate and estates", "family_estate", 61),
+  sp("marriage_divorce", "Marriage, divorce and foreign judgments", "family_estate", 62),
+  sp("powers_of_attorney", "Powers of attorney", "family_estate", 63),
+  sp("domestic_staff", "Household staff contracts and payroll", "labor", 70),
+  sp("business_employees", "Employees of a business", "labor", 71),
+  sp("notarial_acts", "Notarial acts and deeds", "notarial", 80, [], "In Costa Rica a lawyer who is also a notary authorises deeds. In the other five countries a public notary does, and the lawyer coordinates."),
+  sp("apostille_translation", "Apostilles and certified translations", "notarial", 81),
+  sp("litigation", "Court cases and litigation", "disputes", 90),
+  sp("contract_disputes", "Contract and consumer disputes", "disputes", 91),
+  sp("landlord_tenant", "Landlord and tenant disputes", "disputes", 92),
+  sp("bank_accounts_kyc", "Opening bank accounts and KYC questions", "banking", 100),
+  sp("source_of_funds", "Source of funds and compliance letters", "banking", 101),
+];
+
+/** The groups a set of specialty ids covers (for routing by area). */
+export function groupsOf(specialtyIds: readonly string[], list: readonly Specialty[]): AreaGroupId[] {
+  const byId = new Map(list.map((s) => [s.id, s]));
+  return [...new Set(specialtyIds.map((id) => byId.get(id)?.group).filter((g): g is AreaGroupId => !!g))];
+}
+
+// ─── Lawyer routing profile (fields on the `providers` doc) ────────────────
+export type LawyerClientType = "individuals" | "families" | "companies" | "foreign_investors";
+export const LAWYER_CLIENT_TYPES: readonly LawyerClientType[] = ["individuals", "families", "companies", "foreign_investors"];
+export type LanguageLevel = "native" | "fluent" | "working";
+export const LANGUAGE_LEVELS: readonly LanguageLevel[] = ["native", "fluent", "working"];
+/** Languages a call can be held in (ISO 639-1). */
+export const CALL_LANGUAGES = ["en", "es", "pt", "fr", "de", "it"] as const;
+export type CallLanguage = (typeof CALL_LANGUAGES)[number];
+/** Language of emails to a lawyer. Spanish by default; Portuguese for Portugal. */
+export type LawyerEmailLanguage = "es" | "pt" | "en";
+export type LawyerRoutingStatus = "active" | "paused" | "onboarding";
+
+/** A licence in one country. Only staff set `verified` (after checking the body's register). */
+export interface LawyerLicence {
+  country: CountryCode;
+  body: string; // COUNTRIES[c].lawyerBody.name
+  number: string;
+  verified: boolean;
+  verifiedAt?: Iso;
+  verifiedBy?: string;
+}
+
+/**
+ * ROUTING fields on providers/{id}, next to the older ones (name, email,
+ * legalAreas, jurisdictions, timezone, bio, application). Lawyers edit the
+ * LAWYER_PROFILE_FIELDS; staff edit everything, and only staff touch
+ * LAWYER_PROFILE_STAFF_FIELDS.
+ */
+export interface LawyerRoutingProfile {
+  specialties: string[]; // Specialty ids
+  specialtyNotes?: Record<string, string>; // sub-specialty note per id (≤ 200 chars)
+  jurisdictions: CountryCode[]; // countries licensed in
+  licences?: LawyerLicence[];
+  notary?: { isNotary: boolean; countries: CountryCode[]; number?: string; verified?: boolean };
+  languages: string[]; // CallLanguage codes
+  languageLevels?: Record<string, LanguageLevel>;
+  emailLanguage?: LawyerEmailLanguage;
+  regions?: string[]; // e.g. "Guanacaste", "Algarve", "Quintana Roo"
+  clientTypes?: LawyerClientType[];
+  maxCallsPerWeek?: number; // member calls a week
+  responseHours?: number; // usual reply time to ILP, in hours
+  yearsInPractice?: number;
+  feeRangeCents?: { min: number; max: number } | null; // usual quoted work, US cents
+  conflicts?: string[]; // people or companies the lawyer cannot act for or against
+  routingStatus?: LawyerRoutingStatus; // paused = takes no new members; onboarding = not routed yet
+  bio?: string;
+}
+
+/** Fields a lawyer may change on their own profile. */
+export const LAWYER_PROFILE_FIELDS = [
+  "specialties", "specialtyNotes", "languages", "languageLevels", "emailLanguage", "regions", "clientTypes",
+  "maxCallsPerWeek", "responseHours", "yearsInPractice", "feeRangeCents", "conflicts", "routingStatus", "bio",
+] as const;
+/** Fields only staff may change (licences and their verification, countries, notary status). */
+export const LAWYER_PROFILE_STAFF_FIELDS = ["jurisdictions", "licences", "notary"] as const;
+
+// ─── Ratings (hidden: staff and the router only) ──────────────────────────
+/** Every lawyer starts at this score, shown to staff as "No reviews yet". */
+export const RATING_PRIOR = 100;
+/** Weight of the prior while a lawyer has fewer than RATING_MIN_REVIEWS reviews. */
+export const RATING_PRIOR_WEIGHT = 5;
+/** From this many reviews on, the rating is the plain average. */
+export const RATING_MIN_REVIEWS = 5;
+
+/** 1-5 stars to 0-100 (1 star = 0, 3 stars = 50, 5 stars = 100). */
+export const starsTo100 = (stars: number): number => Math.max(0, Math.min(100, (Math.round(stars) - 1) * 25));
+
+export type RatingStatus = "no_reviews" | "blended" | "average";
+
+/**
+ * A lawyer's rating on 0-100 from their reviews (each already 0-100).
+ * n = 0: 100, "no_reviews". n < 5: (100 × 5 + sum) / (5 + n), "blended", so one
+ * bad review does not sink a new lawyer. n ≥ 5: the plain average, "average".
+ * Rounded to one decimal. Ratings only order candidates; members and lawyers never see them.
+ */
+export function lawyerRating(scores: readonly number[]): { score: number; reviewCount: number; status: RatingStatus } {
+  const n = scores.length;
+  const sum = scores.reduce((a, b) => a + b, 0);
+  if (n === 0) return { score: RATING_PRIOR, reviewCount: 0, status: "no_reviews" };
+  const raw = n < RATING_MIN_REVIEWS ? (RATING_PRIOR * RATING_PRIOR_WEIGHT + sum) / (RATING_PRIOR_WEIGHT + n) : sum / n;
+  return { score: Math.round(raw * 10) / 10, reviewCount: n, status: n < RATING_MIN_REVIEWS ? "blended" : "average" };
+}
+
+/** One member review of one call (collection `reviews`, id `rev_<consultationId>`). Staff-only. */
+export interface LawyerReview {
+  id: string;
+  providerId: string;
+  clientId: string;
+  consultationId: string;
+  stars: 1 | 2 | 3 | 4 | 5;
+  score100: number;
+  comment?: string;
+  at: Iso;
+  placeholder?: boolean;
+}
+
+/** lawyer_ratings/{providerId}: recomputed on every review. Staff-only. */
+export interface LawyerRatingSummary {
+  providerId: string;
+  ratingScore: number;
+  reviewCount: number;
+  ratingStatus: RatingStatus;
+  updatedAt: Iso;
+}
+
+// ─── Routing request and decision ─────────────────────────────────────────
+/** Bump when the rules or weights change; stored on every decision. */
+export const ROUTING_RULES_VERSION = "routing-2026-10-28.1";
+/** A candidate needs a free slot within this many days (config ROUTING_SLOT_DAYS). */
+export const ROUTING_SLOT_DAYS = 10;
+
+export type RoutingTrigger = "activation" | "booking" | "reroute" | "override" | "sweep" | "matter";
+
+export interface RoutingRequestSummary {
+  country: CountryCode;
+  area: AreaGroupId | null;
+  specialtyId: string | null;
+  languages: string[];
+  timezone: string;
+  urgencyDays: number | null; // days to the nearest due date (deadline, obligation)
+  clientType: "individual" | "company";
+  region: string | null;
+  previousProviderId: string | null;
+}
+
+export interface RoutingScoreBreakdown {
+  specialty: number; // exact specialty 40, same area 25
+  continuity: number; // the member's previous lawyer 25
+  rating: number; // 0-15 from the hidden rating
+  earliestSlot: number; // 0-10, weighted up when urgent
+  load: number; // 0-10, fewer calls this week
+  region: number; // 5 when the lawyer covers the member's region
+  clientType: number; // 3 when the lawyer takes this kind of client (companies for a company matter)
+}
+
+export interface RoutingCandidate {
+  providerId: string;
+  name: string;
+  score: number;
+  breakdown: RoutingScoreBreakdown;
+  reasons: string[]; // plain staff-facing lines
+  nextSlotAt: Iso | null;
+  ratingScore: number;
+  reviewCount: number;
+  callsThisWeek: number;
+}
+
+export interface RoutingRejection {
+  providerId: string;
+  name: string;
+  reasons: string[];
+}
+
+/**
+ * Stored as `routing` on the matter (or the client when there is no matter)
+ * and in the audit log. Staff-only: it names other lawyers and their ratings.
+ */
+export interface RoutingDecision {
+  rulesVersion: string;
+  at: Iso;
+  trigger: RoutingTrigger;
+  providerId: string | null;
+  request: RoutingRequestSummary;
+  candidates: RoutingCandidate[]; // ranked, best first (at most 5)
+  rejected: RoutingRejection[];
+  noMatchReason?: string;
+  overriddenBy?: string;
+  overrideNote?: string;
+}
+
+/** routing_gaps/{id}: a member nobody can take yet. One open gap per member and matter. */
+export interface RoutingGap {
+  id: string;
+  clientId: string;
+  matterId?: string;
+  country: CountryCode;
+  area: AreaGroupId | null;
+  specialtyId: string | null;
+  status: "open" | "resolved";
+  reason: string;
+  createdAt: Iso;
+  updatedAt: Iso;
+  resolvedAt?: Iso;
+  resolvedProviderId?: string;
+  salesConsultationId?: string;
+  salesTaskId?: string;
+  attempts: number;
+  placeholder?: boolean;
+}
+
+// ─── Staff notifications (the bell) ───────────────────────────────────────
+export interface StaffNotification {
+  id: string;
+  kind: "routing.no_match" | "routing.resolved" | string;
+  title: string;
+  body?: string;
+  link?: string; // a /dashboard path
+  clientId?: string;
+  matterId?: string;
+  createdAt: Iso;
+  readBy: string[]; // staff emails, lowercase
+  placeholder?: boolean;
+}
+
+// ─── Sales calls (no lawyer matched yet) ──────────────────────────────────
+/** providerId of a sales consultation: the ILP sales team, not a lawyer. */
+export const SALES_TEAM_ID = "ilp_sales";
+/** Default sales inbox (env SALES_EMAILS overrides). */
+export const DEFAULT_SALES_EMAIL = "consultation@internationalrelocationpartner.com";
+/** A sales call: short, never charged against membership minutes. */
+export const SALES_CALL_LENGTH_MIN = 15;

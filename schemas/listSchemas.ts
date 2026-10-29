@@ -598,6 +598,21 @@ export const LIST_SCHEMAS = {
       { key: "openMatters", label: "Open matters", type: "number", sortable: true },
       { key: "agingMatters", label: "Aging matters", type: "number", sortable: true },
       { key: "callsNext7d", label: "Calls next 7 days", type: "number", sortable: true },
+      // ROUTING: specialties, countries, the hidden rating (staff only) and whether routing offers the lawyer.
+      { key: "specialties", label: "Specialties", type: "multi-enum", serverParam: "specialty", quick: true },
+      { key: "countries", label: "Countries", type: "multi-enum", serverParam: "country", quick: true },
+      { key: "ratingScore", label: "Rating", type: "number", sortable: true },
+      {
+        key: "routingStatus",
+        label: "Routing",
+        type: "enum",
+        options: [
+          { value: "active", label: "Takes new members" },
+          { value: "paused", label: "Paused" },
+          { value: "onboarding", label: "Onboarding" },
+        ],
+        defaultVisible: false,
+      },
     ],
   }),
   opportunities: defineListSchema({
