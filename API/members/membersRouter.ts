@@ -74,6 +74,7 @@ import {
   withDefaults,
 } from "./service.ts";
 import { onRecordCreated, onRecordUpdated } from "./events.ts";
+import { CSM_SCOPE_DENIED, memberAccess } from "../csm/book.ts"; // COMMS-P3
 import { parseDeadlinePatch } from "./deadlines.ts";
 import { recordingWithdrawn } from "../privacy/policy.ts";
 import auditLog from "../../helper/auditLog.ts";
@@ -188,6 +189,8 @@ export default function membersRouter(app: Express) {
     "/api/staff/members/:clientId",
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
+      // COMMS-P3: a CSM reads only their own members (and unassigned ones).
+      if (!(await memberAccess(req, req.params.clientId)).allowed) return res.status(403).json({ error: CSM_SCOPE_DENIED, code: "csm_scope" });
       const bundle = await memberBundle(req.params.clientId);
       if (!bundle.client && !bundle.membership) return res.status(404).json({ error: "Member not found." });
       res.json(bundle);

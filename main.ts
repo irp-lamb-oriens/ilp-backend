@@ -59,6 +59,8 @@ import opportunitiesRouter from "./API/opportunities/opportunitiesRouter.ts"; //
 import journeysRouter from "./API/journeys/journeysRouter.ts"; // JOURNEYS
 import routingRouter from "./API/routing/routingRouter.ts"; // ROUTING
 import lawyerCommsRouter from "./API/lawyerComms/lawyerCommsRouter.ts"; // COMMS-P2
+import csmRouter from "./API/csm/csmRouter.ts"; // COMMS-P3
+import notificationsRouter from "./API/notifications/notificationsRouter.ts"; // COMMS-P3
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -215,6 +217,8 @@ function createServer() {
     journeysRouter(app); // JOURNEYS: first-party journey analytics + A/B experiments
     routingRouter(app); // ROUTING: lawyer profiles, specialties, hidden ratings, routing, staff bell
     lawyerCommsRouter(app); // COMMS-P2: lawyer feedback page and thresholds, work offers
+    csmRouter(app); // COMMS-P3: the CSM portal (/csm): book, health, playbooks, KPIs
+    notificationsRouter(app); // COMMS-P3: the bell for staff, CSMs and lawyers
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);

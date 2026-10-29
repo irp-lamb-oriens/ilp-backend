@@ -35,6 +35,7 @@ import {
   COLLECTIONS,
   SALES_TEAM_ID,
   type Consultation,
+  type CsmContact,
   type CsmTask,
   type Handoff,
   type Matter,
@@ -60,6 +61,7 @@ import { fieldValue, LIST_SCHEMAS } from "../../../schemas/listSchemas.ts";
 import { lawyerFacts } from "../../routing/service.ts"; // ROUTING
 import { noReviewsSummary, ratingLabel, ratingsByProvider } from "../../routing/ratings.ts"; // ROUTING
 import { loadSpecialties } from "../../routing/specialties.ts"; // ROUTING
+import { CSM_SCOPE_DENIED, memberAccess } from "../../csm/book.ts"; // COMMS-P3
 
 // ── LISTS: paged specs (helper/listing.ts) ──────────────────────────────────
 
@@ -334,13 +336,16 @@ export default function staffHomeRouter(app: Express): void {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const { clientId } = req.params;
+      // COMMS-P3: a CSM reads only their own members (and unassigned ones).
+      if (!(await memberAccess(req, clientId)).allowed) return res.status(403).json({ error: CSM_SCOPE_DENIED, code: "csm_scope" });
       const where = { clientId };
-      const [clientDoc, memberships, consultations, handoffs, tasks] = await Promise.all([
+      const [clientDoc, memberships, consultations, handoffs, tasks, contacts] = await Promise.all([
         get(COLLECTIONS.clients, clientId),
         findRecords<Membership>(COLLECTIONS.memberships, where),
         findRecords<Consultation>(COLLECTIONS.consultations, where),
         findRecords<Handoff>(COLLECTIONS.handoffs, where),
         findRecords<CsmTask>(COLLECTIONS.csmTasks, where),
+        query(COLLECTIONS.csmContacts, [{ field: "clientId", op: "EQUAL", value: clientId }]).catch(() => []) as Promise<unknown[]>,
       ]);
       if (!clientDoc && !memberships.length) return res.status(404).json({ error: "Member not found." });
       const targets = [`clients/${clientId}`, ...memberships.map((m) => `memberships/${m.id}`)];
@@ -356,6 +361,7 @@ export default function staffHomeRouter(app: Express): void {
         tasks,
         audit: auditRows,
         providerNames: names,
+        contacts: contacts as CsmContact[],
       });
       if (isListRequest(req)) {
         return respondList(req, res, TIMELINE_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, TIMELINE_SPEC)) }));

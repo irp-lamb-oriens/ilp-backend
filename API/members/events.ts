@@ -29,6 +29,7 @@ import { recordFirstCallBooked } from "../analytics/funnel.ts"; // P2
 import { handoffNeedsOpportunity } from "../opportunities/logic.ts"; // P5
 import { createOpportunityFromHandoff } from "../opportunities/store.ts"; // P5
 import { sendHandoffNextSteps } from "../retention/handoffEmail.ts"; // COMMS-P1
+import { notifyForTask, notifyMembershipCsm } from "../csm/notifyEvents.ts"; // COMMS-P3
 
 export type EventName = keyof typeof TASK_RULES;
 import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
@@ -154,6 +155,8 @@ export async function emitEvent(name: string, payload: EventPayload): Promise<st
     if (!isPlaceholderId(payload.clientId) && await isPlaceholderClient(payload.clientId)) Object.assign(task, derivedStamp());
     await createRecord(COLLECTIONS.csmTasks, task);
     log(`[events] ${name} → csm_task ${id} (${task.ownerEmail ?? "unassigned"})`);
+    // COMMS-P3: the bell (and, for a few events, an immediate email) for the task's CSM.
+    await notifyForTask(name, task);
     return [id];
   } catch (err) {
     log(`[events] ${name} failed: ${err instanceof Error ? err.message : err}`, "error");
@@ -267,6 +270,15 @@ async function run(slug: string, before: Doc | null, after: Doc): Promise<string
   // Side effects that keep records consistent with the events.
   if (slug === "memberships" && after.status === "active" && before?.status !== "active") {
     await seedObligationsFromLead(after);
+  }
+  // COMMS-P3: a membership that gets (or changes) its CSM: stamp when, and tell the CSM.
+  if (slug === "memberships") {
+    const csmNow = str(after.csmEmail)?.trim().toLowerCase() ?? "";
+    const csmBefore = str(before?.csmEmail)?.trim().toLowerCase() ?? "";
+    if (csmNow && csmNow !== csmBefore && after.id) {
+      await updateRecord(COLLECTIONS.memberships, String(after.id), { csmAssignedAt: new Date().toISOString() });
+    }
+    await notifyMembershipCsm(before, after);
   }
   if (slug === "memberships" && after.status === "active" && !after.activatedAt && after.id) {
     await updateRecord(COLLECTIONS.memberships, String(after.id), { activatedAt: new Date().toISOString() });

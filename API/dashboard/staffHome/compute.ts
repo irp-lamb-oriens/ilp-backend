@@ -19,6 +19,7 @@ import {
 import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
 import {
   type Consultation,
+  type CsmContact,
   type CsmTask,
   type Handoff,
   type Matter,
@@ -458,7 +459,7 @@ export function filterMembers(rows: MemberRow[], query: MemberQuery) {
 
 export interface TimelineEntry {
   id: string;
-  kind: "consultation" | "handoff" | "task" | "quote" | "note" | "audit" | "membership";
+  kind: "consultation" | "handoff" | "task" | "quote" | "note" | "audit" | "membership" | "contact";
   at: string;
   title: string;
   body?: string;
@@ -475,6 +476,8 @@ export function buildTimeline(input: {
   tasks: CsmTask[];
   audit: Doc[];
   providerNames?: Map<string, string>;
+  /** COMMS-P3: calls, emails and messages logged by CSMs. */
+  contacts?: CsmContact[];
 }): TimelineEntry[] {
   const out: TimelineEntry[] = [];
   const lawyer = (id: string) => input.providerNames?.get(id) ?? id;
@@ -549,6 +552,13 @@ export function buildTimeline(input: {
     if (!at) return;
     out.push({ id: `note:${str(n.id) || i}`, kind: "note", at, title: "Note", body: str(n.text), actor: str(n.author) });
   });
+
+  const CHANNEL: Record<string, string> = { call: "Call", video: "Video call", email: "Email", whatsapp: "WhatsApp", message: "Message", in_person: "Meeting" };
+  for (const c of input.contacts ?? []) {
+    const how = CHANNEL[c.channel] ?? "Contact";
+    const title = c.direction === "inbound" ? `${how} from the member` : c.reached ? `${how} with the member` : `${how}: did not reach the member`;
+    out.push({ id: `contact:${c.id}`, kind: "contact", at: c.at, title, body: c.summary, actor: c.csmEmail, tone: c.reached ? "info" : "warning", ref: c.id });
+  }
 
   for (const a of input.audit) {
     const at = str(a.at);
