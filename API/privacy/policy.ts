@@ -399,6 +399,8 @@ export const ERASURE_PLAN: readonly ErasureRule[] = [
   { collection: "routing_gaps", select: [{ by: "field", field: "clientId" }], action: "delete", why: "ROUTING: the record that no lawyer matched the member yet." },
   { collection: "staff_notifications", select: [{ by: "field", field: "clientId" }], action: "delete", why: "ROUTING: staff alerts naming the member." },
   { collection: "work_offers", select: [{ by: "field", field: "clientId" }], action: "delete", why: "COMMS-P2: paid work about the member offered to lawyers (title and description)." },
+  { collection: "notifications", select: [{ by: "field", field: "clientId" }], action: "delete", why: "COMMS-P3: bell items for staff, CSMs and lawyers naming the member." },
+  { collection: "csm_contacts", select: [{ by: "field", field: "clientId" }], action: "delete", why: "COMMS-P3: calls, emails and messages a CSM logged with the member, with their summaries." },
   { collection: "funnel_events", select: [{ by: "field", field: "clientId" }, { by: "anonId" }], action: "delete", why: "Funnel events linked to the member or their browser id." },
   { collection: "journey_events", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: page views and funnel steps linked to the member (the browser id is random; aggregates keep no person)." },
   { collection: "outreach", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: outbound contact records (hashed email, campaign, opens and clicks)." },
