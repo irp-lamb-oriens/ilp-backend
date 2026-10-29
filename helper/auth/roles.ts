@@ -40,6 +40,12 @@ export function adminEmails(): string[] {
   return admins.length ? admins : list("OWNER_EMAILS");
 }
 
+/** JOURNEYS: an address in OWNER_EMAILS (owners keep experiment rights even when ADMIN_EMAILS is set). */
+export function isOwnerEmail(email: string | undefined | null): boolean {
+  const e = normalizeEmail(email ?? "");
+  return !!e && list("OWNER_EMAILS").includes(e);
+}
+
 export function staffRoleFor(email: string | undefined | null): StaffRole {
   const e = normalizeEmail(email ?? "");
   if (!e) return "staff";

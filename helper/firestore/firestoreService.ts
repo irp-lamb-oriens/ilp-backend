@@ -246,6 +246,35 @@ export async function commitFieldWrite(
 }
 
 /**
+ * JOURNEYS: write many documents of one collection in `documents:commit`
+ * calls of up to 400 writes. Each write sets the doc's top-level fields
+ * (update mask = its keys), so a field holding a map is replaced as a whole.
+ * Creates missing docs. Used for journey events and daily aggregates.
+ */
+export async function commitDocuments(
+  collection: string,
+  docs: Array<{ id: string; data: Record<string, unknown> }>,
+): Promise<void> {
+  for (let i = 0; i < docs.length; i += 400) {
+    const chunk = docs.slice(i, i + 400);
+    if (!chunk.length) continue;
+    const first = getFirestoreDocumentUrl(collection, chunk[0].id);
+    const commitUrl = `${first.slice(0, first.indexOf("/documents/"))}/documents:commit`;
+    const writes = chunk.map(({ id, data }) => {
+      const url = getFirestoreDocumentUrl(collection, id);
+      return {
+        update: { name: url.slice(url.indexOf("/projects/") + 1), ...toFirestoreDocument(data) },
+        updateMask: { fieldPaths: Object.keys(data).map(fieldPathFor) },
+      };
+    });
+    await firestoreRequest("commit", `${collection} ×${chunk.length}`, commitUrl, {
+      method: "POST",
+      body: JSON.stringify({ writes }),
+    });
+  }
+}
+
+/**
  * Upsert a document at a fixed id using PATCH. Only the provided fields are
  * written. When `overwrite` is false, existing fields are preserved
  * (field-level merge via updateMask); when true, the whole doc is replaced.

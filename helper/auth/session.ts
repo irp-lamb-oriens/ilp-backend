@@ -147,6 +147,20 @@ async function findProviderForStaff(
 }
 
 /**
+ * JOURNEYS: the member's client id when the request carries a live client
+ * session (Bearer / x-client-token / cookie), else null. Never answers the
+ * request and never slides the session: public routes use it to link events.
+ */
+export async function optionalClientId(req: Request): Promise<string | null> {
+  try {
+    const found = await firstSession("client_status_sessions", roleTokens(req, "client"));
+    return found?.session.projectId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Middleware: resolve the dashboard session and attach the staff email to the
  * request as `dashboardUser` (and the staff sub-role as `dashboardRole`,
  * resolved from env on every request: see roles.ts).
