@@ -32,6 +32,10 @@ export const COLLECTIONS = {
   opportunities: "opportunities",
   privacyRequests: "privacy_requests",
   consents: "consents",
+  journeyEvents: "journey_events",
+  journeyDaily: "journey_daily",
+  experiments: "experiments",
+  outreach: "outreach",
 } as const;
 
 export type Iso = string;
@@ -686,4 +690,410 @@ export interface PrivacyRequest {
   dueAt: Iso; // legal response deadline
   createdAt: Iso;
   completedAt?: Iso;
+}
+
+// ─── Journeys: first-party journey analytics + A/B experiments ─────────────
+/**
+ * JOURNEYS. Our own analytics, stored in Firestore (no third-party tool).
+ * The browser posts small batched events to POST /api/journey/events; steps
+ * that happen on the server (account created, paid, booked, ...) are written
+ * by the route handlers themselves, so the funnel never depends on the browser.
+ * No free text, no emails, no IP addresses are stored on an event.
+ *
+ * Source: "outbound" = people ILP contacted first (staff outreach email,
+ * imported lead, CSM call), tracked send → open → click → check → join.
+ * "inbound" = everyone else; utm campaigns are channel detail.
+ */
+export type FunnelStage = "acquire" | "activate" | "convert" | "retain";
+
+export interface JourneyStepDef<Id extends string = string> {
+  id: Id;
+  label: string;
+  stage: FunnelStage;
+}
+
+/** The member funnel, in order. */
+export const FUNNEL_STEPS = [
+  { id: "landing_view", label: "Landing page", stage: "acquire" },
+  { id: "check_start", label: "Started the free check", stage: "acquire" },
+  { id: "check_finish", label: "Finished the free check", stage: "acquire" },
+  { id: "results_view", label: "Saw the results", stage: "acquire" },
+  { id: "deadlines_select", label: "Picked deadlines to keep", stage: "activate" },
+  { id: "signup_start", label: "Started a free account", stage: "activate" },
+  { id: "account_created", label: "Free account created", stage: "activate" },
+  { id: "join_start", label: "Started joining", stage: "convert" },
+  { id: "activation_paid", label: "Paid activation (member)", stage: "convert" },
+  { id: "profile_ready", label: "Profile consultation-ready", stage: "convert" },
+  { id: "call_booked", label: "Booked a call", stage: "convert" },
+  { id: "call_done", label: "Had a call", stage: "convert" },
+  { id: "handoff_confirmed", label: "Lawyer confirmed next steps", stage: "retain" },
+  { id: "paid_work_accepted", label: "Accepted paid legal work", stage: "retain" },
+  { id: "renewed_m2", label: "Renewed month 2", stage: "retain" },
+  { id: "renewed_m3", label: "Renewed month 3", stage: "retain" },
+] as const;
+
+/** Outbound only: before they join the member funnel at landing_view / check_start. */
+export const OUTBOUND_STEPS = [
+  { id: "outreach_sent", label: "Contacted by ILP", stage: "acquire" },
+  { id: "outreach_opened", label: "Opened the email", stage: "acquire" },
+  { id: "outreach_clicked", label: "Clicked through", stage: "acquire" },
+] as const;
+
+/** Lawyer recruitment funnel on /attorneys. */
+export const LAWYER_STEPS = [
+  { id: "lawyer_landing_view", label: "Lawyer landing page", stage: "acquire" },
+  { id: "lawyer_apply_start", label: "Started the application", stage: "activate" },
+  { id: "lawyer_apply_submit", label: "Submitted the application", stage: "activate" },
+  { id: "lawyer_verified", label: "Verified partner lawyer", stage: "convert" },
+] as const;
+
+export type MemberFunnelStepId = (typeof FUNNEL_STEPS)[number]["id"];
+export type OutboundStepId = (typeof OUTBOUND_STEPS)[number]["id"];
+export type LawyerStepId = (typeof LAWYER_STEPS)[number]["id"];
+export type FunnelStepId = MemberFunnelStepId | OutboundStepId | LawyerStepId;
+
+/** Every journey step: outbound first, then the member funnel, then the lawyer funnel. */
+export const ALL_JOURNEY_STEPS: readonly JourneyStepDef<FunnelStepId>[] = [...OUTBOUND_STEPS, ...FUNNEL_STEPS, ...LAWYER_STEPS];
+
+export const isFunnelStepId = (v: unknown): v is FunnelStepId =>
+  typeof v === "string" && ALL_JOURNEY_STEPS.some((s) => s.id === v);
+
+/** Plain label of a step id; the id itself when unknown. */
+export const journeyStepLabel = (id: string): string => ALL_JOURNEY_STEPS.find((s) => s.id === id)?.label ?? id;
+
+/**
+ * Steps the server records itself (route handlers / TASK_RULES events). The
+ * browser may not send these; POST /api/journey/events drops them.
+ */
+export const SERVER_JOURNEY_STEPS: readonly FunnelStepId[] = [
+  "account_created",
+  "activation_paid",
+  "profile_ready",
+  "call_booked",
+  "call_done",
+  "handoff_confirmed",
+  "paid_work_accepted",
+  "renewed_m2",
+  "renewed_m3",
+  "outreach_sent",
+  "outreach_opened",
+  "outreach_clicked",
+  "lawyer_apply_submit",
+  "lawyer_verified",
+];
+
+export type JourneySource = "inbound" | "outbound";
+export const JOURNEY_SOURCES: readonly JourneySource[] = ["inbound", "outbound"];
+
+export type JourneyChannel = "organic" | "direct" | "referral" | "campaign" | "email_outreach" | "import" | "csm_call";
+export const JOURNEY_CHANNELS: readonly JourneyChannel[] = ["organic", "direct", "referral", "campaign", "email_outreach", "import", "csm_call"];
+/** Channels that make a visitor "outbound". */
+export const OUTBOUND_CHANNELS: readonly JourneyChannel[] = ["email_outreach", "import", "csm_call"];
+
+export type JourneyEventType = "page_view" | "step" | "click" | "form_error" | "heartbeat" | "exit";
+export const JOURNEY_EVENT_TYPES: readonly JourneyEventType[] = ["page_view", "step", "click", "form_error", "heartbeat", "exit"];
+
+export type JourneyDevice = "phone" | "tablet" | "desktop";
+export const JOURNEY_DEVICES: readonly JourneyDevice[] = ["phone", "tablet", "desktop"];
+
+/** Query parameter an outreach link carries (opaque outreach id). */
+export const OUTREACH_PARAM = "o";
+/** Browser storage key for the random first-party visitor id. */
+export const JOURNEY_VISITOR_KEY = "ilp_vid";
+/** Browser storage key for the visitor's analytics opt-out ("1" = opted out). */
+export const JOURNEY_OPT_OUT_KEY = "ilp_journey_optout";
+/** At most this many events per POST /api/journey/events. */
+export const JOURNEY_BATCH_MAX = 50;
+/** A heartbeat every this many ms while the tab is visible (time on page). */
+export const JOURNEY_HEARTBEAT_MS = 15000;
+/** Raw events are deleted after this many days (13 months). Daily aggregates are kept. */
+export const JOURNEY_RAW_RETENTION_DAYS = 395;
+
+export interface JourneyUtm {
+  source?: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+}
+
+export interface JourneyEvent {
+  id: string;
+  visitorId: string; // random first-party id from the browser, not personal
+  sessionId: string; // random per tab session (30 min idle)
+  clientId?: string; // set by the server when the request carries a client session, or after identify
+  leadId?: string;
+  outreachId?: string;
+  source: JourneySource;
+  channel: JourneyChannel;
+  utm?: JourneyUtm; // each value ≤ 80 chars, [a-z0-9._-] only
+  type: JourneyEventType;
+  step?: FunnelStepId; // type = "step"
+  path: string; // pathname only, no query string; ids in the path are replaced by ":id"
+  target?: string; // click / form_error: a component or field id (≤ 64 chars, [a-z0-9._-]), never free text
+  durationMs?: number; // heartbeat / exit: time on the page since the last heartbeat or view
+  variants: Record<string, string>; // experiment key → variant key, at the time of the event
+  device: JourneyDevice;
+  country?: CountryCode; // the country the visitor picked, not geo-IP
+  at: Iso;
+  placeholder?: boolean;
+}
+
+/** One event as the browser posts it. The server sets id, source/channel when unknown, clientId/leadId and at (clamped). */
+export type JourneyEventInput = Omit<JourneyEvent, "id" | "clientId" | "leadId" | "placeholder" | "source" | "channel" | "at"> & {
+  source?: JourneySource;
+  channel?: JourneyChannel;
+  at?: Iso;
+};
+
+/** POST /api/journey/events body. `optOut: true` (or DNT / Sec-GPC headers) → nothing stored. */
+export interface JourneyEventsRequest {
+  events: JourneyEventInput[];
+  optOut?: boolean;
+}
+
+/** POST /api/journey/events response (202). `ignored` says why nothing was stored. */
+export interface JourneyEventsResponse {
+  accepted: number;
+  dropped: number;
+  ignored?: "opt_out" | "dnt" | "gpc" | "bot";
+}
+
+// ─── Experiments ───────────────────────────────────────────────────────────
+export type ExperimentStatus = "draft" | "running" | "paused" | "ended";
+export const EXPERIMENT_STATUSES: readonly ExperimentStatus[] = ["draft", "running", "paused", "ended"];
+export type ExperimentAudience = "all" | "inbound" | "outbound";
+
+export interface ExperimentVariant {
+  key: string; // slug; the first variant is the control
+  name: string;
+  weight: number; // relative weight, > 0
+}
+
+export interface Experiment {
+  id: string;
+  key: string; // slug used in code, e.g. "hero-headline"
+  name: string;
+  hypothesis: string;
+  surface: string; // path ("/check") or component id ("home.hero")
+  variants: ExperimentVariant[]; // 2-4; changing them while running is refused
+  primaryStep: FunnelStepId;
+  guardrailSteps?: FunnelStepId[];
+  audience: ExperimentAudience;
+  status: ExperimentStatus;
+  startedAt?: Iso;
+  endedAt?: Iso;
+  winner?: string; // variant key, set by declare-winner
+  createdBy: string;
+  createdAt: Iso;
+  updatedAt: Iso;
+  placeholder?: boolean;
+}
+
+/** POST / PATCH /api/dashboard/journeys/experiments body. */
+export type ExperimentInput = Pick<Experiment, "key" | "name" | "hypothesis" | "surface" | "variants" | "primaryStep" | "audience"> & {
+  guardrailSteps?: FunnelStepId[];
+};
+
+/** What the browser needs to render a running experiment. */
+export type ExperimentConfig = Pick<Experiment, "key" | "surface" | "variants" | "audience" | "status">;
+
+/** GET /api/journey/assign?visitorId=&source= (public, cached 60 s). */
+export interface JourneyAssignResponse {
+  visitorId: string;
+  assignments: Record<string, string>; // experiment key → variant key (running experiments the visitor is in)
+  experiments: ExperimentConfig[];
+}
+
+// ─── Outreach (outbound contact records; staff-only) ──────────────────────
+export type OutreachChannel = Extract<JourneyChannel, "email_outreach" | "import" | "csm_call">;
+
+export interface Outreach {
+  id: string; // opaque, also the ?o= value
+  clientId?: string;
+  leadId?: string;
+  email: string; // SHA-256 of the lowercased address (privacy doc); never sent to the browser in clear
+  channel: OutreachChannel;
+  campaign: string; // slug, e.g. "cr-retirees-nov"
+  sentBy: string; // staff email
+  sentAt: Iso;
+  openedAt?: Iso;
+  clickedAt?: Iso;
+  convertedStep?: FunnelStepId; // furthest member-funnel step reached
+  placeholder?: boolean;
+}
+
+// ─── Daily aggregate (journey_daily) ──────────────────────────────────────
+/** One doc per day × source × channel × country × device × experiment variant. Routes read these, not raw events. */
+export interface JourneyDaily {
+  id: string; // day|source|channel|country|device|exp=variant (or "-")
+  day: string; // "2026-10-28" (UTC)
+  source: JourneySource;
+  channel: JourneyChannel;
+  country: CountryCode | "-";
+  device: JourneyDevice;
+  experiment: string; // experiment key or "-" (rows are written once per running experiment the visitor was in, plus once with "-")
+  variant: string; // variant key or "-"
+  visitors: number; // distinct visitors seen that day
+  steps: Partial<Record<FunnelStepId, number>>; // distinct visitors reaching each step that day
+  stepMs: Partial<Record<FunnelStepId, number[]>>; // histogram of ms from the previous step (JOURNEY_MS_BUCKETS)
+  pages: Record<string, { views: number; exits: number; ms: number[] }>; // path → views, exits, time histogram
+  transitions: Record<string, number>; // "fromStep>toStep" and "page:/a>/b" → visitors
+  exits: Record<string, number>; // last path of a session → sessions
+  formErrors: Record<string, Record<string, number>>; // step → target → count
+  builtAt: Iso;
+  placeholder?: boolean;
+}
+
+/** Upper bounds (ms) of the duration histogram buckets; the last bucket is open-ended. */
+export const JOURNEY_MS_BUCKETS: readonly number[] = [
+  1000, 3000, 5000, 10000, 20000, 30000, 60000, 120000, 300000, 600000, 1800000, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000,
+];
+
+// ─── Staff read models (GET /api/dashboard/journeys/*) ───────────────────
+export interface JourneyRange {
+  from: string; // "2026-10-01" inclusive (UTC day)
+  to: string; // "2026-10-28" inclusive
+}
+
+export interface JourneyFilters {
+  source?: JourneySource;
+  channel?: JourneyChannel;
+  country?: CountryCode;
+  device?: JourneyDevice;
+  experiment?: string;
+  variant?: string;
+}
+
+export interface JourneyFunnelRow {
+  step: FunnelStepId;
+  label: string;
+  visitors: number;
+  conversionFromPrev: number; // 0..1 (1 for the first row)
+  conversionFromStart: number; // 0..1
+  medianMsFromPrev: number | null;
+  p75MsFromPrev: number | null;
+  dropOff: number; // visitors of the previous row minus this row's (0 for the first)
+}
+
+/** GET /funnel?from&to&source&channel&country&device&experiment&variant&funnel=member|lawyer|outbound */
+export interface JourneyFunnel {
+  range: JourneyRange;
+  filters: JourneyFilters;
+  rows: JourneyFunnelRow[];
+  bySource: Record<JourneySource, JourneyFunnelRow[]>;
+}
+
+export interface JourneyPath {
+  from: string; // step id, or a path for page-to-page transitions
+  to: string;
+  visitors: number;
+}
+
+/** GET /paths */
+export interface JourneyPaths {
+  range: JourneyRange;
+  filters: JourneyFilters;
+  steps: JourneyPath[]; // top step → step transitions
+  pages: JourneyPath[]; // top page → page transitions
+  exits: { path: string; count: number }[]; // last page of a session
+}
+
+export interface JourneyStuck {
+  step: FunnelStepId;
+  label: string;
+  stuckCount: number; // reached this step and not the next one
+  medianDwellMs: number | null; // time spent at this step before leaving or moving on
+  topExitPaths: { path: string; count: number }[];
+  topFormErrors: { target: string; count: number }[];
+}
+
+/** GET /stuck */
+export interface JourneyStuckResponse {
+  range: JourneyRange;
+  filters: JourneyFilters;
+  steps: JourneyStuck[];
+}
+
+/** One row of GET /stuck/people?step&days&source&country (paginated, helper/listing.ts contract). */
+export interface StuckPerson {
+  id: string; // "client:<clientId>" or "lead:<leadId>"; used by POST /stuck/:id/task
+  clientId?: string;
+  leadId?: string;
+  name?: string; // staff only
+  step: FunnelStepId; // furthest step reached
+  since: Iso; // when they reached it
+  daysStuck: number;
+  source: JourneySource;
+  country?: CountryCode;
+  csmEmail?: string;
+  openTaskId?: string; // an open CSM task already created from this list
+  placeholder?: boolean;
+}
+
+export interface StuckPeoplePage {
+  items: StuckPerson[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  total?: number;
+}
+
+/** POST /stuck/:id/task body → { task: CsmTask } */
+export interface StuckTaskRequest {
+  title?: string; // default: "Stuck at <step>: reach out"
+  ownerEmail?: string;
+  dueInHours?: number; // default 24
+}
+
+export interface PageTime {
+  path: string;
+  views: number;
+  medianMs: number | null;
+  p75Ms: number | null;
+  exitRate: number; // 0..1, exits / views
+}
+
+/** GET /pages */
+export interface JourneyPagesResponse {
+  range: JourneyRange;
+  filters: JourneyFilters;
+  pages: PageTime[];
+}
+
+export interface ExperimentVariantResult {
+  key: string;
+  name: string;
+  visitors: number;
+  conversions: number; // visitors reaching primaryStep
+  rate: number; // 0..1
+  liftVsControl: number | null; // (rate − control) / control; null for the control or when control is 0
+  probabilityBest: number; // 0..1, Bayesian beta-binomial (Beta(1,1) prior), Monte Carlo
+  ci95: [number, number]; // Wilson interval on rate
+  guardrails?: { step: FunnelStepId; rate: number }[];
+}
+
+/** GET /experiments/:id/results */
+export interface ExperimentResult {
+  experimentId: string;
+  variants: ExperimentVariantResult[];
+  sampleSizeNeeded: number; // per variant, to detect a 20% relative lift at α 0.05, power 0.8
+  enoughData: boolean;
+  srmWarning: boolean; // sample ratio mismatch: chi-square p < 0.01 against the weights
+}
+
+export interface OutboundRow {
+  campaign: string;
+  channel: OutreachChannel;
+  sent: number;
+  opened: number;
+  clicked: number;
+  checkStarted: number;
+  accountCreated: number;
+  activationPaid: number;
+  revenueCents: number; // activation + first month of members it converted
+}
+
+/** GET /outbound?from&to&channel */
+export interface JourneyOutboundResponse {
+  range: JourneyRange;
+  rows: OutboundRow[];
 }
