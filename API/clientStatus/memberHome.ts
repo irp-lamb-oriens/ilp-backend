@@ -242,7 +242,7 @@ export function registerMemberHomeRoutes(app: Express) {
             meetUrl: c.meetUrl ?? null,
             linkPending: !c.meetUrl,
             consent: c.consent ?? { recording: "pending" },
-            canChange: canChange(c, new Date(), "member").ok,
+            canChange: c.kind === "sales" ? false : canChange(c, new Date(), "member").ok, // ROUTING: sales calls are set by the team
           })),
         pastCalls: view.consultations
           .filter((c) => c.status === "completed")

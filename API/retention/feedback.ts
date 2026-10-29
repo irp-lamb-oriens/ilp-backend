@@ -36,7 +36,7 @@ export const LOW_MONTHLY = 6;
  */
 export function pendingRating(cons: Consultation[], now: Date): Consultation | null {
   return cons
-    .filter((c) => c.status === "completed" && !c.rating)
+    .filter((c) => c.status === "completed" && !c.rating && c.kind !== "sales") // ROUTING: a sales call is not a lawyer call
     .filter((c) => now.getTime() - Date.parse(c.endedAt ?? c.scheduledAt) <= 30 * DAY_MS)
     .sort((a, b) => String(b.endedAt ?? b.scheduledAt).localeCompare(String(a.endedAt ?? a.scheduledAt)))[0] ?? null;
 }
