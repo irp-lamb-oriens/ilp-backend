@@ -18,6 +18,7 @@ import {
   emailToDocId,
 } from "../../helper/auth/otp.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
+import { staffRoleFor } from "../../helper/auth/roles.ts"; // AUTH: role in the verify-otp answer
 import { transcribeAudio } from "../chatbot/intelligence/transcription.ts";
 import { createCalendarEvent, fetchMeetNotes } from "../../helper/calendar.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
@@ -153,7 +154,9 @@ export default (app: Express) => {
       });
 
       log(`[dashboard] Session created for ${email}`);
-      res.json({ success: true, token, email: normalizedEmail, expiresAt: sessionExpiry.toISOString() });
+      // AUTH: the staff sub-role (staff | csm | admin, from env) so the login
+      // can send a CSM straight to /csm; the server still re-checks it per request.
+      res.json({ success: true, token, email: normalizedEmail, expiresAt: sessionExpiry.toISOString(), role: staffRoleFor(normalizedEmail) });
     })
   );
 
