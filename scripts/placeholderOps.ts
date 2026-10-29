@@ -17,6 +17,7 @@ export const PLACEHOLDER_COLLECTIONS = [
   "member_documents", "audit_log", "quoteSettlements", "financeLedger", "invoices",
   "journey_events", "journey_daily", "journey_exposures", "experiments", "outreach", // JOURNEYS
   "reviews", "lawyer_ratings", "routing_gaps", "staff_notifications", // ROUTING
+  "work_offers", // COMMS-P2
   "quote_service_types", "quote_labels", "quote_line_templates", "quote_templates", "vendors", "posts", "updates",
   "clients", // last: subcollections and records first
 ] as const;

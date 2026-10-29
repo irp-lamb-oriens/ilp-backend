@@ -398,6 +398,7 @@ export const ERASURE_PLAN: readonly ErasureRule[] = [
   { collection: "reviews", select: [{ by: "field", field: "clientId" }], action: "anonymize", keep: ["id", "providerId", "consultationId", "stars", "score100", "at"], why: "ROUTING: the star score stays in the lawyer's hidden rating; the member link and the comment go." },
   { collection: "routing_gaps", select: [{ by: "field", field: "clientId" }], action: "delete", why: "ROUTING: the record that no lawyer matched the member yet." },
   { collection: "staff_notifications", select: [{ by: "field", field: "clientId" }], action: "delete", why: "ROUTING: staff alerts naming the member." },
+  { collection: "work_offers", select: [{ by: "field", field: "clientId" }], action: "delete", why: "COMMS-P2: paid work about the member offered to lawyers (title and description)." },
   { collection: "funnel_events", select: [{ by: "field", field: "clientId" }, { by: "anonId" }], action: "delete", why: "Funnel events linked to the member or their browser id." },
   { collection: "journey_events", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: page views and funnel steps linked to the member (the browser id is random; aggregates keep no person)." },
   { collection: "outreach", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: outbound contact records (hashed email, campaign, opens and clicks)." },

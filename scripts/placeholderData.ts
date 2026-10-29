@@ -2855,6 +2855,18 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       Date.parse(String(failed.createdAt)), "done", "Sent the Meet link to the member and the lawyer by email.");
     if (t) failed.calendarError = null;
   }
+  // COMMS-P2: a call summary the lawyer had not confirmed two days after the transcript
+  // (reminded at 24 h, CSM task at 48 h). Open when a seed summary is still suggested, else handled.
+  {
+    const waiting = consultations.find((c) => c.status === "completed" && (c.summary as Doc | undefined)?.status === "suggested" && Date.parse(String(c.scheduledAt)) < NOW - 2 * DAY);
+    const handled = waiting ?? consultations.find((c) => c.status === "completed" && Date.parse(String(c.scheduledAt)) < NOW - 5 * DAY);
+    if (handled) {
+      const readyAt = Date.parse(String(handled.scheduledAt)) + HOUR;
+      mkTask("call.summary_unconfirmed", { clientId: String(handled.clientId), matterId: handled.matterId as string | undefined, sourceId: String(handled.id), sourceKind: "consultation", detail: "summary waiting two days" },
+        readyAt + 2 * DAY, waiting ? "open" : "done", waiting ? undefined : "Called the lawyer; they confirmed the summary the same day.");
+      if (waiting) Object.assign(handled, { summaryReadyAt: iso(readyAt), summaryNotices: ["ready", "reminder", "escalated"] });
+    }
+  }
   // Manual tasks (source "manual"), and every status incl. cancelled and overdue.
   rng.reseed("task-cover");
   {
