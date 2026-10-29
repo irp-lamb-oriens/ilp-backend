@@ -11,6 +11,7 @@ import { retentionSweep } from "./retentionSweep.ts"; // P2
 import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"; // P2
 import { callReminders } from "./callReminders.ts"; // P3
 import { privacyRetention } from "./privacyRetention.ts"; // P6
+import { journeyAggregate } from "./journeyAggregate.ts"; // JOURNEYS
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -103,6 +104,14 @@ export const jobs: JobDef[] = [
     cron: "10 10 * * *",
     handler: async () => {
       await privacyRetention();
+    },
+  },
+  // JOURNEYS: journey_daily for today (and yesterday before 03:00 UTC) + experiment exposures.
+  {
+    name: "journeyAggregate",
+    cron: "7 * * * *",
+    handler: async () => {
+      await journeyAggregate();
     },
   },
 ];

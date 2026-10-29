@@ -56,6 +56,7 @@ import membersRouter from "./API/members/membersRouter.ts";
 import callsRouter from "./API/calls/callsRouter.ts"; // P3
 import privacyRouter from "./API/privacy/privacyRouter.ts"; // P6
 import opportunitiesRouter from "./API/opportunities/opportunitiesRouter.ts"; // P5
+import journeysRouter from "./API/journeys/journeysRouter.ts"; // JOURNEYS
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -107,7 +108,7 @@ function createServer() {
       // AUTH: sessions travel as `Authorization: Bearer` (legacy role headers
       // still accepted). credentials stays true only for AUTH_COOKIES=true.
       credentials: true,
-      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "x-ilp-visitor"],
       // Lets the front end read the file name of a blob download.
       exposedHeaders: ["Content-Disposition"],
     }));
@@ -140,7 +141,11 @@ function createServer() {
     // Small default body limit; import/upload-style routes keep the large one.
     const bigJson = express.json({ limit: "10mb" });
     const smallJson = express.json({ limit: "1mb" });
+    // JOURNEYS: public analytics beacons get a 32 KB limit; sendBeacon posts text/plain JSON.
+    const tinyJson = express.json({ limit: "32kb" });
+    const tinyText = express.text({ type: "text/plain", limit: "32kb" });
     app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.path.startsWith("/api/journey/")) return tinyJson(req, res, (err?: unknown) => (err ? next(err) : tinyText(req, res, next)));
       const big = /\/(import|bulk-import|voice-transcribe|upload|chat|chatbot|attachment|documents?)(\/|$|-)/.test(req.path);
       (big ? bigJson : smallJson)(req, res, next);
     });
@@ -205,6 +210,7 @@ function createServer() {
     callsRouter(app); // P3: availability, Meet, no-show, transcripts
     privacyRouter(app); // P6: consents, data rights, CSP reports
     opportunitiesRouter(app); // P5: staff opportunities pipeline
+    journeysRouter(app); // JOURNEYS: first-party journey analytics + A/B experiments
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);

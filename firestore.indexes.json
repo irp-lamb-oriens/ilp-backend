@@ -649,7 +649,184 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "journey_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "visitorId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "at",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "journey_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "clientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "at",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "experiment",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "day",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "journey_exposures",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "experiment",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "firstAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "outreach",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "channel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sentAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "outreach",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "campaign",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sentAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "clients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "journeyTrack.furthestStep",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "journeyTrack.furthestAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "leads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "journeyTrack.furthestStep",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "journeyTrack.furthestAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "experiments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "steps",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "stepMs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "pages",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "transitions",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "exits",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "stepExits",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "dwellMs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_daily",
+      "fieldPath": "formErrors",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_exposures",
+      "fieldPath": "steps",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "journey_events",
+      "fieldPath": "variants",
+      "indexes": []
+    }
+  ]
 }
