@@ -947,7 +947,7 @@ export interface Outreach {
  * not raw events. Visitor counts are distinct per day, summed over a range.
  */
 export interface JourneyDaily {
-  id: string; // day|source|channel|country|device|exp=variant (or "-")
+  id: string; // <day>_<source>_<channel>_<country>_<device>_<experiment>~<variant> ("-" when none); ph_ prefix for placeholder rows
   day: string; // "2026-10-28" (UTC)
   source: JourneySource;
   channel: JourneyChannel;
