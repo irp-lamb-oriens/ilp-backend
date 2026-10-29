@@ -271,7 +271,9 @@ Deno.test("re-route: a new lawyer with the specialty resolves the gap and tells 
     assertEquals([decision.providerId, decision.trigger, decision.candidates[0].breakdown.specialty], ["PA1", "sweep", 40]);
     const task = world.all("csm_tasks").find((t) => /Missing specialty/.test(t.title))!;
     assertEquals(task.status, "done");
-    assertEquals(world.emails().filter((m) => m.subject === "Your ILP lawyer is confirmed" && m.to === "g2@mailbox-rt.io").length, 1);
+    // COMMS-P5: one lawyer email to the member: the first-lawyer email from assignMember, not a second "confirmed" one.
+    const lawyerMails = world.emails().filter((m) => m.to === "g2@mailbox-rt.io" && /Your ILP lawyer is confirmed|is your ILP lawyer/.test(String(m.subject)));
+    assertEquals(lawyerMails.map((m) => m.subject), ["PA1 Lawyer is your ILP lawyer"]);
     assertEquals(world.all("notifications").filter((n) => n.to === "staff:*").filter((n) => n.kind === "routing.resolved").length, 1);
     assert(world.all("audit_log").some((a) => a.action === "routing.decided" && a.meta?.providerId === "PA1"));
     // Settled: the next sweep has nothing to do.

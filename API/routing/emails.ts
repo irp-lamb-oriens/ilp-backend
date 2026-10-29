@@ -1,9 +1,9 @@
 /**
  * API/routing/emails.ts — routing emails (ROUTING). Pure templates.
  * ──────────────────────────────────────────────────────────────────────────
- * Lawyer pre-call brief (booking, 24 h and 1 h reminders) in the lawyer's
- * email language: Spanish by default, Portuguese for Portugal, English on
- * request. Member emails stay in English. Staff and sales emails in English.
+ * Lawyer pre-call brief (booking, 24 h and 1 h reminders). COMMS-P1: every
+ * lawyer email is in English (emailLanguageFor always returns "en"); the
+ * Spanish and Portuguese word sets are kept but unused. Member emails in English. Staff and sales emails in English.
  * No document is ever attached: the brief lists file names and links to the
  * portal, where the lawyer signs in. No ID or passport numbers are included.
  * Copy follows frontend/copy-rules.md (no em dashes).
@@ -202,7 +202,7 @@ const UL = (items: string[]) => `<ul style="margin:0 0 10px;padding-left:20px">$
  * summaries with next steps, and the document names. Returns subject, html, text.
  */
 export function preCallLawyerEmail(o: PreCallInput): MemberEmail {
-  const w = WORDS[o.lang] ?? WORDS.es;
+  const w = WORDS[o.lang] ?? WORDS.en; // COMMS-P5: English when the language is unknown
   const b = o.brief;
   const lead = w.lead[o.kind](b.memberName, o.when, o.durationMin);
   const sections: Array<{ title: string; lines: string[]; list?: boolean }> = [

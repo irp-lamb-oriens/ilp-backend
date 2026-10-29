@@ -23,6 +23,7 @@
  */
 
 import get from "../../db/get.ts";
+import { queueKey } from "../retention/mailer.ts"; // COMMS-P5
 import put from "../../db/put.ts";
 import getAll from "../../db/getAll.ts";
 import query from "../../db/query.ts";
@@ -415,6 +416,18 @@ export async function handleNoMatch(d: Decided): Promise<RoutingGap> {
 }
 
 /** A gap closed by a match: member assigned and emailed, task done, staff told. */
+/**
+ * COMMS-P5: true when the member's first-lawyer email (closingLoops
+ * `lawyer_assigned_<clientId>`) was queued at or after `since`.
+ */
+export async function firstLawyerEmailSince(clientId: string, since: string | undefined): Promise<boolean> {
+  const q = (await get("email_queue", `dedupe_${queueKey(`lawyer_assigned_${clientId}`)}`).catch(() => null)) as Doc | null;
+  if (!q) return false;
+  const at = Date.parse(String(q.createdAt ?? ""));
+  const from = Date.parse(String(since ?? ""));
+  return !Number.isFinite(from) || (Number.isFinite(at) && at >= from);
+}
+
 async function resolveGap(gap: RoutingGap, providerId: string, d: Decided): Promise<void> {
   const now = new Date().toISOString();
   await put(COLLECTIONS.routingGaps, gap.id, { status: "resolved", resolvedAt: now, resolvedProviderId: providerId, updatedAt: now });
@@ -428,7 +441,9 @@ async function resolveGap(gap: RoutingGap, providerId: string, d: Decided): Prom
   const p = profileRecord(d.client);
   const countryName = COUNTRIES[gap.country]?.name ?? gap.country;
   const email = str(p.email);
-  if (email) {
+  // COMMS-P5: assignMember already told the member about their first lawyer
+  // ("<name> is your ILP lawyer") since this gap opened: no second email.
+  if (email && !(await firstLawyerEmailSince(gap.clientId, gap.createdAt))) {
     const mail = lawyerAssignedEmail({
       firstName: str(p.preferredName) ?? str(p.name) ?? str(p.fullName)?.split(" ")[0] ?? undefined,
       lawyerName,
