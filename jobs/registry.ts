@@ -12,6 +12,7 @@ import { installLifecycleEmailHooks } from "../API/retention/lifecycleEmails.ts"
 import { callReminders } from "./callReminders.ts"; // P3
 import { privacyRetention } from "./privacyRetention.ts"; // P6
 import { journeyAggregate } from "./journeyAggregate.ts"; // JOURNEYS
+import { rerouteOpenGaps } from "../API/routing/service.ts"; // ROUTING
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -112,6 +113,14 @@ export const jobs: JobDef[] = [
     cron: "7 * * * *",
     handler: async () => {
       await journeyAggregate();
+    },
+  },
+  // ROUTING: retry members nobody could take yet (new lawyers, new specialties, freed time).
+  {
+    name: "routingSweep",
+    cron: "*/30 * * * *",
+    handler: async () => {
+      await rerouteOpenGaps("sweep");
     },
   },
 ];
