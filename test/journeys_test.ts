@@ -417,3 +417,26 @@ Deno.test("routes: TASK_RULES events record their funnel step", async () => {
 Deno.test("routes 9: teardown", () => {
   world.restore();
 });
+
+Deno.test("seed: journeys are ph_ placeholder docs, deterministic, with two running experiments and one winner", async () => {
+  const { buildPlaceholderData } = await import("../scripts/placeholderData.ts");
+  const { addJourneyData } = await import("../scripts/journeyPlaceholderData.ts");
+  const build = () => {
+    const data = buildPlaceholderData({ size: "demo", seed: 3, now: new Date("2026-10-28T16:00:00Z") });
+    return { data, j: addJourneyData(data, { seed: 3 }) };
+  };
+  const a = build();
+  const b = build();
+  assertEquals(JSON.stringify(a.j.daily.slice(0, 50)), JSON.stringify(b.j.daily.slice(0, 50)));
+  for (const col of ["journey_events", "journey_daily", "journey_exposures", "experiments", "outreach"]) {
+    const docs = a.data.collections[col] ?? [];
+    assert(docs.length > 0, col);
+    assert(docs.every((d: Doc) => String(d.id).startsWith("ph_") && d.placeholder === true && d.placeholderBatch === a.data.batch), col);
+  }
+  assertEquals(a.j.experiments.map((e) => e.status).sort(), ["ended", "running", "running"]);
+  assertEquals(a.j.experiments.find((e) => e.status === "ended")!.winner, "save");
+  assert(new Set(a.j.daily.map((r) => r.country)).size >= 6);
+  assert(a.j.daily.some((r) => r.source === "outbound"));
+  assert((a.data.collections.leads ?? []).some((l: Doc) => l.journeyTrack?.furthestStep));
+  assert(!JSON.stringify(a.data.collections.journey_events).includes("@"));
+});
