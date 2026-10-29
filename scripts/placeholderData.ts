@@ -25,6 +25,7 @@ import {
   PLAN_STANDARD,
   profileCompleteness,
   TASK_RULES,
+  DEFAULT_SPECIALTIES,
 } from "../schemas/contracts.ts";
 import { buildTask, type EventPayload } from "../API/members/events.ts";
 import { opportunityFromHandoff } from "../API/opportunities/logic.ts";
@@ -35,6 +36,7 @@ import { LEGAL_VERSIONS } from "../API/privacy/policy.ts";
 import { CANCEL_REASONS } from "../API/payments/cancel.ts";
 import { missingDocumentEvents, renewalEvents, unansweredQuoteEvents } from "../jobs/taskRuleSweep.ts";
 import { PLACEHOLDER_PREFIX } from "../helper/placeholder.ts";
+import { GAP_SPECIALTIES, reviewsAndRatings, routingProfileFor, salesCallDoc, SEED_SALES_EMAIL, seedDecision, seedLawyerForRouting } from "./routingPlaceholderData.ts"; // ROUTING
 import {
   ACCESSIBILITY,
   type Background,
@@ -1042,6 +1044,8 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       createdAt: iso(NOW - (cfg.windowDays + 45) * DAY),
       createdBy: admin.email,
       updatedAt: iso(NOW - rng.int(1, 30) * DAY),
+      // ROUTING: specialties, languages, regions, capacity, licences, notary, one paused lawyer.
+      ...routingProfileFor(i, lawyerCountry(i), l.areas, l.city),
     });
     const morning = rng.pick([["08:00", "12:00"], ["08:30", "12:00"], ["09:00", "12:30"]] as const);
     const afternoon = rng.pick([["13:30", "16:30"], ["14:00", "17:00"], ["13:00", "16:00"]] as const);
@@ -2521,6 +2525,70 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       ...(r.comment ? { comment: r.comment } : {}), at: iso(r.at),
     });
     if (r.score <= 2) mkTask("feedback.low_score", { clientId: r.mem.id, sourceId: String(r.c.id), sourceKind: "consultation", dedupeKey: fid, detail: `rated a call ${r.score}/5` }, r.at);
+  }
+
+  // ── ROUTING: reviews and hidden ratings, "Why this lawyer", two coverage gaps ──
+  rng.reseed("routing");
+  {
+    const { reviews, summaries } = reviewsAndRatings(ratings.map((r) => ({ c: r.c, score: r.score, comment: r.comment, at: iso(r.at) })), lawyers.map((l) => l.id), iso(NOW));
+    for (const r of reviews) add(COLLECTIONS.reviews, r);
+    for (const r of summaries) add(COLLECTIONS.lawyerRatings, r);
+    const ratingOf = new Map(summaries.map((r) => [String(r.providerId), { ratingScore: Number(r.ratingScore), reviewCount: Number(r.reviewCount) }]));
+    const providerDocs = collections.providers ?? [];
+    const forRouting = lawyers.map((l, i) => seedLawyerForRouting(providerDocs.find((p) => p.id === l.id)!, i, ratingOf.get(l.id), l.load, NOW));
+    const langsOf = (mem: Member) => (mem.situation.language === "es" ? ["es"] : ["en"]);
+    // "Why this lawyer" on each member's first matter.
+    for (const mem of members) {
+      const first = mattersBy.get(mem.id)?.[0];
+      if (!first) continue;
+      first.doc.routing = seedDecision(
+        { country: mem.country, area: first.area, region: mem.loc.province, memberName: `${mem.first} ${mem.last}`, languages: langsOf(mem) },
+        forRouting,
+        typeof first.doc.assignedProviderId === "string" ? first.doc.assignedProviderId : null,
+        mem.csm,
+        iso(first.openedAt),
+      );
+    }
+    // Two members ask about something no seed lawyer covers: the no-match path.
+    const waiting = members.filter((m) => m.status === "active" && m.i !== 0 && m.i !== ROLE.unassigned).slice(0, 2);
+    waiting.forEach((mem, k) => {
+      const g = GAP_SPECIALTIES[k];
+      const spec = DEFAULT_SPECIALTIES.find((x) => x.id === g.specialtyId)!;
+      const openedAt = NOW - (k === 0 ? 2 : 1) * DAY - 3 * HOUR;
+      const matterId = `${PLACEHOLDER_PREFIX}mat_${pad(mem.i + 1)}_gap`;
+      const decision = seedDecision({ country: mem.country, area: spec.group, region: mem.loc.province, memberName: `${mem.first} ${mem.last}`, languages: langsOf(mem) }, forRouting, null, mem.csm, iso(openedAt));
+      decision.request.specialtyId = spec.id;
+      decision.noMatchReason = `No active lawyer in ${COUNTRIES[mem.country].name} covers ${spec.label.toLowerCase()}.`;
+      add(COLLECTIONS.matters, {
+        id: matterId, clientId: mem.id, title: g.title, area: spec.group, specialtyId: spec.id, country: mem.country, stage: "intake",
+        stageEnteredAt: iso(openedAt), openedAt: iso(openedAt), question: fill(g.question, { country: mem.country, loc: mem.loc.place, L: "your lawyer", M: mem.first }),
+        nextStep: { what: "We are arranging your lawyer", who: "ilp" }, nextStepSetAt: iso(openedAt), routing: decision,
+      });
+      const gapId = `${PLACEHOLDER_PREFIX}gap_${mem.id.replace(PLACEHOLDER_PREFIX, "")}_${matterId.replace(PLACEHOLDER_PREFIX, "")}`;
+      const detail = `${COUNTRIES[mem.country].name} · ${spec.label} · ${mem.first} ${mem.last}`;
+      const task = mkTask("routing.no_match", { clientId: mem.id, matterId, sourceId: matterId, sourceKind: "manual", dedupeKey: gapId, ownerEmail: admin.email, detail }, openedAt + 5 * MIN, "open");
+      let salesId: string | undefined;
+      let salesTaskId: string | undefined;
+      if (k === 0) {
+        salesId = `${PLACEHOLDER_PREFIX}con_sales_${pad(mem.i + 1)}`;
+        const start = crAt(crMidnight(new Date(NOW + DAY)), 10, 0);
+        add(COLLECTIONS.consultations, salesCallDoc(salesId, mem.id, matterId, iso(start), meetUrlFor(salesId), iso(openedAt + 5 * MIN), spec.label, mem.country));
+      } else {
+        salesTaskId = mkTask("sales.call_unscheduled", { clientId: mem.id, matterId, sourceId: gapId, dedupeKey: gapId, ownerEmail: SEED_SALES_EMAIL, detail: `${mem.first} ${mem.last}` }, openedAt + 6 * MIN, "open")?.id;
+      }
+      add(COLLECTIONS.routingGaps, {
+        id: gapId, clientId: mem.id, matterId, country: mem.country, area: spec.group, specialtyId: spec.id, status: "open", reason: decision.noMatchReason,
+        createdAt: iso(openedAt), updatedAt: iso(NOW - 30 * MIN), attempts: 3 + k, clientNotifiedAt: iso(openedAt + 5 * MIN),
+        ...(task ? { taskId: task.id } : {}), ...(salesId ? { salesConsultationId: salesId } : {}), ...(salesTaskId ? { salesTaskId } : {}),
+      });
+      add(COLLECTIONS.staffNotifications, {
+        id: `${PLACEHOLDER_PREFIX}ntf_${gapId.replace(PLACEHOLDER_PREFIX, "")}`, kind: "routing.no_match",
+        title: `Missing specialty for an assignment: ${detail}`,
+        body: `${decision.noMatchReason} The member was told we are arranging their lawyer, and a short call with the sales team is being set up.`,
+        link: `/dashboard/members/${encodeURIComponent(mem.id)}`, clientId: mem.id, matterId, createdAt: iso(openedAt + 5 * MIN),
+        readBy: k === 0 ? [] : [mem.csm],
+      });
+    });
   }
 
   // ── Privacy requests (one export done, one deletion in review, …) ──
