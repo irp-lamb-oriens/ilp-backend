@@ -75,7 +75,8 @@ export function computeDeadline(
   return null;
 }
 
-const PRESERVED_STATUSES = new Set(["dispatched", "responded", "needs_help"]);
+// COMMS-P1: "expired" (deadline passed before the lead-time send) is kept too.
+const PRESERVED_STATUSES = new Set(["dispatched", "responded", "needs_help", "expired"]);
 
 /**
  * Regenerate scheduled alerts for every (profile, active rule) match. Idempotent

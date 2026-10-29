@@ -28,6 +28,8 @@ import { emailToDocId } from "../helper/auth/otp.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
 import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
+import { withLegalFooter } from "../helper/emailTemplates.ts"; // COMMS-P1
+import { emailPrefsOf, mayEmail, unsubscribeUrl } from "../API/retention/mailer.ts"; // COMMS-P1
 import { addPendingAction } from "../API/dashboard/pendingActions.ts";
 
 const CLIENTS_COLLECTION = "clients";
@@ -179,7 +181,8 @@ export async function deadlineReminderSweep(): Promise<void> {
 
       // ── Email reminder ─────────────────────────────────────────────────────
       let emailProgressed = false;
-      if (!remindedEmail.includes(bucket)) {
+      // COMMS-P1: a service email; the reminder unsubscribe stops it (push still goes).
+      if (!remindedEmail.includes(bucket) && mayEmail(emailPrefsOf(doc as Record<string, unknown>), "service")) {
         try {
           const emailData: Record<string, unknown> = {
             ...(doc as Record<string, unknown>),
@@ -189,7 +192,7 @@ export async function deadlineReminderSweep(): Promise<void> {
           };
           const { subject, bodyHtml } = renderLegalEmail(EMAIL_TYPE, emailData);
           await enqueueEmail(
-            { to: email, subject, html: bodyHtml, placeholder },
+            { to: email, subject, html: withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(String(doc.id)) }), placeholder },
             `deadline_${String(doc.id)}_${entry.priorityId}_${entry.date}_${bucket}`,
           );
           remindedEmail.push(bucket);

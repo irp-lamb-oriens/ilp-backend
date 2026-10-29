@@ -23,6 +23,8 @@ import log from "../helper/log.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
 import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
+import { withLegalFooter } from "../helper/emailTemplates.ts"; // COMMS-P1
+import { emailPrefsOf, mayEmail, unsubscribeUrl } from "../API/retention/mailer.ts"; // COMMS-P1
 import {
   resolveEmailCc,
   resolveEmailBcc,
@@ -194,13 +196,14 @@ export async function deadlineFollowupSweep(): Promise<void> {
     }
 
     // ── Client-facing reminder on cadence ────────────────────────────────────
-    if (clientEmail) {
+    // COMMS-P1: a service email; the reminder unsubscribe stops it, and it carries the link.
+    if (clientEmail && mayEmail(emailPrefsOf(doc as Record<string, unknown>), "service")) {
       const { subject, bodyHtml } = renderLegalEmail(EMAIL_TYPE, emailData);
       await enqueueEmail(
         {
           to: clientEmail,
           subject,
-          html: bodyHtml,
+          html: withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(String(doc.id)) }),
           cc: resolveEmailCc(EMAIL_TYPE),
           bcc: resolveEmailBcc(EMAIL_TYPE),
         },
