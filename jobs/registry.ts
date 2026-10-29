@@ -61,7 +61,9 @@ export const jobs: JobDef[] = [
   {
     name: "deadlineReminderSweep",
     cron: "0 8 * * *",
-    handler: deadlineReminderSweep,
+    handler: async () => {
+      await deadlineReminderSweep(); // COMMS-P4: bridges record dates into obligations (they send the reminders)
+    },
   },
   {
     name: "taskRuleSweep",

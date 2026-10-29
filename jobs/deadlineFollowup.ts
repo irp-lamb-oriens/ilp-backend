@@ -10,7 +10,9 @@
  *
  *   • overdue        → team email (owner + recipient rules) + high pending action
  *   • ≤ 7 days out   → urgent pending action
- *   • otherwise      → client `filing_deadline_reminder` email on cadence
+ *   • client reminder → COMMS-P4: the date is bridged into an obligation
+ *                       (API/members/legacyDeadlines.ts); the obligations
+ *                       reminders replace the old cadence email
  *
  * Index-free by design: it lists all clients and filters in memory (matching
  * the dashboard metrics path), so no composite Firestore index is required for
@@ -23,8 +25,7 @@ import log from "../helper/log.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
 import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
-import { withLegalFooter } from "../helper/emailTemplates.ts"; // COMMS-P1
-import { emailPrefsOf, mayEmail, unsubscribeUrl } from "../API/retention/mailer.ts"; // COMMS-P1
+import { bridgeClientDeadlines } from "../API/members/legacyDeadlines.ts"; // COMMS-P4
 import {
   resolveEmailCc,
   resolveEmailBcc,
@@ -195,21 +196,11 @@ export async function deadlineFollowupSweep(): Promise<void> {
       );
     }
 
-    // ── Client-facing reminder on cadence ────────────────────────────────────
-    // COMMS-P1: a service email; the reminder unsubscribe stops it, and it carries the link.
-    if (clientEmail && mayEmail(emailPrefsOf(doc as Record<string, unknown>), "service")) {
-      const { subject, bodyHtml } = renderLegalEmail(EMAIL_TYPE, emailData);
-      await enqueueEmail(
-        {
-          to: clientEmail,
-          subject,
-          html: withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(String(doc.id)) }),
-          cc: resolveEmailCc(EMAIL_TYPE),
-          bcc: resolveEmailBcc(EMAIL_TYPE),
-        },
-        `deadline_followup_${doc.id}_${nowMs}`,
-      );
-    }
+    // ── Client-facing reminder ───────────────────────────────────────────────
+    // COMMS-P4: no cadence email to the client any more. The loop's date is
+    // bridged into an obligation, and the obligations reminders (30 and 7 days,
+    // email and push) are the only member reminders for it: one per date and stage.
+    await bridgeClientDeadlines({ ...(doc as Record<string, unknown>), id: String(doc.id) }, new Date(nowMs));
 
     await patch(CLIENTS_COLLECTION, doc.id, {
       deadlineFollowup: {

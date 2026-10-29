@@ -1,42 +1,31 @@
 /**
- * jobs/deadlineReminderSweep.ts — unified deadline reminders (email + push).
+ * jobs/deadlineReminderSweep.ts — client-record dates into obligations (COMMS-P4).
  * ──────────────────────────────────────────────────────────────────────────
- * The single notifier for the customer-facing `deadlines` map (written by the
- * client-status portal). Reads every client doc, resolves each priority's
- * reminder offsets, and fires BOTH an email and a browser push when a deadline
- * crosses one of its reminder thresholds.
+ * Until COMMS-P4 this sweep emailed (`filing_deadline_reminder`) and pushed
+ * reminders for the customer-facing `clients.deadlines` map, next to the
+ * obligations reminders (30 and 7 days), so one date could produce two
+ * emails. Now there is one reminder system: this sweep bridges every date on
+ * the client record into the obligations collection
+ * (API/members/legacyDeadlines.ts, non-destructive: the map is never changed)
+ * and the daily retention sweep sends the reminders, email and push, once
+ * per date and stage (API/retention/retentionMessages.ts).
  *
- * Threshold-based (not exact-day) so a missed cron run cannot silently skip a
- * reminder: the sweep fires the most recent threshold that has been crossed
- * (the smallest offset `o` where days-until <= o), which is always the most
- * relevant reminder. A final "due today" (offset 0) is always included.
+ * What stays here: an overdue date still opens a staff pending action
+ * ("Deadline is OVERDUE"), once per date.
  *
- * Idempotent via a per-deadline `remindedOffsets` array: a given
- * (priority, date, offset) fires at most once. Email dedupe is handled by the
- * queue's deterministic dedupe key. Index-free by design.
+ * Runs daily (registry "0 8 * * *", 02:00 Costa Rica), before the retention
+ * sweep (08:00 Costa Rica). Index-free: lists clients and filters in memory.
+ * `daysUntil` and `currentBucket` are kept (pure, tested) for older callers.
  */
 
 import getAll from "../db/getAll.ts";
-import patch from "../db/patch.ts";
 import log from "../helper/log.ts";
-import get from "../db/get.ts";
-import remove from "../db/delete.ts";
-import { resolveClientEmail } from "../API/dashboard/clientHelpers.ts";
 import { priorityById, countryCodeFromName } from "../API/countries/countryCatalog.ts";
-import { sendPushNotification, type PushSubscription } from "../config/push.ts";
-import { emailToDocId } from "../helper/auth/otp.ts";
-import { enqueueEmail } from "../helper/emailQueue.ts";
-import { isPlaceholderDoc } from "../helper/placeholder.ts";
-import { renderLegalEmail } from "../API/dashboard/automation/renderLegalEmail.ts";
-import { withLegalFooter } from "../helper/emailTemplates.ts"; // COMMS-P1
-import { emailPrefsOf, mayEmail, unsubscribeUrl } from "../API/retention/mailer.ts"; // COMMS-P1
 import { addPendingAction } from "../API/dashboard/pendingActions.ts";
+import { bridgeClientDeadlines } from "../API/members/legacyDeadlines.ts"; // COMMS-P4
 
 const CLIENTS_COLLECTION = "clients";
-const SUBSCRIPTIONS_COLLECTION = "push_subscriptions";
 const DAY_MS = 86_400_000;
-const FRONTEND_URL = Deno.env.get("FRONTEND_URL") ?? "http://localhost:3000";
-const EMAIL_TYPE = "filing_deadline_reminder";
 
 interface DeadlineEntry {
   priorityId: string;
@@ -109,150 +98,48 @@ async function addOverdueAction(
   });
 }
 
-export async function deadlineReminderSweep(): Promise<void> {
-  const now = new Date();
-  const nowIso = now.toISOString();
+export async function deadlineReminderSweep(now: Date = new Date()): Promise<{ bridged: number; updated: number; overdue: number }> {
   const clients = await getAll(CLIENTS_COLLECTION).catch(() => []);
-
-  let sent = 0;
-  let removed = 0;
+  let bridged = 0;
+  let updated = 0;
+  let overdue = 0;
 
   for (const doc of clients) {
+    const id = String(doc.id ?? "");
+    if (!id) continue;
+    // COMMS-P4: mirror the record's dates into obligations (they send the reminders).
+    const r = await bridgeClientDeadlines({ ...(doc as Record<string, unknown>), id }, now);
+    bridged += r.created;
+    updated += r.updated;
+
     const deadlines = (doc.deadlines ?? {}) as Record<string, DeadlineEntry>;
-    const entries = Object.entries(deadlines);
-    if (entries.length === 0) continue;
-
-    const email = resolveClientEmail(doc as Record<string, unknown>, String(doc.id));
-    if (!email) continue;
-    // Placeholder (seed) members: dates are still tracked, nothing is sent.
-    const placeholder = isPlaceholderDoc(doc);
-
-    const subDoc = await get(SUBSCRIPTIONS_COLLECTION, emailToDocId(email)).catch(() => null);
-    const subscription = subDoc?.subscription as PushSubscription | undefined;
-
-    const jurisdiction = (doc as Record<string, unknown>).jurisdiction;
-    const countryCode = countryCodeFromName(jurisdiction);
-
-    const updatedDeadlines: Record<string, DeadlineEntry> = { ...deadlines };
-    let changed = false;
-
-    for (const [key, entry] of entries) {
+    const countryCode = countryCodeFromName((doc as Record<string, unknown>).jurisdiction);
+    for (const entry of Object.values(deadlines)) {
       if (!entry || typeof entry.date !== "string") continue;
-
       const priority = priorityById(entry.priorityId);
       if (!priority) continue;
-
       // Only priorities for the client's own jurisdiction are actionable.
       if (countryCode && priority.country !== countryCode) continue;
-
       const days = daysUntil(entry.date, now);
-      if (Number.isNaN(days)) continue;
-
-      // ── Overdue → staff escalation, then stop reminding ────────────────────
-      if (days < 0) {
-        await addOverdueAction(
-          String(doc.id),
-          doc as Record<string, unknown>,
-          `Deadline is OVERDUE: ${priority.title} (${entry.date})`,
-          {
-            deadline: entry.date,
-            priorityId: entry.priorityId,
-            sweepKey: `deadline_overdue_${entry.priorityId}_${entry.date}`,
-          },
-        );
-        continue;
-      }
-
-      const offsets = priority.reminderOffsetsDays ?? [];
-      const bucket = currentBucket(offsets, days);
-      if (bucket === null) continue;
-
-      const remindedEmail = Array.isArray(entry.remindedEmailOffsets)
-        ? entry.remindedEmailOffsets
-        : [];
-      const remindedPush = Array.isArray(entry.remindedPushOffsets)
-        ? entry.remindedPushOffsets
-        : [];
-
-      const body =
-        days === 0
-          ? `${priority.title} is due today.`
-          : `${priority.title} is due in ${days} day${days === 1 ? "" : "s"}.`;
-
-      // ── Email reminder ─────────────────────────────────────────────────────
-      let emailProgressed = false;
-      // COMMS-P1: a service email; the reminder unsubscribe stops it (push still goes).
-      if (!remindedEmail.includes(bucket) && mayEmail(emailPrefsOf(doc as Record<string, unknown>), "service")) {
-        try {
-          const emailData: Record<string, unknown> = {
-            ...(doc as Record<string, unknown>),
-            name: (doc as Record<string, unknown>).name ?? email ?? "Client",
-            filingDeadline: entry.date,
-            statusPageUrl: `${FRONTEND_URL}/status`,
-          };
-          const { subject, bodyHtml } = renderLegalEmail(EMAIL_TYPE, emailData);
-          await enqueueEmail(
-            { to: email, subject, html: withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(String(doc.id)) }), placeholder },
-            `deadline_${String(doc.id)}_${entry.priorityId}_${entry.date}_${bucket}`,
-          );
-          remindedEmail.push(bucket);
-          emailProgressed = true;
-        } catch (err) {
-          log(
-            `[deadlineReminder] email enqueue failed for ${email}: ${err instanceof Error ? err.message : err}`,
-            "deadlineReminder",
-          );
-        }
-      }
-
-      // ── Push reminder ──────────────────────────────────────────────────────
-      let pushProgressed = false;
-      if (subscription && !remindedPush.includes(bucket)) {
-        const result = await sendPushNotification(subscription, {
-          title: "Deadline reminder",
-          body,
-          url: `${FRONTEND_URL}/status`,
-        }, { placeholder, email }).catch((err) => {
-          log(
-            `[deadlineReminder] push error for ${email}: ${err instanceof Error ? err.message : err}`,
-            "deadlineReminder",
-          );
-          return { ok: false, gone: false };
-        });
-
-        if (result.gone) {
-          await remove(SUBSCRIPTIONS_COLLECTION, emailToDocId(email)).catch(() => {});
-          removed++;
-        }
-        if (result.ok) {
-          remindedPush.push(bucket);
-          pushProgressed = true;
-        }
-      }
-
-      // Persist each channel's progress independently so a partial failure
-      // never re-sends the channel that already succeeded.
-      if (emailProgressed || pushProgressed) {
-        updatedDeadlines[key] = {
-          ...entry,
-          remindedEmailOffsets: remindedEmail,
-          remindedPushOffsets: remindedPush,
-        };
-        changed = true;
-        sent++;
-      }
-    }
-
-    if (changed) {
-      await patch(CLIENTS_COLLECTION, String(doc.id), {
-        deadlines: updatedDeadlines,
-        updatedAt: nowIso,
-      }).catch(() => {});
+      if (Number.isNaN(days) || days >= 0) continue;
+      // Overdue → staff escalation (no member email: the obligation reminders came before the date).
+      await addOverdueAction(
+        id,
+        doc as Record<string, unknown>,
+        `Deadline is OVERDUE: ${priority.title} (${entry.date})`,
+        {
+          deadline: entry.date,
+          priorityId: entry.priorityId,
+          sweepKey: `deadline_overdue_${entry.priorityId}_${entry.date}`,
+        },
+      );
+      overdue++;
     }
   }
 
   log(
-    `[deadlineReminder] sweep complete — ${sent} reminder(s) sent, ${removed} stale subscription(s) removed`,
+    `[deadlineReminder] sweep complete: ${bridged} date(s) bridged into obligations, ${updated} updated, ${overdue} overdue`,
     "deadlineReminder",
   );
+  return { bridged, updated, overdue };
 }

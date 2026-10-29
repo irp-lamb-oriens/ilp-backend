@@ -15,6 +15,11 @@
  *   check-in     on the monthly anniversary of activatedAt: minutes left + a
  *                0-10 "how likely to recommend" question (/status/feedback?score=N)
  *   nudge        5 days after joining with no call booked
+ *                COMMS-P4: the only member reminder system: dates on the client
+ *                record are bridged into obligations (legacyDeadlines.ts), push
+ *                follows the same stages (one push per member per day), and a
+ *                person who stopped reminder emails still gets the push.
+ *   missing doc  COMMS-P4: a document asked for 3 days ago (closingLoops.ts)
  *   next step    a matter's next step (matter.nextStep or the newest handoff,
  *                same rule as the member Overview) changed since the last sweep;
  *                last seen value kept in `retention_state/ns_<matterId>`.
@@ -25,6 +30,10 @@
 
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
+import remove from "../../db/delete.ts";
+import { sendPushNotification, type PushSubscription } from "../../config/push.ts";
+import { emailToDocId } from "../../helper/auth/otp.ts";
+import { missingDocumentStep } from "./closingLoops.ts"; // COMMS-P4
 import log from "../../helper/log.ts";
 import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import { findRecords, updateRecord } from "../../db/records.ts";
@@ -111,31 +120,81 @@ export function remindable<T extends Obligation>(list: T[]): Array<T & { remindA
     .filter((o) => !!o.remindAt);
 }
 
-async function obligationsStep(to: MemberContact, now: Date, free = false): Promise<number> {
-  const obls = remindable(await findRecords<Obligation & { remindersSent?: string[] }>(COLLECTIONS.obligations, { clientId: to.clientId }));
+// ─── Push (COMMS-P4: push follows the obligations reminders) ──────────────
+
+const SUBSCRIPTIONS = "push_subscriptions";
+
+/** Replaceable in tests. */
+export const obligationPush = {
+  send: (sub: PushSubscription, payload: { title: string; body: string; url?: string }, ctx: { placeholder?: boolean; email?: string | null }) =>
+    sendPushNotification(sub, payload, ctx),
+};
+
+/** Pure: the push text for the dates that reached a reminder today (nearest first). */
+export function obligationPushBody(items: Array<{ title: string; dueLabel: string; daysLeft: number; confirm?: boolean }>): string {
+  const first = items[0];
+  const when = first.confirm ? "soon (ask your lawyer to confirm the date)" : first.daysLeft === 0 ? "today" : first.daysLeft === 1 ? "tomorrow" : `by ${first.dueLabel}`;
+  const lead = `${first.title} may require review ${when}.`;
+  return items.length > 1 ? `${lead} ${items.length - 1} more ${items.length === 2 ? "date is" : "dates are"} on your list.` : lead;
+}
+
+/** One push per member per sweep, for the same dates as the email. Never throws. */
+async function pushObligations(to: MemberContact, items: Array<{ title: string; dueLabel: string; daysLeft: number; confirm?: boolean }>): Promise<boolean> {
+  try {
+    const subDoc = (await get(SUBSCRIPTIONS, emailToDocId(to.email)).catch(() => null)) as { subscription?: PushSubscription } | null;
+    if (!subDoc?.subscription || !items.length) return false;
+    const r = await obligationPush.send(
+      subDoc.subscription,
+      { title: "Deadline reminder", body: obligationPushBody(items), url: `${siteUrl()}/status/deadlines` },
+      { placeholder: to.placeholder, email: to.email },
+    );
+    if (r.gone) await remove(SUBSCRIPTIONS, emailToDocId(to.email)).catch(() => {});
+    return r.ok;
+  } catch (err) {
+    log(`[retention] push for ${to.clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
+    return false;
+  }
+}
+
+/**
+ * Obligations reaching 30 or 7 days: one email (unless the person stopped
+ * reminder emails) and one push (when they turned push on), then the stages
+ * are marked so neither repeats. COMMS-P4: this is the only member reminder
+ * system; dates on the client record are bridged into obligations first
+ * (API/members/legacyDeadlines.ts). `onlyBridged`: people with no membership
+ * or free account whose only dates are bridged ones.
+ */
+async function obligationsStep(to: MemberContact, now: Date, free = false, onlyBridged = false): Promise<{ email: number; push: number }> {
+  const all = await findRecords<Obligation & { remindersSent?: string[]; bridged?: boolean }>(COLLECTIONS.obligations, { clientId: to.clientId });
+  const obls = remindable(onlyBridged ? all.filter((o) => o.bridged === true) : all);
   const reached: Array<{ o: (typeof obls)[number]; stage: "30" | "7"; days: number }> = [];
   for (const o of obls) {
     const days = crDaysUntil(o.remindAt, now);
     const stage = obligationStage(days, o.remindersSent ?? []);
     if (stage) reached.push({ o, stage, days });
   }
-  if (!reached.length) return 0;
+  if (!reached.length) return { email: 0, push: 0 };
   reached.sort((a, b) => a.days - b.days);
-  const mail = obligationsDueEmail({
-    firstName: to.firstName,
-    // Low-confidence research dates are never shown as firm dates (COUNTRIES); a date the person set is theirs.
-    items: reached.map((r) => ({ title: r.o.title, dueLabel: dateLabel(r.o.remindAt), daysLeft: r.days, confirm: r.o.confidence === "low" && !r.o.userDueAt })),
-    askUrl: `${siteUrl()}/status/deadlines`,
-    unsubscribeUrl: await unsubscribeUrl(to.clientId),
-    free,
-  });
-  const sent = await sendOnce(`obligations_${to.clientId}_${crDay(now)}`, to, mail, { kind: "service" });
+  // Low-confidence research dates are never shown as firm dates (COUNTRIES); a date the person set is theirs.
+  const items = reached.map((r) => ({ title: r.o.title, dueLabel: dateLabel(r.o.remindAt), daysLeft: r.days, confirm: r.o.confidence === "low" && !r.o.userDueAt }));
+  let sent = false;
+  if (!to.optOut) {
+    const mail = obligationsDueEmail({
+      firstName: to.firstName,
+      items,
+      askUrl: `${siteUrl()}/status/deadlines`,
+      unsubscribeUrl: await unsubscribeUrl(to.clientId),
+      free,
+    });
+    sent = await sendOnce(`obligations_${to.clientId}_${crDay(now)}`, to, mail, { kind: "service" });
+  }
+  const pushed = await pushObligations(to, items);
   // Mark the stages reached (a "7" also covers a "30" never sent).
   for (const r of reached) {
     const marks = new Set([...(r.o.remindersSent ?? []), r.stage, ...(r.stage === "7" ? ["30"] : [])]);
     await updateRecord(COLLECTIONS.obligations, r.o.id, { remindersSent: [...marks] });
   }
-  return sent ? 1 : 0;
+  return { email: sent ? 1 : 0, push: pushed ? 1 : 0 };
 }
 
 async function checkInStep(to: MemberContact, m: Membership, now: Date): Promise<number> {
@@ -204,7 +263,7 @@ async function nextStepStep(to: MemberContact, now: Date): Promise<number> {
 // ─── Sweep ────────────────────────────────────────────────────────────────
 
 export async function retentionMessagesSweep(now: Date = new Date()): Promise<Record<string, number>> {
-  const out = { obligations: 0, freeReminders: 0, checkins: 0, nudges: 0, nextSteps: 0, skippedOptOut: 0 };
+  const out = { obligations: 0, freeReminders: 0, bridgedReminders: 0, obligationPushes: 0, checkins: 0, nudges: 0, nextSteps: 0, missingDocuments: 0, skippedOptOut: 0 };
   const [active, pastDue] = await Promise.all([
     findRecords<Membership>(COLLECTIONS.memberships, { status: "active" }),
     findRecords<Membership>(COLLECTIONS.memberships, { status: "past_due" }),
@@ -213,17 +272,21 @@ export async function retentionMessagesSweep(now: Date = new Date()): Promise<Re
     try {
       const to = await memberContact(m.clientId, m);
       if (!to) continue;
+      // COMMS-P4: push follows the obligations even when reminder emails are off.
+      const ob = await obligationsStep(to, now);
+      out.obligations += ob.email;
+      out.obligationPushes += ob.push;
       if (to.optOut) {
         out.skippedOptOut++;
         continue;
       }
-      out.obligations += await obligationsStep(to, now);
       // Check-ins and nudges only while the membership is in good standing.
       if (m.status === "active") {
         out.checkins += await checkInStep(to, m, now);
         out.nudges += await nudgeStep(to, m, now);
       }
       out.nextSteps += await nextStepStep(to, now);
+      out.missingDocuments += await missingDocumentStep(to, now); // COMMS-P4
     } catch (err) {
       log(`[retention] ${m.clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
     }
@@ -237,13 +300,30 @@ export async function retentionMessagesSweep(now: Date = new Date()): Promise<Re
     try {
       const to = await memberContact(clientId, c);
       if (!to) continue;
-      if (to.optOut) {
-        out.skippedOptOut++;
-        continue;
-      }
-      out.freeReminders += await obligationsStep(to, now, true);
+      if (to.optOut) out.skippedOptOut++;
+      const ob = await obligationsStep(to, now, true);
+      out.freeReminders += ob.email;
+      out.obligationPushes += ob.push;
     } catch (err) {
       log(`[retention] free account ${clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
+    }
+  }
+  // COMMS-P4: people whose only dates are on their client record (bridged into
+  // obligations by jobs/deadlineReminderSweep.ts) and who are neither members nor
+  // free accounts: the old reminder sweep wrote to them, so the obligations do now.
+  const done = new Set([...members, ...free.map((c) => String(c.id ?? ""))]);
+  const bridged = await findRecords<Obligation & { bridged?: boolean }>(COLLECTIONS.obligations, { bridged: true }).catch(() => []);
+  for (const clientId of new Set(bridged.map((o) => o.clientId))) {
+    if (!clientId || done.has(clientId)) continue;
+    try {
+      const to = await memberContact(clientId);
+      if (!to) continue;
+      if (to.optOut) out.skippedOptOut++;
+      const ob = await obligationsStep(to, now, false, true);
+      out.bridgedReminders += ob.email;
+      out.obligationPushes += ob.push;
+    } catch (err) {
+      log(`[retention] bridged dates ${clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
     }
   }
   return out;

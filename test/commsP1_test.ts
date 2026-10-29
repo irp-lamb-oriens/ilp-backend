@@ -350,7 +350,10 @@ Deno.test("client deadline reminders: footer and unsubscribe link; the reminder 
     const deadlines = { dimex: { priorityId: "CR_RESIDENCY_DIMEX", date: "2026-11-20" } }; // 24 days out: the 30-day reminder
     world.put("clients", "d1", { email: "d1@mailbox-rt.io", name: "Grace", jurisdiction: "Costa Rica", deadlines });
     world.put("clients", "d2", { email: "d2@mailbox-rt.io", name: "Opted", jurisdiction: "Costa Rica", emailOptOut: true, deadlines });
-    await deadlineReminderSweep();
+    // COMMS-P4: the record's dates are bridged into obligations; the obligations reminder is the email.
+    await deadlineReminderSweep(world.now());
+    assertEquals(world.emails().length, 0, "the bridge itself sends nothing");
+    await retentionMessagesSweep(world.now());
     const mails = world.emails();
     assertEquals(mails.map((m) => m.to), ["d1@mailbox-rt.io"]);
     assert(mails[0].html.includes(FOOT) && mails[0].html.includes("/api/retention/unsubscribe?c=d1"));
