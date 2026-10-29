@@ -22,7 +22,9 @@ import { transcribeAudio } from "../chatbot/intelligence/transcription.ts";
 import { createCalendarEvent, fetchMeetNotes } from "../../helper/calendar.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import { resolveEmailCc, resolveEmailBcc } from "./automation/recipientRules.ts";
-import { renderLegalEmail, legalEmailTypes } from "./automation/renderLegalEmail.ts";
+import { emailClassForSend, renderLegalEmail, legalEmailTypes } from "./automation/renderLegalEmail.ts";
+import { emailPrefsOf, isSuppressed, mayEmail, unsubscribeUrl } from "../retention/mailer.ts"; // COMMS-P1
+import { signInCodeEmail, withLegalFooter } from "../../helper/emailTemplates.ts"; // COMMS-P1
 
 import {
   buildClientSummary,
@@ -116,19 +118,8 @@ export default (app: Express) => {
       const code = issued.code;
 
       try {
-        await sendEmailTransport({
-          to: email,
-          subject: "Your ILP Dashboard Login Code",
-          html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 24px">
-            <h1 style="color:#123b5d;font-size:24px;margin:0">ILP Dashboard</h1>
-            <p style="color:#4a5a66;font-size:14px;margin-top:8px">Secure Login Code</p>
-            <div style="background:#eff7fb;border-radius:12px;padding:32px;text-align:center">
-              <p style="color:#202a33;font-size:16px;margin:0 0 16px">Your verification code is:</p>
-              <div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#123b5d;font-family:monospace;padding:16px;background:white;border-radius:8px;display:inline-block">${code}</div>
-              <p style="color:#7a8a96;font-size:13px;margin-top:16px">This code expires in 10 minutes.</p>
-            </div>
-          </div>`,
-        });
+        const mail = signInCodeEmail({ portal: "staff", code }); // COMMS-P1: legal footer
+        await sendEmailTransport({ to: email, subject: mail.subject, html: mail.html, text: mail.text });
         log(`[dashboard] OTP sent to ${email}`);
       } catch (err) {
         log(`[dashboard] Failed to send OTP email: ${err instanceof Error ? err.message : err}`);
@@ -1270,6 +1261,20 @@ export default (app: Express) => {
       if (!doc) return res.status(404).json({ error: "Client not found." });
 
       const clientEmail = resolveClientEmail(doc, id);
+      // COMMS-P1: honour the reminder unsubscribe (service and marketing) and
+      // marketing consent / address suppression (outreach campaigns).
+      const emailClass = emailClassForSend(emailType, campaign);
+      const prefs = emailPrefsOf(doc);
+      const suppressed = emailClass === "marketing" && await isSuppressed(clientEmail);
+      if (!mayEmail({ ...prefs, suppressed }, emailClass)) {
+        return res.status(409).json({
+          error: prefs.optOut
+            ? "This person turned off ILP emails with the unsubscribe link. Contact them another way, or ask them to turn emails back on."
+            : "This person has not agreed to marketing emails, so outreach emails cannot be sent to them.",
+          blocked: prefs.optOut ? "opted_out" : "no_marketing_consent",
+          emailClass,
+        });
+      }
       const data = buildLegalEmailData(doc, id, clientEmail);
       const { subject, bodyHtml: renderedHtml } = renderLegalEmail(emailType, data);
       // JOURNEYS: every staff email is an outreach (send → open → click → check → join):
@@ -1291,6 +1296,11 @@ export default (app: Express) => {
         log(`[dashboard] outreach record for ${id} failed: ${err instanceof Error ? err.message : err}`);
       }
 
+      // COMMS-P1: marketing sends carry the signed unsubscribe link.
+      if (emailClass === "marketing") {
+        bodyHtml = withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(id), unsubscribeLabel: "Stop these emails" });
+      }
+
       const cc = resolveEmailCc(emailType);
       const bcc = resolveEmailBcc(emailType);
 
@@ -1303,6 +1313,7 @@ export default (app: Express) => {
       const activityEntry: Record<string, unknown> = {
         type: "email_triggered",
         emailType,
+        emailClass,
         actor,
         timestamp: nowIso,
       };
