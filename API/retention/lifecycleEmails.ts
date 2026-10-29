@@ -9,6 +9,8 @@
  *   cancellation confirmed (member asked to cancel)
  *   renewal receipt  (a new paid period started)
  *   join confirmed   (membership activated: renewal terms and how to cancel, P7)
+ *   cancel undone    (COMMS-P4, closingLoops.ts) the membership continues
+ *   membership ended (COMMS-P4, closingLoops.ts) member and assigned lawyer
  *   renewal notice   7 days before each renewal charge: amount, date, cancel
  *                    link (COMMS-P1, US automatic-renewal laws), from the
  *                    daily retention sweep; the CSM renewal task stays
@@ -31,6 +33,7 @@ import {
 import { COLLECTIONS, PLAN_STANDARD } from "../../schemas/contracts.ts";
 import { daysPastDue, GRACE_DAYS, lifecycleHooks, type MembershipDoc } from "../payments/lifecycle.ts";
 import { dateLabel, memberContact, sendOnce, siteUrl } from "./mailer.ts";
+import { sendCancelUndone, sendMembershipEnded } from "./closingLoops.ts"; // COMMS-P4
 
 const DAY_MS = 86_400_000;
 const moneyUrl = () => `${siteUrl()}/status/money`;
@@ -203,5 +206,12 @@ export function installLifecycleEmailHooks(): void {
   };
   lifecycleHooks.onCancelRequested = async (m) => {
     await sendCancelConfirmed(m);
+  };
+  // COMMS-P4: cancellation undone; membership ended (member and assigned lawyer).
+  lifecycleHooks.onCancelUndone = async (m) => {
+    await sendCancelUndone(m);
+  };
+  lifecycleHooks.onCancelled = async (m) => {
+    await sendMembershipEnded(m);
   };
 }

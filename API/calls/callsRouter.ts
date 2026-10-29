@@ -37,6 +37,7 @@ import { getRecord } from "../members/service.ts";
 import { transcribeAudio } from "../chatbot/intelligence/transcription.ts";
 import { draftSuggestion } from "../provider/lawyerHomeRoutes.ts";
 import { canChange, joinOpen, noShowCheck } from "./callLogic.ts";
+import { afterNoShow } from "../retention/closingLoops.ts"; // COMMS-P4
 import {
   attachMeeting,
   type CallRecord,
@@ -144,8 +145,10 @@ export default function callsRouter(app: Express) {
       if (!c) return;
       const ok = noShowCheck(c, new Date());
       if (!ok.ok) return res.status(409).json({ error: ok.reason });
-      const { call, already } = await markNoShow(c, { email: lawyerEmail(req), role: "lawyer" });
+      const { call, already, membership } = await markNoShow(c, { email: lawyerEmail(req), role: "lawyer" });
       if (already) return res.status(409).json({ error: "This call is already marked as a no-show." });
+      // COMMS-P4: member email (minutes, rebooking), lawyer confirmation, CSM task and bell.
+      await afterNoShow(call, membership);
       res.json({ id: call.id, status: call.status, noShowAt: (call as unknown as Record<string, unknown>).noShowAt ?? null });
     }),
   );

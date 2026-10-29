@@ -259,6 +259,7 @@ export const lifecycleHooks: {
   onPastDue?: (m: MembershipDoc) => Promise<void>;
   onCancelled?: (m: MembershipDoc) => Promise<void>;
   onCancelRequested?: (m: MembershipDoc) => Promise<void>;
+  onCancelUndone?: (m: MembershipDoc) => Promise<void>; // COMMS-P4: "your membership continues"
 } = {};
 
 export async function runHook(name: keyof typeof lifecycleHooks, m: MembershipDoc, ref = ""): Promise<void> {
@@ -412,6 +413,8 @@ export async function onSubscriptionUpdated(sub: Doc): Promise<string> {
     updatedAt: new Date().toISOString(),
   });
   await auditLog({ actor: STRIPE, action: flag ? "membership.cancel_requested" : "membership.cancel_undone", target: `memberships/${m.id}`, meta: { via: "stripe" } });
+  // COMMS-P4: undone from the Stripe billing page: the member is told the membership continues.
+  if (!flag) await runHook("onCancelUndone", { ...m, cancelAtPeriodEnd: false } as MembershipDoc);
   return flag ? "cancel_at_period_end" : "cancel undone";
 }
 

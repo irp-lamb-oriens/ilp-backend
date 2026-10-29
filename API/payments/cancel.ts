@@ -186,6 +186,8 @@ export function registerCancelRoutes(app: Express) {
       const now = new Date().toISOString();
       await patch(COLLECTIONS.memberships, m.id, { cancelAtPeriodEnd: false, cancelReason: null, cancelRequestedAt: null, updatedAt: now });
       await auditLog({ actor: actorOf(req), action: "membership.cancel_undone", target: `memberships/${m.id}` });
+      // COMMS-P4: "your membership continues" email (once per undone request).
+      await runHook("onCancelUndone", { ...m, cancelAtPeriodEnd: false } as MembershipDoc);
       // The save call is no longer needed.
       const taskId = taskIdFor(SAVE_EVENT, { clientId: id, dedupeKey: saveTaskKey(m) });
       await updateRecord(COLLECTIONS.csmTasks, taskId, { status: "cancelled", outcome: "Member kept the membership", closedAt: now })

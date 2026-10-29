@@ -106,6 +106,7 @@ import {
   type ThreadItem,
 } from "./memberLogic.ts";
 import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
+import { maybeSendProfileReady } from "../retention/closingLoops.ts"; // COMMS-P4
 
 const CLIENTS = "clients";
 const DOCUMENTS = DOCUMENTS_COLLECTION;
@@ -459,7 +460,11 @@ export function registerMemberHomeRoutes(app: Express) {
       // whichever place older code wrote it.
       await patch(CLIENTS, id, { ...updates, clientFields, updatedAt: nowIso() });
       const bundle = await memberBundle(id);
-      if (bundle.completeness.consultationReady) await trackServerStep("profile_ready", { clientId: id }); // JOURNEYS
+      if (bundle.completeness.consultationReady) {
+        await trackServerStep("profile_ready", { clientId: id }); // JOURNEYS
+        // COMMS-P4: profile ready and no call booked yet: "book your first call" (once per membership).
+        if (!isStaff(req)) await maybeSendProfileReady(id);
+      }
       if (newFindings) log(`[member-home] ${newFindings} obligations added from the country answers of ${id}`);
       res.json({ completeness: bundle.completeness, newObligations: newFindings });
     }),

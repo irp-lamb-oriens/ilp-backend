@@ -8,6 +8,7 @@
  *    records each key, and the email queue dedupes on (consultation, key, role).
  *    Which reminder is due is decided by `reminderToSend` (callLogic.ts, tested).
  * 3. REL: calls nobody wrapped up get a CSM task ("call.outcome_missing").
+ * 4. COMMS-P4: completed calls not rated 2 hours after the end: one rating request email.
  * 2. Calls that ended 10 minutes to 24 hours ago with recording consent and a
  *    Calendar event but no transcript: try to read the Meet transcript and
  *    draft a suggested summary, so the lawyer finds it ready on the call page.
@@ -33,6 +34,7 @@ import { draftSuggestion } from "../API/provider/lawyerHomeRoutes.ts";
 import { sendPreCallEmail } from "../API/routing/precall.ts"; // ROUTING
 import { salesEmails } from "../API/routing/service.ts"; // ROUTING
 import { sendSummaryReady, summaryFollowups } from "../API/lawyerComms/notify.ts"; // COMMS-P2
+import { ratingRequests } from "../API/retention/closingLoops.ts"; // COMMS-P4
 
 const HOUR = 3_600_000;
 
@@ -119,6 +121,10 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     });
     if (ids.length) unresolved++;
   }
+
+  // COMMS-P4: completed calls 2 hours to 3 days old and not rated yet: ask the member once (service email).
+  const completed = open.filter((x) => x.status === "completed");
+  await ratingRequests(completed, now).catch((err) => log(`[callReminders] rating requests: ${err instanceof Error ? err.message : err}`, "error"));
 
   // COMMS-P2: summary still not confirmed: lawyer reminder at 24 h, CSM task at 48 h.
   await summaryFollowups(now).catch((err) => log(`[callReminders] summary follow-ups: ${err instanceof Error ? err.message : err}`, "error"));

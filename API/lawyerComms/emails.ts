@@ -314,3 +314,32 @@ export function coachingEmail(o: {
     notes: ["Comments are edited to remove names and contact details. Only you and the ILP team see this feedback, and members never see star scores."],
   });
 }
+
+// ─── COMMS-P4: member closing loops (lawyer side) ──────────────────────────
+
+/** The lawyer marked a no-show: confirmation and what happens next. */
+export function noShowLawyerEmail(o: { firstName?: string; memberName: string; whenLabel: string; url: string }): MemberEmail {
+  return lawyerEmailLayout({
+    subject: `No-show recorded: ${o.memberName}, ${o.whenLabel}`,
+    firstName: o.firstName,
+    paragraphs: [
+      `We recorded that ${o.memberName} did not join your call of ${o.whenLabel}. The call is closed and counts against the member's plan.`,
+      "You do not need to do anything. The member's CSM contacts them today to help them book a new time, and the new call shows on your Today page when it is booked.",
+    ],
+    cta: { label: "Open Today", url: o.url },
+  });
+}
+
+/** A member assigned to the lawyer has ended their membership. */
+export function membershipEndedLawyerEmail(o: { firstName?: string; memberName: string; endedOn: string; url: string }): MemberEmail {
+  return lawyerEmailLayout({
+    subject: `Membership ended: ${o.memberName}`,
+    firstName: o.firstName,
+    paragraphs: [
+      `${o.memberName}'s ILP membership ended on ${o.endedOn}. They can no longer book calls, and any calls they had booked with you after that date are cancelled (you got a separate email for each).`,
+      "Quotes and work already agreed with the member stay as they are; the member's CSM contacts you if anything changes. Fees ILP owes you for past work are paid as usual.",
+    ],
+    cta: { label: "Open your clients", url: o.url },
+    notes: ["Please delete any personal data about this member that you keep outside the ILP portal and no longer need."],
+  });
+}

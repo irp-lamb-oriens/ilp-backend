@@ -27,6 +27,7 @@ import { markRenewalPaid, membershipById } from "./lifecycle.ts";
 import { registerCancelRoutes } from "./cancel.ts";
 import { installLifecycleEmailHooks } from "../retention/lifecycleEmails.ts";
 import { registerRetentionRoutes } from "../retention/retentionRouter.ts";
+import { sendManualPaymentInstructions } from "../retention/closingLoops.ts"; // COMMS-P4
 import { parseJoinConsents } from "../privacy/policy.ts";
 import { recordJoinConsents } from "../privacy/privacyRouter.ts";
 import { parseJoinDetails } from "./joinIntake.ts";
@@ -168,6 +169,8 @@ export default function paymentsRouter(app: Express) {
           });
           status = m?.status ?? status;
         }
+        // COMMS-P4: manual mode, still unpaid: email what to pay and how (once per membership).
+        if (status === "pending") await sendManualPaymentInstructions(membership);
         res.status(201).json({ mode, token, status });
       } catch (err) {
         if (err instanceof JoinError) return res.status(err.status).json({ error: err.message });

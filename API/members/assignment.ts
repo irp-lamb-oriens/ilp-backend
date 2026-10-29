@@ -49,6 +49,7 @@ import {
 import { claimSlot, releaseSlot, withLawyerSlots } from "../calls/slotClaims.ts";
 import { routeAndAssign } from "../routing/service.ts"; // ROUTING
 import { sendMemberAssigned } from "../lawyerComms/notify.ts"; // COMMS-P2
+import { sendLawyerAssignedToMember } from "../retention/closingLoops.ts"; // COMMS-P4
 
 type Doc = Record<string, unknown>;
 export type Actor = { email: string; role: "staff" | "lawyer" | "client" | "system" };
@@ -188,6 +189,8 @@ export async function assignMember(clientId: string, to: string | null, actor: A
     log(`[assignment] ${clientId}: ${previous ?? "none"} → ${to ?? "none"} (moved ${result.moved.length}, cancelled ${result.cancelled.length})`);
     // COMMS-P2: the new lawyer gets the member's profile summary by email.
     if (to) await sendMemberAssigned(clientId, to);
+    // COMMS-P4: the member's first lawyer: the member is told who it is (once per member, ever).
+    if (to && !previous) await sendLawyerAssignedToMember(clientId, to);
   }
   return result;
 }

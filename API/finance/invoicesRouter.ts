@@ -11,6 +11,7 @@ import auditLog, { auditFrom } from "../../helper/auditLog.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
 import { invoiceReadyEmail } from "../../helper/emailTemplates.ts"; // COMMS-P1
 import { siteUrl } from "../retention/mailer.ts"; // COMMS-P1
+import { sendInvoicePaid } from "../retention/closingLoops.ts"; // COMMS-P4
 import type { SessionUser } from "../../helper/auth/types.ts";
 
 /**
@@ -407,6 +408,8 @@ export default function invoicesRouter(app: Express) {
           balanceDue: balanceDue(updated),
         },
       });
+      // COMMS-P4: the payments now cover the invoice: receipt to the client (once per invoice and total).
+      if (balanceDue(existing) > 0 && balanceDue(updated) <= 0) await sendInvoicePaid(id, updated, money(existing.total));
 
       res.json({ ok: true, invoice: decorate(updated, id) });
     })
@@ -481,6 +484,8 @@ export default function invoicesRouter(app: Express) {
           balanceDue: balanceDue(updated),
         },
       });
+      // COMMS-P4: marked paid in full: receipt to the client (once per invoice and total).
+      if (paid && balanceDue(updated) <= 0) await sendInvoicePaid(id, updated, money(existing.total));
 
       res.json({ ok: true, invoice: decorate(updated, id) });
     })

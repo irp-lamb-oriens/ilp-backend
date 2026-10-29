@@ -10,12 +10,14 @@
  *      Renewal notice 7 days before each renewal (transactional, COMMS-P1).
  *   2. Retention (API/retention/retentionMessages.ts, respects emailOptOut):
  *      obligations at 30 / 7 days, monthly check-in + 0-10 question,
- *      5-day booking nudge, next-step changed.
+ *      5-day booking nudge, next-step changed, COMMS-P4 missing document (3 days).
+ *   3. COMMS-P4: quote unanswered 5 days (closingLoops.ts), every client with a waiting quote.
  */
 
 import log from "../helper/log.ts";
 import { dunningSweep, installLifecycleEmailHooks, renewalNoticeSweep } from "../API/retention/lifecycleEmails.ts";
 import { retentionMessagesSweep } from "../API/retention/retentionMessages.ts";
+import { quoteReminderSweep } from "../API/retention/closingLoops.ts"; // COMMS-P4
 
 export async function retentionSweep(now: Date = new Date()): Promise<Record<string, number>> {
   installLifecycleEmailHooks();
@@ -36,6 +38,8 @@ export async function retentionSweep(now: Date = new Date()): Promise<Record<str
     out.retention = -1;
     log(`[retentionSweep] retention failed: ${err instanceof Error ? err.message : err}`, "error");
   }
+  // COMMS-P4: quotes waiting 5 days get one reminder each (service email).
+  await step("quoteReminders", () => quoteReminderSweep(now));
   log(`[retentionSweep] ${JSON.stringify(out)}`, "retention");
   return out;
 }
