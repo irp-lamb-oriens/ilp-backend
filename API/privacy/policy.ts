@@ -269,6 +269,7 @@ export interface RetentionConfig {
   leadMonths: number; // free-check leads that never became members
   errorLogDays: number;
   funnelMonths: number;
+  journeyMonths: number; // JOURNEYS: raw journey events, outreach records, experiment exposures
   transcriptMonthsAfterEnd: number; // after the membership ended
   chatbotThreadMonths: number; // public website chatbot, never linked to a member
   emailQueueDays: number; // sent / dead email copies
@@ -281,6 +282,7 @@ export const RETENTION_DEFAULTS: RetentionConfig = {
   leadMonths: 12,
   errorLogDays: 90,
   funnelMonths: 13,
+  journeyMonths: 13,
   transcriptMonthsAfterEnd: 24,
   chatbotThreadMonths: 6,
   emailQueueDays: 90,
@@ -292,6 +294,7 @@ const RETENTION_ENV: Record<keyof RetentionConfig, string> = {
   leadMonths: "RETENTION_LEAD_MONTHS",
   errorLogDays: "RETENTION_ERROR_LOG_DAYS",
   funnelMonths: "RETENTION_FUNNEL_MONTHS",
+  journeyMonths: "RETENTION_JOURNEY_MONTHS",
   transcriptMonthsAfterEnd: "RETENTION_TRANSCRIPT_MONTHS",
   chatbotThreadMonths: "RETENTION_CHATBOT_MONTHS",
   emailQueueDays: "RETENTION_EMAIL_QUEUE_DAYS",
@@ -393,6 +396,8 @@ export const ERASURE_PLAN: readonly ErasureRule[] = [
   { collection: "member_documents", select: [{ by: "field", field: "clientId" }], action: "delete", why: "Uploaded identity and legal documents; the stored file is deleted too." },
   { collection: "member_feedback", select: [{ by: "field", field: "clientId" }], action: "delete", why: "Ratings and comments." },
   { collection: "funnel_events", select: [{ by: "field", field: "clientId" }, { by: "anonId" }], action: "delete", why: "Funnel events linked to the member or their browser id." },
+  { collection: "journey_events", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: page views and funnel steps linked to the member (the browser id is random; aggregates keep no person)." },
+  { collection: "outreach", select: [{ by: "field", field: "clientId" }], action: "delete", why: "JOURNEYS: outbound contact records (hashed email, campaign, opens and clicks)." },
   { collection: "leads", select: [{ by: "leadOf" }], action: "delete", why: "Free-check answers." },
   { collection: "push_subscriptions", select: [{ by: "emailDocId" }], action: "delete", why: "Browser push endpoint." },
   { collection: "client_status_sessions", select: [{ by: "email", field: "email" }], action: "delete", why: "Sign-in sessions." },

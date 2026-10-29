@@ -9,6 +9,9 @@
  *   leads                free-check leads never converted        RETENTION_LEAD_MONTHS (12)
  *   error_log            errors and CSP reports                  RETENTION_ERROR_LOG_DAYS (90)
  *   funnel_events        anonymous funnel beacons                RETENTION_FUNNEL_MONTHS (13)
+ *   journey_events,      JOURNEYS raw events, outreach records   RETENTION_JOURNEY_MONTHS (13)
+ *   outreach,            and experiment exposures (journey_daily
+ *   journey_exposures    aggregates are kept: no personal data)
  *   *_otps, *_sessions,  expired login codes, sessions and       RETENTION_SESSION_GRACE_DAYS (1)
  *   join_sessions,       join hand-off tokens, unused download
  *   download_tickets,    tickets (60 s, single use; AUTH), and
@@ -70,6 +73,10 @@ export function retentionTargets(cfg: RetentionConfig, now: Date): RetentionTarg
     },
     { name: "error log", collection: "error_log", field: "at", cutoff: daysBefore(now, cfg.errorLogDays) },
     { name: "funnel events", collection: COLLECTIONS.funnelEvents, field: "at", cutoff: monthsBefore(now, cfg.funnelMonths) },
+    // JOURNEYS: raw events, outreach records and experiment exposures (journey_daily aggregates are kept).
+    { name: "journey events", collection: COLLECTIONS.journeyEvents, field: "at", cutoff: monthsBefore(now, cfg.journeyMonths) },
+    { name: "outreach records", collection: COLLECTIONS.outreach, field: "sentAt", cutoff: monthsBefore(now, cfg.journeyMonths) },
+    { name: "journey exposures", collection: COLLECTIONS.journeyExposures, field: "firstAt", cutoff: monthsBefore(now, cfg.journeyMonths) },
     ...sessionTargets,
     {
       name: "sent email copies",
