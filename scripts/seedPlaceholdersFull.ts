@@ -32,6 +32,7 @@
  *   --config=auto|always|never  catalog collections: auto = only when the collection has no real docs
  *   --with-files              upload a tiny placeholder PDF per document (needs DOCUMENT_BUCKET)
  *   --concurrency=N           parallel writes, default 8
+ *   --no-journeys             skip the JOURNEYS data (journey events, daily rows, experiments, outreach)
  *   --no-prune                keep this batch's docs that the new plan no longer contains
  *   --confirm-project=<id>    required for a real run; must equal the service account's project
  * Env:
@@ -61,6 +62,7 @@ import { putObject } from "../helper/storage.ts";
 import { assertPlaceholderDoc, assertPlaceholderId, isPlaceholderDoc, isReservedEmail } from "../helper/placeholder.ts";
 import { buildPlaceholderData, countDocs, diversityReport, type Doc, readyShare, type SeedData, type SeedSize, SIZES } from "./placeholderData.ts";
 import { pool, printTable, selectForDeletion } from "./placeholderOps.ts";
+import { addJourneyData } from "./journeyPlaceholderData.ts"; // JOURNEYS
 
 export interface CliOptions {
   size: SeedSize;
@@ -71,6 +73,8 @@ export interface CliOptions {
   withFiles: boolean;
   concurrency: number;
   prune: boolean;
+  /** JOURNEYS: add ~6 weeks of journeys, experiments and outreach (default on; --no-journeys). */
+  journeys: boolean;
   confirmProject?: string;
   memberEmail?: string;
   lawyerEmail?: string;
@@ -102,6 +106,7 @@ export function parseArgs(args: string[], env: (k: string) => string | undefined
     dryRun: flag("dry-run") === "true" || args.includes("-n"),
     withFiles: flag("with-files") === "true",
     prune: flag("no-prune") !== "true",
+    journeys: flag("no-journeys") !== "true",
     confirmProject: flag("confirm-project"),
     memberEmail: email("PLACEHOLDER_MEMBER_EMAIL"),
     lawyerEmail: email("PLACEHOLDER_LAWYER_EMAIL"),
@@ -179,6 +184,7 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   const data = buildPlaceholderData({
     size: o.size, seed: o.seed, batch: o.batch, memberEmail: o.memberEmail, lawyerEmail: o.lawyerEmail, csmEmail: o.csmEmail, withFiles: o.withFiles,
   });
+  if (o.journeys) addJourneyData(data, { seed: o.seed });
   const writes = plannedWrites(data);
   checkWrites(writes, data.aliasClientId);
   for (const list of Object.values(data.config)) checkWrites(list.map((d) => ({ collection: "config", id: String(d.id), doc: d })), null);

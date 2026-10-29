@@ -48,6 +48,7 @@ import { commitFieldWrite } from "../helper/firestore/firestoreService.ts";
 import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { emailToDocId } from "../helper/auth/otp.ts";
 import { type Area, AREAS, buildPlaceholderData, type Doc, type SeedData } from "./placeholderData.ts";
+import { addJourneyData } from "./journeyPlaceholderData.ts"; // JOURNEYS
 import { pool, printTable, selectForDeletion } from "./placeholderOps.ts";
 import {
   accountCounts,
@@ -133,7 +134,7 @@ export function nameOf(doc: Doc | null, email: string): { first: string; last: s
 export function buildAccountData(o: AccountCli, ids: AccountIds, real: { lawyer: Doc | null; member: Doc | null }, now?: Date): SeedData {
   const lawyerName = nameOf(real.lawyer, o.lawyerEmail);
   const areas = areasOf(real.lawyer);
-  return buildPlaceholderData({
+  const data = buildPlaceholderData({
     size: "pilot",
     seed: o.seed,
     now,
@@ -150,6 +151,9 @@ export function buildAccountData(o: AccountCli, ids: AccountIds, real: { lawyer:
       csmShare: 0.35,
     },
   });
+  // JOURNEYS: journeys, experiments and outreach around the same people.
+  addJourneyData(data, { seed: o.seed });
+  return data;
 }
 
 function preview(v: unknown, depth = 0): unknown {
