@@ -1,23 +1,19 @@
 /**
  * API/routing/notifications.ts — staff notifications (the bell) (ROUTING).
  * ──────────────────────────────────────────────────────────────────────────
- * One doc per notification in `staff_notifications`, deduplicated by key.
- * Every staff member sees every notification; `readBy` holds who read it.
+ * COMMS-P3: notifications now live in the shared `notifications` collection
+ * (API/notifications/store.ts) on the "staff:*" channel, deduplicated by key;
+ * older rows in `staff_notifications` are still shown. `readBy` holds who read it.
  * `notifyStaff` also sends one email to the staff lists (ADMIN_EMAILS,
  * CSM_EMAILS, STAFF_EMAILS, DEFAULT_CSM_EMAIL; TEAM_CC when all are empty).
  */
 
-import get from "../../db/get.ts";
-import put from "../../db/put.ts";
-import getAll from "../../db/getAll.ts";
-import log from "../../helper/log.ts";
-import { enqueueEmail } from "../../helper/emailQueue.ts";
 import { TEAM_CC } from "../../helper/team.ts";
-import { adminEmails } from "../../helper/auth/roles.ts";
-import { COLLECTIONS, type StaffNotification } from "../../schemas/contracts.ts";
+import { adminEmails, staffRoleFor } from "../../helper/auth/roles.ts";
+import { bellFor, markRead as markReadShared, notify, type Reader } from "../notifications/store.ts";
+import { bookClientIds } from "../csm/book.ts";
+import type { StaffNotification } from "../../schemas/contracts.ts";
 import { staffNotificationEmail } from "./emails.ts";
-
-type Doc = Record<string, unknown>;
 
 const list = (name: string) =>
   (Deno.env.get(name) ?? "").split(/[,;\s]+/).map((e) => e.trim().replace(/^["']+|["']+$/g, "").toLowerCase()).filter((e) => e.includes("@"));
@@ -45,56 +41,43 @@ export interface NotifyInput {
   email?: boolean; // also email the staff lists (default true)
 }
 
-/** Create the notification once (and email staff once). Returns null when it already existed. Never throws. */
+/**
+ * Create the notification once (and email staff once). Returns null when it already existed. Never throws.
+ * COMMS-P3: stored in the shared `notifications` collection on the "staff:*" channel
+ * (API/notifications/store.ts); older rows in `staff_notifications` are still read.
+ */
 export async function notifyStaff(n: NotifyInput): Promise<StaffNotification | null> {
-  try {
-    const id = notificationIdFor(n.key);
-    if (await get(COLLECTIONS.staffNotifications, id).catch(() => null)) return null;
-    const doc: StaffNotification = {
-      id,
-      kind: n.kind,
-      title: n.title,
-      ...(n.body ? { body: n.body } : {}),
-      ...(n.link ? { link: n.link } : {}),
-      ...(n.clientId ? { clientId: n.clientId } : {}),
-      ...(n.matterId ? { matterId: n.matterId } : {}),
-      createdAt: new Date().toISOString(),
-      readBy: [],
-      ...(n.placeholder ? { placeholder: true } : {}),
-    };
-    await put(COLLECTIONS.staffNotifications, id, doc as unknown as Doc);
-    if (n.email !== false) {
-      const frontend = (Deno.env.get("FRONTEND_URL") ?? "http://localhost:3000").replace(/\/$/, "");
-      const mail = staffNotificationEmail({ title: n.title, body: n.body, url: n.link ? `${frontend}${n.link}` : `${frontend}/dashboard` });
-      await enqueueEmail({ to: staffAlertRecipients().join(", "), ...mail, placeholder: n.placeholder }, `staff_${id}`);
-    }
-    return doc;
-  } catch (err) {
-    log(`[routing] staff notification ${n.key} failed: ${err instanceof Error ? err.message : err}`, "error");
-    return null;
-  }
+  const frontend = (Deno.env.get("FRONTEND_URL") ?? "http://localhost:3000").replace(/\/$/, "");
+  const mail = n.email !== false
+    ? { to: staffAlertRecipients().join(", "), ...staffNotificationEmail({ title: n.title, body: n.body, url: n.link ? `${frontend}${n.link}` : `${frontend}/dashboard` }) }
+    : undefined;
+  const doc = await notify({
+    key: n.key,
+    kind: n.kind,
+    to: "staff:*",
+    title: n.title,
+    body: n.body,
+    link: n.link,
+    clientId: n.clientId,
+    matterId: n.matterId,
+    severity: n.kind === "routing.no_match" ? "urgent" : "action",
+    placeholder: n.placeholder,
+    email: mail,
+  });
+  if (!doc) return null;
+  return { id: doc.id, kind: doc.kind, title: doc.title, body: doc.body, link: doc.link, clientId: doc.clientId, matterId: doc.matterId, createdAt: doc.createdAt, readBy: doc.readBy, placeholder: doc.placeholder };
 }
 
-/** Newest first, at most `limit`, with the unread count for this staff email. */
+/** Newest first, at most `limit`, with the unread count for this staff email (COMMS-P3: the shared bell). */
 export async function notificationsFor(email: string, limit = 30): Promise<{ items: Array<StaffNotification & { read: boolean }>; unread: number }> {
-  const me = email.trim().toLowerCase();
-  const rows = ((await getAll(COLLECTIONS.staffNotifications).catch(() => [])) as unknown as StaffNotification[])
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  const withRead = rows.map((r) => ({ ...r, readBy: Array.isArray(r.readBy) ? r.readBy : [], read: Array.isArray(r.readBy) && r.readBy.includes(me) }));
-  return { items: withRead.slice(0, limit), unread: withRead.filter((r) => !r.read).length };
+  const role = staffRoleFor(email);
+  const reader: Reader = { role, id: email, ...(role === "csm" ? { bookClientIds: await bookClientIds(email) } : {}) };
+  return await bellFor(reader, limit) as unknown as { items: Array<StaffNotification & { read: boolean }>; unread: number };
 }
 
 /** Mark notifications read for one staff email (all when ids is empty). */
 export async function markRead(email: string, ids: string[]): Promise<number> {
-  const me = email.trim().toLowerCase();
-  const rows = (await getAll(COLLECTIONS.staffNotifications).catch(() => [])) as unknown as StaffNotification[];
-  let n = 0;
-  for (const r of rows) {
-    if (ids.length && !ids.includes(r.id)) continue;
-    const readBy = Array.isArray(r.readBy) ? r.readBy : [];
-    if (readBy.includes(me)) continue;
-    await put(COLLECTIONS.staffNotifications, r.id, { readBy: [...readBy, me] });
-    n++;
-  }
-  return n;
+  const role = staffRoleFor(email);
+  const reader: Reader = { role, id: email, ...(role === "csm" ? { bookClientIds: await bookClientIds(email) } : {}) };
+  return await markReadShared(reader, ids);
 }

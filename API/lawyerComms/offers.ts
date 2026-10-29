@@ -35,6 +35,7 @@ import { isClosed } from "../opportunities/logic.ts";
 import { lawyerFacts } from "../routing/service.ts";
 import { loadSpecialties } from "../routing/specialties.ts";
 import { notifyStaff } from "../routing/notifications.ts";
+import { channelFor, notify } from "../notifications/store.ts"; // COMMS-P3
 import { memberCountry } from "../calls/callService.ts";
 import { workOfferEmail } from "./emails.ts";
 import { lawyerContact, lawyerUrl, sendLawyerOnce } from "./notify.ts";
@@ -147,6 +148,8 @@ export async function offerOpportunity(
     };
     await put(COLLECTIONS.workOffers, offer.id, offer as unknown as Doc);
     offers.push(offer);
+    // COMMS-P3: the lawyer's bell (no member name, like the portal).
+    await notify({ key: `lawyer_work_offer_${offer.id}`, kind: "work.offered", to: channelFor("lawyer", pid), title: `New work offered: ${offer.title}`, body: `${areaLabelOf(offer.area)}, ${COUNTRIES[country].name}. Accept or decline in New work.`, link: "/lawyer/work", severity: "action", placeholder: !!offer.placeholder });
     const to = await lawyerContact(pid);
     if (to) {
       const mail = workOfferEmail({

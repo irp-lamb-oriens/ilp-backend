@@ -286,7 +286,7 @@ Deno.test("licence expiring: 60 and 30 days before, lawyer and staff, once per s
     const staff = world.emails().filter((x) => String(x.to).includes(STAFF));
     assertEquals(staff.length, 2);
     assert(staff[0].subject.includes("Lawyer licence expires in 59 days: ANA Mora, Costa Rica"));
-    assertEquals(world.all("staff_notifications").length, 2);
+    assertEquals(world.all("notifications").filter((n) => n.to === "staff:*").length, 2);
   } finally {
     world.restore();
   }
@@ -409,7 +409,7 @@ Deno.test("coaching: constructive email with themes and a call offer, staff aler
     assert(!PUNITIVE.test(m[0].text), "never punitive");
     for (const secret of ["77.5", "jargon, I did", "rushed."]) assert(!t.includes(secret), `no ${secret}`);
     checkLawyerMail(m[0]);
-    const bell = world.all("staff_notifications").find((n) => n.kind === "lawyer.coaching")!;
+    const bell = world.all("notifications").filter((n) => n.to === "staff:*").find((n) => n.kind === "lawyer.coaching")!;
     assert(bell.title === "Constructive feedback sent to ANA Mora" && bell.body.includes("2 reviews of 2 stars or fewer in 30 days"));
     assert(world.emails().some((x) => String(x.to).includes(STAFF) && x.subject.includes("Constructive feedback sent to ANA Mora")));
     const task = world.all("csm_tasks").find((x) => x.subject?.kind === "lawyer_feedback")!;
@@ -502,7 +502,7 @@ Deno.test("routes: lawyer feedback page (own only, no score), staff thresholds (
     assertEquals(anaOffer.status, "taken");
     r = await call("law_ANA", "POST", `/api/provider/work-offers/${anaOffer.id}/respond`, { action: "accept" });
     assertEquals(r.status, 409);
-    assert(world.all("staff_notifications").some((n) => n.kind === "opportunity.accepted" && n.title === 'BEA Mora accepted "S.A. clean-up and annual filings"'));
+    assert(world.all("notifications").filter((n) => n.to === "staff:*").some((n) => n.kind === "opportunity.accepted" && n.title === 'BEA Mora accepted "S.A. clean-up and annual filings"'));
     r = await call("stf", "POST", "/api/dashboard/opportunities/opp_1/offer", {});
     assertEquals(r.status, 409, "taken work is not offered again");
   } finally {

@@ -215,7 +215,7 @@ Deno.test("no match: staff bell + email + task, member notice, sales call; once 
     assertEquals(await ensureAssigned("g1"), null);
     const gap = world.doc("routing_gaps", "gap_g1_mat_g1")!;
     assertEquals([gap.status, gap.country, gap.specialtyId], ["open", "PA", "condominium"]);
-    const notes = world.all("staff_notifications");
+    const notes = world.all("notifications").filter((n) => n.to === "staff:*");
     assertEquals(notes.length, 1);
     assertEquals(notes[0].title, "Missing specialty for an assignment: Panama · Condominiums and owners' associations · Grace Whitfield");
     const tasks = world.all("csm_tasks").filter((t) => t.clientId === "g1" && /Missing specialty/.test(t.title));
@@ -238,7 +238,7 @@ Deno.test("no match: staff bell + email + task, member notice, sales call; once 
     assertEquals(await ensureAssigned("g1"), null);
     const { rerouteOpenGaps } = await import("../API/routing/service.ts");
     assertEquals(await rerouteOpenGaps("sweep"), { resolved: 0, open: 1 });
-    assertEquals(world.all("staff_notifications").length, before.notes);
+    assertEquals(world.all("notifications").filter((n) => n.to === "staff:*").length, before.notes);
     assertEquals(world.emails().length, before.mails);
     assertEquals(world.all("consultations").filter((c) => c.clientId === "g1").length, 1);
     assertEquals(world.all("csm_tasks").filter((t) => /Missing specialty/.test(t.title)).length, 1);
@@ -272,7 +272,7 @@ Deno.test("re-route: a new lawyer with the specialty resolves the gap and tells 
     const task = world.all("csm_tasks").find((t) => /Missing specialty/.test(t.title))!;
     assertEquals(task.status, "done");
     assertEquals(world.emails().filter((m) => m.subject === "Your ILP lawyer is confirmed" && m.to === "g2@mailbox-rt.io").length, 1);
-    assertEquals(world.all("staff_notifications").filter((n) => n.kind === "routing.resolved").length, 1);
+    assertEquals(world.all("notifications").filter((n) => n.to === "staff:*").filter((n) => n.kind === "routing.resolved").length, 1);
     assert(world.all("audit_log").some((a) => a.action === "routing.decided" && a.meta?.providerId === "PA1"));
     // Settled: the next sweep has nothing to do.
     assertEquals(await rerouteOpenGaps("sweep"), { resolved: 0, open: 0 });

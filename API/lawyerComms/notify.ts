@@ -40,6 +40,7 @@ import { emitEvent } from "../members/events.ts";
 import { isProviderBookable } from "../providers/applyLogic.ts";
 import { buildPreCallBrief } from "../routing/precall.ts";
 import { notifyStaff } from "../routing/notifications.ts";
+import { channelFor, notify } from "../notifications/store.ts"; // COMMS-P3
 import { DOCUMENTS_COLLECTION } from "../../helper/storage.ts";
 import { lawyerBriefUrl, lawyerTimeZone, whenLabel } from "../calls/callService.ts";
 import { queueKey } from "../retention/mailer.ts";
@@ -140,6 +141,8 @@ export async function sendMemberAssigned(clientId: string, providerId: string, a
     });
     const mail = memberAssignedEmail({ firstName: to.firstName, brief, portalUrl: lawyerUrl("/clients") });
     const placeholder = isPlaceholderId(clientId) || isPlaceholderDoc(b.client);
+    // COMMS-P3: the lawyer's bell too (first name only, like the email).
+    await notify({ key: `lawyer_member_assigned_${clientId}_${providerId}_${at.toISOString().slice(0, 13)}`, kind: "member.assigned", to: channelFor("lawyer", providerId), title: `New member assigned to you: ${memberNameOf(b.client)}`, link: "/lawyer/clients", severity: "action", placeholder });
     return await sendLawyerOnce(`member_assigned_${clientId}_${providerId}_${at.toISOString().slice(0, 13)}`, to, mail, placeholder);
   } catch (err) {
     log(`[lawyerComms] member assigned ${clientId} → ${providerId} failed: ${err instanceof Error ? err.message : err}`, "error");
