@@ -35,6 +35,7 @@ import {
 } from "./joinIntake.ts";
 import { flagUnassignedCountry, hasLawyerIn } from "../calls/callService.ts";
 import { ensureAssigned } from "../members/assignment.ts";
+import { autoAssignCsm } from "../csm/autoAssign.ts"; // COMMS-P4
 import { isPlaceholderId } from "../../helper/placeholder.ts";
 import { type MembershipDoc, onInvoiceFailed, onInvoicePaid, onSubscriptionDeleted, onSubscriptionUpdated, runHook } from "./lifecycle.ts";
 import {
@@ -259,6 +260,9 @@ export async function activateMembership(
     updatedAt: now,
   };
   await patch(COLLECTIONS.memberships, membershipId, update as unknown as Doc);
+  // COMMS-P4: a CSM for the new member (before the onboarding task, so the task names them).
+  const csm = await autoAssignCsm({ ...m, ...update } as Membership);
+  if (csm) m.csmEmail = csm;
 
   if (m.sourceLeadId) {
     await patch(COLLECTIONS.leads, m.sourceLeadId, { convertedClientId: m.clientId, convertedAt: now })
