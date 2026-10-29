@@ -43,6 +43,7 @@ import { resolveQuoteTemplateBlocks } from "./contractTemplate.ts";
 import { buildContractPdfBuffer, contractFileName } from "./contractPdf.ts";
 import { loadQuoteApprovers, isQuoteApprover } from "./automation/quoteApprovers.ts";
 import { resolveClientEmail } from "./clientHelpers.ts";
+import { renderLegalEmail } from "./automation/renderLegalEmail.ts"; // COMMS-P1
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -214,6 +215,18 @@ Services: ${(input.groups ?? []).map((g: any) => `- ${g.title}: ${g.lineLabels.j
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
+
+/**
+ * COMMS-P1: the quote-ready email to the client when staff send a quote:
+ * the editable `quote_ready` type, with the quote link as statusPageUrl.
+ * Exported for tests.
+ */
+export function quoteReadyMail(
+  clientDoc: Record<string, unknown>,
+  o: { name: string; quoteTitle: string; statusPageUrl: string },
+): { subject: string; bodyHtml: string } {
+  return renderLegalEmail("quote_ready", { ...clientDoc, name: o.name, quoteTitle: o.quoteTitle, statusPageUrl: o.statusPageUrl });
+}
 
 export default function quotesRouter(app: Express) {
   // ── GET /api/dashboard/clients/:id/quotes ─────────────────────────────────
@@ -888,29 +901,14 @@ export default function quotesRouter(app: Express) {
 
         if (clientEmail) {
           try {
-            const quoteTitle = quote.title || "Quote";
-            const emailBody = `<div style="font-family:'Helvetica Neue',Arial,sans-serif;max-width:560px;margin:0 auto;padding:0;color:#1a1a2e;">
-              <div style="background:linear-gradient(135deg,#020d10 0%,#062028 100%);border-radius:14px 14px 0 0;padding:32px 28px 24px;">
-                <p style="margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(2,181,187,.8);">International Legal Partner</p>
-                <h1 style="margin:0 0 6px;font-size:22px;font-weight:800;color:#ffffff;line-height:1.25;">Your quote is ready</h1>
-                <p style="margin:0;font-size:14px;color:rgba(248,250,252,.65);">Hi ${clientName}, your personalized legal services quote has been prepared.</p>
-              </div>
-              <div style="background:#ffffff;padding:28px 28px 8px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
-                <p style="margin:0 0 20px;font-size:14px;color:#475569;line-height:1.6;">
-                  Your quote <strong style="color:#0f172a;">"${quoteTitle}"</strong> is ready for your review in your secure client portal.
-                </p>
-                <div style="text-align:center;margin:28px 0;">
-                  <a href="${statusPageUrl}" style="display:inline-block;background:#02b5bb;color:#020d10;padding:15px 32px;border-radius:10px;text-decoration:none;font-weight:800;font-size:15px;">View My Quote</a>
-                </div>
-              </div>
-              <div style="background:#f8fafc;padding:16px 28px;border-radius:0 0 14px 14px;border:1px solid #e2e8f0;border-top:none;">
-                <p style="margin:0;font-size:11px;color:#94a3b8;text-align:center;">Questions? Reply to this email. · International Legal Partner</p>
-              </div>
-            </div>`;
+            // COMMS-P1: one quote email, the staff-editable quote_ready template
+            // (it carries the legal footer). The old fixed-HTML copy is gone.
+            const mail = quoteReadyMail(clientDoc ?? {}, { name: String(clientName), quoteTitle: quote.title || "", statusPageUrl });
             await enqueueEmail({
               to: clientEmail,
-              subject: `Your quote is ready: "${quoteTitle}"`,
-              html: emailBody,
+              subject: mail.subject,
+              html: mail.bodyHtml,
+              ...(clientDoc?.placeholder === true ? { placeholder: true } : {}),
             }, `quote_to_client_${id}_${quoteId}`).catch(() => {});
             log(`[quotesRouter] Quote ${quoteId} sent to client ${clientEmail}`);
           } catch (emailErr: any) {

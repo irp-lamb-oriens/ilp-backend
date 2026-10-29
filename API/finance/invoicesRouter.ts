@@ -9,6 +9,8 @@ import remove from "../../db/delete.ts";
 import log from "../../helper/log.ts";
 import auditLog, { auditFrom } from "../../helper/auditLog.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
+import { invoiceReadyEmail } from "../../helper/emailTemplates.ts"; // COMMS-P1
+import { siteUrl } from "../retention/mailer.ts"; // COMMS-P1
 import type { SessionUser } from "../../helper/auth/types.ts";
 
 /**
@@ -195,6 +197,19 @@ function decorate(doc: Record<string, unknown>, id: string): Record<string, unkn
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
+
+/** COMMS-P1: the invoice email (a link, no attachment). Exported for tests. */
+export function invoiceMail(inv: Record<string, unknown>, o: { total: number; balance: number }) {
+  const name = typeof inv.clientName === "string" ? inv.clientName.trim() : "";
+  return invoiceReadyEmail({
+    firstName: name ? name.split(/\s+/)[0] : undefined,
+    invoiceNumber: String(inv.invoiceNumber ?? ""),
+    totalLabel: `US${usd(o.total)}`,
+    balanceLabel: o.balance > 0 ? `US${usd(o.balance)}` : undefined,
+    moneyUrl: `${siteUrl()}/status/money`,
+    contactEmail: COMPANY.email,
+  });
+}
 
 export default function invoicesRouter(app: Express) {
   log("Finance invoices router initialized.");
@@ -492,33 +507,15 @@ export default function invoicesRouter(app: Express) {
       const balance = balanceDue(existing);
       const total = money(existing.total);
 
-      const html = `
-        <div style="font-family:'Jost',sans-serif;max-width:600px;margin:0 auto;padding:32px;background:#fafbfc;border-radius:16px;">
-          <div style="text-align:center;margin-bottom:24px;">
-            <h1 style="font-size:24px;font-weight:800;color:#0f172a;margin:0 0 4px;">Invoice ${existing.invoiceNumber ?? ""}</h1>
-            <p style="font-size:14px;color:#64748b;margin:0;">${existing.clientName || ""}</p>
-          </div>
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin-bottom:16px;">
-            <p style="font-size:14px;color:#334155;line-height:1.6;margin:0 0 16px;">
-              Hi ${existing.clientName || "there"},<br/><br/>
-              Please find attached your invoice for <strong>${usd(total)}</strong>.
-              ${balance > 0 ? `The balance due is <strong>${usd(balance)}</strong>.` : "This invoice has been fully paid."}
-            </p>
-            <p style="font-size:13px;color:#64748b;margin:0;">
-              If you have any questions, reply to this email or contact us at ${COMPANY.email}.
-            </p>
-          </div>
-          <p style="font-size:11px;color:#94a3b8;text-align:center;margin:0;">
-            ${COMPANY.name} - ${COMPANY.address} - ${COMPANY.website}
-          </p>
-        </div>
-      `;
-
+      // COMMS-P1: no attachment is sent, so the email links to Money in the ILP home (with the legal footer).
+      const mail = invoiceMail(existing, { total, balance });
       await enqueueEmail(
         {
           to: recipientEmail,
-          subject: `Invoice ${existing.invoiceNumber ?? ""} from ${COMPANY.name}`,
-          html,
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+          ...(existing.placeholder === true ? { placeholder: true } : {}),
         },
         `invoice_${id}`,
       );
