@@ -30,6 +30,8 @@ import { handoffNeedsOpportunity } from "../opportunities/logic.ts"; // P5
 import { createOpportunityFromHandoff } from "../opportunities/store.ts"; // P5
 
 export type EventName = keyof typeof TASK_RULES;
+import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
+import type { FunnelStepId } from "../../schemas/contracts.ts";
 
 export interface EventPayload {
   clientId: string;
@@ -61,6 +63,13 @@ const SOURCE_KIND: Record<string, CsmTask["source"]["kind"]> = {
   call: "consultation",
   privacy: "privacy_request",
   obligation: "obligation",
+};
+
+/** JOURNEYS: TASK_RULES events that are funnel steps. */
+export const JOURNEY_STEP_OF_EVENT: Record<string, FunnelStepId> = {
+  "membership.activated": "activation_paid",
+  "consultation.booked": "call_booked",
+  "handoff.approved": "handoff_confirmed",
 };
 
 export function isTaskEvent(name: string): name is EventName {
@@ -127,6 +136,9 @@ async function resolveOwner(payload: EventPayload): Promise<string | undefined> 
 export async function emitEvent(name: string, payload: EventPayload): Promise<string[]> {
   // P2 funnel: first booked call per member (never throws, idempotent).
   if (name === "consultation.booked") await recordFirstCallBooked(payload.clientId);
+  // JOURNEYS: the funnel steps these events stand for (one per person, never throws).
+  const journeyStep = JOURNEY_STEP_OF_EVENT[name];
+  if (journeyStep && payload.clientId) await trackServerStep(journeyStep, { clientId: payload.clientId });
   try {
     if (!isTaskEvent(name)) {
       log(`[events] ${name} has no task rule`);
@@ -247,6 +259,10 @@ export function eventsFor(slug: string, before: Doc | null, after: Doc): Array<[
 async function run(slug: string, before: Doc | null, after: Doc): Promise<string[]> {
   const ids: string[] = [];
   for (const [name, payload] of eventsFor(slug, before, after)) ids.push(...(await emitEvent(name, payload)));
+  // JOURNEYS: a call that just completed is the "had a call" step.
+  if (slug === "consultations" && after.status === "completed" && before?.status !== "completed" && str(after.clientId)) {
+    await trackServerStep("call_done", { clientId: str(after.clientId)! });
+  }
   // Side effects that keep records consistent with the events.
   if (slug === "memberships" && after.status === "active" && before?.status !== "active") {
     await seedObligationsFromLead(after);

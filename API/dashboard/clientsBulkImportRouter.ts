@@ -20,6 +20,7 @@ import { requireDashboardAuth } from "../../helper/auth/session.ts";
 import { emailToDocId } from "../../helper/auth/otp.ts";
 import { ensureFieldConfig, getExpectedImportFields } from "./automation/fieldConfig.ts";
 import type { FieldDef } from "./automation/fieldDefaults.ts";
+import { campaignSlug, createOutreach } from "../journeys/outreach.ts"; // JOURNEYS
 
 const CLIENTS_COLLECTION = "clients";
 const MAX_RECORDS = 500;
@@ -246,6 +247,8 @@ export default function clientsBulkImportRouter(app: Express): void {
         });
       }
 
+      // JOURNEYS: imported people are outbound leads; created rows get an Outreach (channel import).
+      const campaign = campaignSlug(req.body?.campaign) ?? `import-${new Date().toISOString().slice(0, 10)}`;
       let created = 0;
       let updated = 0;
       let skipped = 0;
@@ -288,6 +291,8 @@ export default function clientsBulkImportRouter(app: Express): void {
             }
             await put(CLIENTS_COLLECTION, docId, toCreate);
             created++;
+            await createOutreach({ channel: "import", campaign, sentBy: actor, clientId: docId, ...(email ? { email } : {}) })
+              .catch((err) => log(`[bulk-import] outreach for ${docId} failed: ${err instanceof Error ? err.message : err}`));
           } else if (strategy === "skip") {
             skipped++;
           } else {
@@ -310,7 +315,7 @@ export default function clientsBulkImportRouter(app: Express): void {
       }
 
       log(`[bulk-import] ${actor} imported → created=${created} updated=${updated} skipped=${skipped} errors=${errors.length}`);
-      res.json({ success: true, created, updated, skipped, errors });
+      res.json({ success: true, created, updated, skipped, errors, campaign });
     }),
   );
 }

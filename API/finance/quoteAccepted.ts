@@ -22,6 +22,7 @@ import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { quoteKey } from "../../schemas/quoteStatus.ts";
 import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
+import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
 
 type Doc = Record<string, unknown>;
 export const SETTLEMENTS = "quoteSettlements";
@@ -86,6 +87,7 @@ export function settlementFor(clientId: string, quote: Doc, names: Map<string, s
 
 export async function onQuoteAccepted(clientId: string, quote: Doc, actor: { email: string; role: string }): Promise<void> {
   const quoteId = quoteKey(quote);
+  await trackServerStep("paid_work_accepted", { clientId }); // JOURNEYS (first accepted quote)
   try {
     const existing = (await get(SETTLEMENTS, quoteId).catch(() => null)) as Doc | null;
     if (!existing) {

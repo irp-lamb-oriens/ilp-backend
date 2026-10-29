@@ -50,6 +50,7 @@ import {
 } from "./emailSuggestions.ts";
 import { getActionsForStage, getActionByKey } from "./actions/registry.ts";
 import staffHomeRouter from "./staffHome/staffHomeRouter.ts";
+import { campaignSlug, createOutreach, tagEmailHtml } from "../journeys/outreach.ts"; // JOURNEYS
 
 const CLIENTS_COLLECTION = "clients";
 
@@ -1255,7 +1256,7 @@ export default (app: Express) => {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const { id } = req.params;
-      const { emailType, editMeta, suggestionId } = req.body ?? {};
+      const { emailType, editMeta, suggestionId, campaign } = req.body ?? {};
       const actor = (req as Request & { dashboardUser?: string }).dashboardUser ?? "system";
 
       if (!emailType || !legalEmailTypes().includes(emailType)) {
@@ -1270,7 +1271,25 @@ export default (app: Express) => {
 
       const clientEmail = resolveClientEmail(doc, id);
       const data = buildLegalEmailData(doc, id, clientEmail);
-      const { subject, bodyHtml } = renderLegalEmail(emailType, data);
+      const { subject, bodyHtml: renderedHtml } = renderLegalEmail(emailType, data);
+      // JOURNEYS: every staff email is an outreach (send → open → click → check → join):
+      // site links go through the click redirect and an open pixel is added.
+      let bodyHtml = renderedHtml;
+      let outreachId: string | null = null;
+      try {
+        const o = await createOutreach({
+          channel: "email_outreach",
+          campaign: campaignSlug(campaign) ?? campaignSlug(emailType) ?? "staff-email",
+          sentBy: actor,
+          clientId: id,
+          email: clientEmail,
+          ...(doc.placeholder === true ? { placeholder: true } : {}),
+        });
+        outreachId = o.id;
+        bodyHtml = tagEmailHtml(renderedHtml, o.id);
+      } catch (err) {
+        log(`[dashboard] outreach record for ${id} failed: ${err instanceof Error ? err.message : err}`);
+      }
 
       const cc = resolveEmailCc(emailType);
       const bcc = resolveEmailBcc(emailType);
@@ -1287,6 +1306,7 @@ export default (app: Express) => {
         actor,
         timestamp: nowIso,
       };
+      if (outreachId) activityEntry.outreachId = outreachId;
       if (editMeta && typeof editMeta === "object") {
         activityEntry.emailEdited = true;
         activityEntry.editedBy = (editMeta as Record<string, unknown>).editedBy || actor;

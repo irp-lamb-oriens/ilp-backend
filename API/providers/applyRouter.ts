@@ -29,6 +29,7 @@ import { COLLECTIONS } from "../../schemas/contracts.ts";
 import { consentId } from "../privacy/policy.ts";
 import { lawyerApplyEmails } from "./applyEmails.ts";
 import { type ApplyDeps, reviewApplication, submitApplication } from "./applyLogic.ts";
+import { identify, trackServerStep, visitorFrom } from "../journeys/track.ts"; // JOURNEYS
 
 type Doc = Record<string, unknown>;
 
@@ -103,6 +104,11 @@ export default function applyRouter(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const result = await submitApplication(req.body ?? {}, applyDeps(), req.ip);
       if (result.status === 201) log(`[apply] application ${result.body.providerId}${result.body.resubmitted ? " (resubmitted)" : ""}`);
+      if (result.status === 201 && typeof result.body.providerId === "string") {
+        // JOURNEYS: lawyer funnel (browser sends landing/apply_start; submit is recorded here).
+        await identify(visitorFrom(req), { providerId: result.body.providerId });
+        await trackServerStep("lawyer_apply_submit", { providerId: result.body.providerId });
+      }
       res.status(result.status).json(result.body);
     }),
   );
@@ -145,6 +151,9 @@ export default function applyRouter(app: Express) {
       const r = req as AuthedRequest;
       const email = r.dashboardUser ?? "staff";
       const result = await reviewApplication(req.params.id, req.body ?? {}, { uid: email, email, role: r.dashboardRole ?? "staff" }, applyDeps());
+      if (result.status === 200 && (req.body as Record<string, unknown> | undefined)?.action === "approve") {
+        await trackServerStep("lawyer_verified", { providerId: req.params.id }); // JOURNEYS
+      }
       res.status(result.status).json(result.body);
     }),
   );

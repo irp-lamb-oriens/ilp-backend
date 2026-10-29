@@ -28,6 +28,7 @@ import auditLog from "../../helper/auditLog.ts";
 import { emitEvent } from "../members/events.ts";
 import { cancelUpcomingCalls } from "../members/assignment.ts";
 import { COLLECTIONS, type CsmTask, type Membership } from "../../schemas/contracts.ts";
+import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
 
 type Doc = Record<string, unknown>;
 const DAY_MS = 86_400_000;
@@ -269,6 +270,14 @@ export async function runHook(name: keyof typeof lifecycleHooks, m: MembershipDo
   }
 }
 
+/** JOURNEYS (pure): which renewal a new period is (1 = month 2), from the activation date. */
+export function renewalNumber(activatedAt: unknown, periodStart: string): number {
+  const a = typeof activatedAt === "string" ? Date.parse(activatedAt) : NaN;
+  const p = Date.parse(periodStart);
+  if (!Number.isFinite(a) || !Number.isFinite(p) || p <= a) return 0;
+  return Math.round((p - a) / (30.44 * 86_400_000));
+}
+
 /** Start the next paid period now (renewal paid). */
 export async function renewMembership(
   m: MembershipDoc,
@@ -288,6 +297,9 @@ export async function renewMembership(
     meta: { ref, periodStart: fields.periodStart, periodEnd: fields.periodEnd, wasPastDue: m.status === "past_due" },
   });
   const after = { ...m, ...fields } as MembershipDoc;
+  // JOURNEYS: first renewal starts month 2, the second month 3.
+  const renewal = renewalNumber(m.activatedAt, String(fields.periodStart ?? ""));
+  if (renewal === 1 || renewal === 2) await trackServerStep(renewal === 1 ? "renewed_m2" : "renewed_m3", { clientId: m.clientId });
   await runHook("onRenewed", after, ref);
   return after;
 }

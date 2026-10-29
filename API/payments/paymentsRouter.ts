@@ -31,6 +31,7 @@ import { parseJoinConsents } from "../privacy/policy.ts";
 import { recordJoinConsents } from "../privacy/privacyRouter.ts";
 import { parseJoinDetails } from "./joinIntake.ts";
 import { toCountryCode } from "../../schemas/contracts.ts";
+import { identify, trackServerStep, visitorFrom } from "../journeys/track.ts"; // JOURNEYS
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -142,6 +143,9 @@ export default function paymentsRouter(app: Express) {
           ...(toCountryCode(body.country) ? { country: toCountryCode(body.country)! } : {}),
         });
         await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
+        // JOURNEYS: link the browser to the account; a new account is a funnel step (paid comes with activation).
+        await identify(visitorFrom(req), { clientId: session.clientId });
+        if (session.newClient) await trackServerStep("account_created", { clientId: session.clientId });
         // P2 funnel: remember the browser's anonymous id so the server can
         // attribute first_call_booked to the same visitor (no PII involved).
         const anonId = sanitizeStr(body.anonId).slice(0, 64);

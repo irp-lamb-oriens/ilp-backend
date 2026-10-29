@@ -18,6 +18,7 @@ import { recordJoinConsents } from "../privacy/privacyRouter.ts";
 import { sha256Hex } from "../privacy/policy.ts";
 import { sendClientSignInCode } from "../clientStatus/signInCode.ts";
 import { CLAIMS_COLLECTION, claimDeadlines, type ClaimStore, parseClaim } from "./claim.ts";
+import { identify, trackServerStep, visitorFrom } from "../journeys/track.ts"; // JOURNEYS
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CLIENTS_COLLECTION = "clients";
@@ -155,6 +156,7 @@ export default (app: Express) => {
       };
       await patch(COLLECTIONS.leads, id, lead as unknown as Record<string, unknown>);
       log(`[leads] deadline check saved ${id} (${findings.length} findings)`, "leads");
+      await identify(visitorFrom(req), { leadId: id }); // JOURNEYS
 
       // Best effort: the visitor already sees the results on screen.
       enqueueEmail({
@@ -181,6 +183,9 @@ export default (app: Express) => {
       if ("error" in parsed) return res.status(400).json({ error: parsed.error, field: parsed.field });
       const result = await claimDeadlines(parsed, firestoreClaimStore);
       log(`[leads] claim ${result.clientId}: ${result.created} new, ${result.restored} restored, ${result.kept} kept (${result.accountType})`, "leads");
+      // JOURNEYS: link the browser, and a new free account is a funnel step.
+      await identify(visitorFrom(req), { clientId: result.clientId });
+      if (result.newAccount) await trackServerStep("account_created", { clientId: result.clientId });
       res.status(201).json({
         saved: true,
         total: result.total,
@@ -244,6 +249,8 @@ export default (app: Express) => {
         log(`[leads] promoted ${email} to client ${clientId}`, "leads");
       }
 
+      await identify(visitorFrom(req), { leadId: String(id) }); // JOURNEYS
+      await identify(visitorFrom(req), { clientId });
       res.status(201).json({ id, clientId });
     })
   );
