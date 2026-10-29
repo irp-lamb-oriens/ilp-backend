@@ -47,6 +47,7 @@ import {
   whenLabel,
 } from "../calls/callService.ts";
 import { claimSlot, releaseSlot, withLawyerSlots } from "../calls/slotClaims.ts";
+import { routeAndAssign } from "../routing/service.ts"; // ROUTING
 
 type Doc = Record<string, unknown>;
 export type Actor = { email: string; role: "staff" | "lawyer" | "client" | "system" };
@@ -202,13 +203,11 @@ export async function ensureAssigned(clientId: string, actor: Actor = SYSTEM_ACT
       const p = (await get("providers", current).catch(() => null)) as Doc | null;
       if (isProviderBookable(p)) return current;
     }
-    const pick = await routeNewLawyer(clientId);
-    if (!pick && !current) {
-      await flagUnassignedCountry(clientId);
-      return null;
-    }
-    await assignMember(clientId, pick, actor, { auto: true, reason: "Matched by country and specialty" });
-    return pick;
+    // ROUTING: the router picks, persists "Why this lawyer" and assigns; no match
+    // runs the no-match path (staff alert, member notice, sales call).
+    const r = await routeAndAssign(clientId, { trigger: "activation", actor });
+    if (!r.providerId && current) await assignMember(clientId, null, actor, { auto: true, reason: "No lawyer matches the member's needs" });
+    return r.providerId;
   } catch (err) {
     log(`[assignment] ensureAssigned ${clientId} failed: ${err instanceof Error ? err.message : err}`, "error");
     return null;
@@ -231,6 +230,8 @@ export async function offboardLawyer(providerId: string, actor: Actor, reason = 
     done.add(clientId);
     const to = await routeNewLawyer(clientId, undefined, providerId);
     members.push(await assignMember(clientId, to, actor, { auto: true, reason }));
+    // ROUTING: nobody else fits: the no-match path tells staff and the member and books a sales call.
+    if (!to) await routeAndAssign(clientId, { trigger: "reroute", exclude: providerId }).catch(() => undefined);
   }
   // Matter-level and call-level links for members assigned to someone else.
   const [matters, calls] = await Promise.all([

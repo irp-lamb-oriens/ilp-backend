@@ -189,6 +189,7 @@ export function chargeableMinutes(c: Pick<Consultation, "minutesUsed" | "duratio
 
 async function chargeLocked(c: Consultation): Promise<Membership | null> {
   if (c.status !== "completed" || c.chargedAt) return null;
+  if (c.kind === "sales") return null; // ROUTING: sales calls never use membership minutes
   const m = await currentMembership(c.clientId);
   if (!m) return null;
   const minutes = chargeableMinutes(c);

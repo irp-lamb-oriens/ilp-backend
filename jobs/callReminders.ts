@@ -24,13 +24,14 @@ import { callOutcomeMissing, reminderToSend, transcriptFetchDue } from "../API/c
 import { emitEvent } from "../API/members/events.ts";
 import {
   type CallRecord,
-  lawyerBriefUrl,
   memberHomeUrl,
   peopleFor,
   pullMeetTranscript,
   whenLabel,
 } from "../API/calls/callService.ts";
 import { draftSuggestion } from "../API/provider/lawyerHomeRoutes.ts";
+import { sendPreCallEmail } from "../API/routing/precall.ts"; // ROUTING
+import { salesEmails } from "../API/routing/service.ts"; // ROUTING
 
 const HOUR = 3_600_000;
 
@@ -49,18 +50,22 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
         const who = await peopleFor(c);
         if (who.member.email) {
           const m = callReminderEmail({
-            to: "member", kind: send, greetingName: who.member.firstName, otherName: who.lawyer.name,
+            to: "member", kind: send, greetingName: who.member.firstName, otherName: c.kind === "sales" ? "the ILP team" : who.lawyer.name,
             whenLabel: whenLabel(c.scheduledAt, who.member.timezone), meetUrl: c.meetUrl, question: c.question?.split("\n")[0], portalUrl: memberHomeUrl(),
           });
           await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_member`);
           sent++;
         }
-        if (who.lawyer.email) {
+        if (c.kind === "sales") {
+          // ROUTING: a sales call: the sales inbox gets the reminder (no lawyer, no brief).
           const l = callReminderEmail({
-            to: "lawyer", kind: send, greetingName: who.lawyer.name, otherName: who.member.name,
-            whenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), meetUrl: c.meetUrl, question: c.question, briefUrl: lawyerBriefUrl(c.id),
+            to: "lawyer", kind: send, greetingName: "ILP sales team", otherName: who.member.name,
+            whenLabel: whenLabel(c.scheduledAt, "America/Costa_Rica"), meetUrl: c.meetUrl, question: c.question,
           });
-          await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_lawyer`);
+          await enqueueEmail({ to: (c.salesEmail ? [c.salesEmail] : salesEmails()).join(", "), ...l, placeholder: who.placeholder }, `call_reminder_${c.id}_${send}_sales`);
+          sent++;
+        } else if (who.lawyer.email && await sendPreCallEmail(c, send)) {
+          // ROUTING: the lawyer's reminder is the full pre-call brief in their email language.
           sent++;
         }
       }
@@ -80,7 +85,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "completed" }).catch(() => []))
       .filter((c) => Date.parse(c.scheduledAt) > now.getTime() - 26 * HOUR),
   ];
-  for (const c of recent.filter((x) => transcriptFetchDue(x, now) && x.summary?.status !== "confirmed")) {
+  for (const c of recent.filter((x) => x.kind !== "sales" && transcriptFetchDue(x, now) && x.summary?.status !== "confirmed")) {
     try {
       const r = await pullMeetTranscript(c);
       if (r.status === "fetched" && r.text) {
@@ -101,7 +106,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "in_progress" }).catch(() => [])),
     ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "completed" }).catch(() => [])),
   ];
-  for (const c of open.filter((x) => callOutcomeMissing(x, now))) {
+  for (const c of open.filter((x) => x.kind !== "sales" && callOutcomeMissing(x, now))) {
     const ids = await emitEvent("call.outcome_missing", {
       clientId: c.clientId,
       matterId: c.matterId,

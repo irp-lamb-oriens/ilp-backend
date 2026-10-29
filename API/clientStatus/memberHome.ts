@@ -83,7 +83,8 @@ import {
   storeMemberDocument,
   uploadBytes,
 } from "../../helper/storage.ts";
-import { attachMeeting, type CallRecord, flagUnassignedCountry, matchingNotice, peopleFor, routeLawyer, sendBookingEmails, slotsFor } from "../calls/callService.ts";
+import { attachMeeting, type CallRecord, peopleFor, sendBookingEmails, slotsFor } from "../calls/callService.ts";
+import { arrangingNotice, lawyerForBooking, memberLawyerMatch } from "../routing/service.ts"; // ROUTING
 import { canChange } from "../calls/callLogic.ts";
 import { claimSlot, withLawyerSlots } from "../calls/slotClaims.ts";
 import { assignMember } from "../members/assignment.ts";
@@ -234,7 +235,8 @@ export function registerMemberHomeRoutes(app: Express) {
             scheduledAt: c.scheduledAt,
             durationMin: c.durationMin,
             question: c.question,
-            lawyerName: lawyers.get(c.providerId) ?? null,
+            lawyerName: c.kind === "sales" ? "the ILP team" : lawyers.get(c.providerId) ?? null,
+            kind: c.kind === "sales" ? "sales" : "member",
             // P3: the call itself
             status: c.status,
             meetUrl: c.meetUrl ?? null,
@@ -259,6 +261,8 @@ export function registerMemberHomeRoutes(app: Express) {
           ],
         ),
         pendingQuestions: Array.isArray(bundle.client.pendingQuestions) ? bundle.client.pendingQuestions : [],
+        // ROUTING: "assigned" (with the lawyer's name), or "arranging" while no lawyer matches (with the sales call).
+        lawyerMatch: await memberLawyerMatch(id),
       }));
     }),
   );
@@ -275,11 +279,16 @@ export function registerMemberHomeRoutes(app: Express) {
     asyncHandler(async (req: Request, res: Response) => {
       const id = clientIdOf(req, res);
       if (!id) return;
-      const providerId = await routeLawyer(id, req.query.matterId as string | undefined);
+      // ROUTING: the member's lawyer (continuity) or a fresh automatic route,
+      // persisted now so the times shown are the lawyer the booking will use.
+      const mq = typeof req.query.matterId === "string" && req.query.matterId ? String(req.query.matterId) : undefined;
+      const routed = await lawyerForBooking(id, mq, { email: actor(req) || "system", role: isStaff(req) ? "staff" : "client" });
+      const providerId = routed.providerId;
       if (!providerId) {
-        // COUNTRIES: nobody licensed in the member's country yet. Calm notice; staff get a task.
-        const country = await flagUnassignedCountry(id);
-        return res.json({ slots: [], lawyerName: null, matching: true, country, reason: matchingNotice(country) });
+        // No lawyer passes: staff were alerted, the member emailed, a sales call set up.
+        const match = await memberLawyerMatch(id);
+        const country = routed.decision?.request.country ?? "CR";
+        return res.json({ slots: [], lawyerName: null, matching: true, country, reason: arrangingNotice(country), salesCall: match.salesCall ?? null });
       }
       const slots = await slotsFor(providerId);
       res.json({ slots, lawyerName: await providerName(providerId), lengthMin: PLAN_STANDARD.callLengthMin });
@@ -308,10 +317,12 @@ export function registerMemberHomeRoutes(app: Express) {
       if (!cap.canBook) return res.status(409).json({ error: cap.reason, capacity: cap });
 
       const mId = typeof matterId === "string" && bundle.matters.some((m) => m.id === matterId) ? matterId : undefined;
-      const providerId = await routeLawyer(id, mId);
+      const routed = await lawyerForBooking(id, mId, { email: actor(req) || "system", role: isStaff(req) ? "staff" : "client" });
+      const providerId = routed.providerId;
       if (!providerId) {
-        const country = await flagUnassignedCountry(id);
-        return res.status(409).json({ error: matchingNotice(country), matching: true, country });
+        const match = await memberLawyerMatch(id);
+        const country = routed.decision?.request.country ?? "CR";
+        return res.status(409).json({ error: arrangingNotice(country), matching: true, country, salesCall: match.salesCall ?? null });
       }
 
       const iso = when.toISOString();
@@ -332,6 +343,8 @@ export function registerMemberHomeRoutes(app: Express) {
         durationMin: PLAN_STANDARD.callLengthMin,
         question: fullQuestion,
         bookedBy: actor(req),
+        // ROUTING: how the lawyer was picked (staff-only; stripped from member and lawyer responses).
+        ...(routed.decision ? { routing: routed.decision } : {}),
         consent: consent === "pending"
           ? { recording: "pending" }
           : { recording: consent, at: nowIso(), by: "client", where: recordingConsent === consent ? "booking" : "privacy_page" },

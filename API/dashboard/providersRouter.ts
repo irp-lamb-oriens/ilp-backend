@@ -41,6 +41,7 @@ import put from "../../db/put.ts";
 import patch from "../../db/patch.ts";
 import del from "../../db/delete.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
+import { rerouteSoon } from "../routing/service.ts"; // ROUTING
 import type { SessionUser } from "../../helper/auth/types.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -526,6 +527,8 @@ export default function providersRouter(app: Express) {
         const r = await offboardLawyer(id, { email: String(actor), role: "staff" });
         offboarding = r.members.map((m) => ({ clientId: m.clientId, to: m.providerId, moved: m.moved, cancelled: m.cancelled }));
       }
+      // ROUTING: a lawyer switched on, or with new areas or countries, may take members who are waiting.
+      if (updates.active === true || updates.legalAreas !== undefined || updates.jurisdictions !== undefined || updates.languages !== undefined) rerouteSoon(`provider ${id} updated`);
       const updated = await get("providers", id);
       return res.json({ success: true, provider: { id, ...updated }, ...(offboarding ? { offboarding } : {}) });
     }),

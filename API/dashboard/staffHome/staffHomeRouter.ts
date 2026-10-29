@@ -33,6 +33,7 @@ import { type AuthedRequest, requireDashboardAuth } from "../../../helper/auth/s
 import { createRecord, findRecords, getRecord, updateRecord } from "../../../db/records.ts";
 import {
   COLLECTIONS,
+  SALES_TEAM_ID,
   type Consultation,
   type CsmTask,
   type Handoff,
@@ -56,6 +57,9 @@ import {
 import { isListRequest, type ListSpec, mapProducer, pageProducer, pageRows, respondList } from "../../../helper/listing.ts";
 import { pageRecords, recordSpec } from "../../../db/recordLists.ts";
 import { fieldValue, LIST_SCHEMAS } from "../../../schemas/listSchemas.ts";
+import { lawyerFacts } from "../../routing/service.ts"; // ROUTING
+import { noReviewsSummary, ratingLabel, ratingsByProvider } from "../../routing/ratings.ts"; // ROUTING
+import { loadSpecialties } from "../../routing/specialties.ts"; // ROUTING
 
 // ── LISTS: paged specs (helper/listing.ts) ──────────────────────────────────
 
@@ -113,14 +117,28 @@ interface CapacityRow {
   openMatters: number;
   agingMatters: number;
   callsNext7d: number;
+  // ROUTING (staff only)
+  specialties: string[];
+  specialtyLabels: string[];
+  countries: string[];
+  ratingScore: number;
+  reviewCount: number;
+  ratingStatus: string;
+  ratingLabel: string;
+  routingStatus: string;
+  bookable: boolean;
 }
 
 export const LAWYERS_SPEC: ListSpec<CapacityRow> = {
-  sorts: { openMatters: (r) => r.openMatters, name: (r) => r.name.toLowerCase(), callsNext7d: (r) => r.callsNext7d, agingMatters: (r) => r.agingMatters },
+  sorts: { openMatters: (r) => r.openMatters, name: (r) => r.name.toLowerCase(), callsNext7d: (r) => r.callsNext7d, agingMatters: (r) => r.agingMatters, ratingScore: (r) => r.ratingScore },
   defaultSort: "openMatters",
   defaultDir: "desc",
-  filters: { area: (r, v) => r.legalAreas.map(String).includes(v) },
-  search: (r) => [r.name, r.email, r.legalAreas],
+  filters: {
+    area: (r, v) => r.legalAreas.map(String).includes(v),
+    specialty: (r, v) => r.specialties.includes(v),
+    country: (r, v) => r.countries.includes(v),
+  },
+  search: (r) => [r.name, r.email, r.legalAreas, r.specialtyLabels],
   schema: LIST_SCHEMAS.staffLawyers,
 };
 
@@ -418,17 +436,24 @@ export default function staffHomeRouter(app: Express): void {
       const now = Date.now();
       const in7 = new Date(now + 7 * DAY_MS).toISOString();
       const nowIso = new Date(now).toISOString();
-      const [providers, matters, booked] = await Promise.all([
+      const [providers, matters, booked, ratings, specialties, availability] = await Promise.all([
         getAll("providers"),
         findRecords<Matter>(COLLECTIONS.matters),
         findRecords<Consultation>(COLLECTIONS.consultations, { status: "booked" }),
+        ratingsByProvider(), // ROUTING
+        loadSpecialties(), // ROUTING
+        getAll(COLLECTIONS.availability).catch(() => []), // ROUTING
       ]);
+      const availBy = new Map((availability as Doc[]).map((a) => [String(a.providerId ?? a.id), a]));
+      const labelOf = new Map(specialties.map((x) => [x.id, x.label]));
       const open = matters.filter((m) => !m.closedAt && m.stage !== "closed");
       const items = (providers as Doc[])
-        .filter((p) => p.active !== false)
+        .filter((p) => p.active !== false && String(p.id) !== SALES_TEAM_ID)
         .map((p) => {
           const id = String(p.id);
           const mine = open.filter((m) => m.assignedProviderId === id);
+          const f = lawyerFacts(p as Doc, availBy.get(id) ?? null, specialties);
+          const r = ratings.get(id) ?? noReviewsSummary(id);
           return {
             id,
             name: String(p.name ?? "") || String(p.email ?? id),
@@ -437,6 +462,15 @@ export default function staffHomeRouter(app: Express): void {
             openMatters: mine.length,
             agingMatters: mine.filter((m) => now - Date.parse(m.stageEnteredAt) >= 14 * DAY_MS).length,
             callsNext7d: booked.filter((c) => c.providerId === id && c.scheduledAt >= nowIso && c.scheduledAt <= in7).length,
+            specialties: f.specialties,
+            specialtyLabels: f.specialties.map((x) => labelOf.get(x) ?? x),
+            countries: f.countries,
+            ratingScore: Number(r.ratingScore),
+            reviewCount: Number(r.reviewCount),
+            ratingStatus: r.ratingStatus,
+            ratingLabel: ratingLabel(r),
+            routingStatus: f.routingStatus,
+            bookable: f.bookable,
           };
         })
         .sort((a, b) => b.openMatters - a.openMatters);

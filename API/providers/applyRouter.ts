@@ -29,6 +29,7 @@ import { COLLECTIONS } from "../../schemas/contracts.ts";
 import { consentId } from "../privacy/policy.ts";
 import { lawyerApplyEmails } from "./applyEmails.ts";
 import { type ApplyDeps, reviewApplication, submitApplication } from "./applyLogic.ts";
+import { rerouteSoon } from "../routing/service.ts"; // ROUTING
 import { identify, trackServerStep, visitorFrom } from "../journeys/track.ts"; // JOURNEYS
 
 type Doc = Record<string, unknown>;
@@ -153,6 +154,7 @@ export default function applyRouter(app: Express) {
       const result = await reviewApplication(req.params.id, req.body ?? {}, { uid: email, email, role: r.dashboardRole ?? "staff" }, applyDeps());
       if (result.status === 200 && (req.body as Record<string, unknown> | undefined)?.action === "approve") {
         await trackServerStep("lawyer_verified", { providerId: req.params.id }); // JOURNEYS
+        rerouteSoon(`approval of ${req.params.id}`); // ROUTING: members waiting for a lawyer may now match
       }
       res.status(result.status).json(result.body);
     }),

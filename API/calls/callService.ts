@@ -15,9 +15,8 @@ import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { enqueueEmail } from "../../helper/emailQueue.ts";
-import { isPlaceholderClient, isPlaceholderDoc, isPlaceholderId, logSkipped } from "../../helper/placeholder.ts";
+import { isPlaceholderDoc, isPlaceholderId, logSkipped } from "../../helper/placeholder.ts";
 import {
-  callBookedLawyerEmail,
   callBookedMemberEmail,
   callChangedEmail,
 } from "../../helper/emailTemplates.ts";
@@ -44,6 +43,8 @@ import { emitEvent, taskIdFor } from "../members/events.ts";
 import { applicationBlocksCalls, isProviderBookable } from "../providers/applyLogic.ts";
 import { syncTransaction } from "../../db/lock.ts";
 import { claimSlot, releaseSlot, withLawyerSlots } from "./slotClaims.ts";
+import { decideRoute } from "../routing/service.ts"; // ROUTING
+import { sendPreCallEmail } from "../routing/precall.ts"; // ROUTING
 import { RECORDING_WITHDRAWN_MESSAGE, recordingAllowedFor } from "../privacy/policy.ts";
 import {
   currentMembership,
@@ -62,7 +63,6 @@ import {
   isTimeZone,
   type LawyerCandidate,
   normalizeAvailability,
-  pickLawyer,
   zoneLabel,
 } from "./callLogic.ts";
 
@@ -247,33 +247,26 @@ export async function routeLawyer(clientId: string, matterId?: string): Promise<
 const bookable = async (providerId: string) => isProviderBookable((await get("providers", providerId).catch(() => null)) as Doc | null);
 
 /**
- * REL: the lawyer routing would pick for this member now, ignoring any
- * current assignment: licensed in the member's country, specialty match,
- * least loaded (placeholder lawyers only for placeholder members), else
- * DEFAULT_PROVIDER_ID when licensed there. `exclude` skips one lawyer
- * (offboarding). Null when nobody can take the call.
+ * The lawyer routing would pick for this member now, ignoring any current
+ * assignment. ROUTING: this is the router in API/routing (hard filters:
+ * active and verified, licensed in the country, specialty or its area,
+ * language, a free slot soon, capacity, conflicts; ranked by fit, continuity,
+ * hidden rating, earliest slot, load and region). `exclude` skips one lawyer
+ * (offboarding). Nothing is written here; callers persist. Null when nobody
+ * passes (callers run the no-match path).
  */
 export async function routeNewLawyer(
   clientId: string,
   matterId?: string,
   exclude?: string,
-  pre?: { client?: Doc | null; matters?: Matter[] },
+  _pre?: { client?: Doc | null; matters?: Matter[] },
 ): Promise<string | null> {
-  const matters = pre?.matters ?? await findRecords<Matter>(COLLECTIONS.matters, { clientId }, { sortBy: "openedAt", desc: true });
-  const client = pre?.client !== undefined ? pre.client : ((await get(COLLECTIONS.clients, clientId).catch(() => null)) as Doc | null);
-  const matter = matterId ? matters.find((x) => x.id === matterId) : matters.find((x) => !x.closedAt);
-  const country = toCountryCode(matter?.country) ?? await memberCountry(clientId, client);
-  const fallbackId = Deno.env.get("DEFAULT_PROVIDER_ID") || null;
-  const fallbackDoc = fallbackId ? ((await get("providers", fallbackId).catch(() => null)) as Doc | null) : null;
-  const fallback = fallbackId && fallbackId !== exclude && isProviderBookable(fallbackDoc) && providerCountries(fallbackDoc).includes(country) ? fallbackId : null;
-  const area = matter?.area ?? str(client?.legalArea) ?? null;
   try {
-    // Placeholder (seed) lawyers only ever take placeholder members, and the reverse.
-    const candidates = (await lawyerCandidates(area, await isPlaceholderClient(clientId))).filter((c) => c.providerId !== exclude);
-    return pickLawyer(area, candidates, fallback, country);
+    const d = await decideRoute(clientId, { matterId, trigger: "reroute", exclude });
+    return d.decision.providerId;
   } catch (err) {
     log(`[calls] routing failed for ${clientId}: ${err instanceof Error ? err.message : err}`, "error");
-    return fallback;
+    return null;
   }
 }
 
@@ -437,10 +430,8 @@ export async function sendBookingEmails(c: CallRecord, people?: CallPeople): Pro
       const m = callBookedMemberEmail({ firstName: who.member.firstName, lawyerName: who.lawyer.name, whenLabel: whenLabel(c.scheduledAt, who.member.timezone), meetUrl: c.meetUrl, portalUrl: memberHomeUrl() });
       await enqueueEmail({ to: who.member.email, ...m, placeholder: who.placeholder }, `call_booked_${c.id}_${c.providerId}_${c.scheduledAt}_${c.meetUrl ? "link" : "nolink"}_member`);
     }
-    if (who.lawyer.email) {
-      const l = callBookedLawyerEmail({ lawyerName: who.lawyer.name, memberName: who.member.name, whenLabel: whenLabel(c.scheduledAt, who.lawyer.timezone), question: c.question, briefUrl: lawyerBriefUrl(c.id) });
-      await enqueueEmail({ to: who.lawyer.email, ...l, placeholder: who.placeholder }, `call_booked_${c.id}_${c.providerId}_${c.scheduledAt}_lawyer`);
-    }
+    // ROUTING: the lawyer gets the full pre-call brief in their email language (API/routing/precall.ts).
+    if (who.lawyer.email) await sendPreCallEmail(c, "booked");
   } catch (err) {
     log(`[calls] booking emails for ${c.id} failed: ${err instanceof Error ? err.message : err}`, "error");
   }

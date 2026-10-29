@@ -37,6 +37,8 @@ export const PROVIDER_HIDDEN_FIELDS: readonly string[] = [
   "clientTotal",
   "clientTotalMinor",
   "quoteAcceptance",
+  // ROUTING: the member's star rating of a call feeds the lawyer's hidden rating; lawyers never see it.
+  "rating",
 ];
 
 /** Client-record fields a lawyer may edit. Identity and ILP ranking are staff-only. */

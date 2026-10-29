@@ -21,6 +21,7 @@ import { findRecords, getRecord, updateRecord } from "../../db/records.ts";
 import { COLLECTIONS, type Consultation, type MemberFeedback } from "../../schemas/contracts.ts";
 import { lifecycleTask } from "../payments/lifecycle.ts";
 import { crDay } from "./mailer.ts";
+import { recordReview } from "../routing/ratings.ts"; // ROUTING
 
 const DAY_MS = 86_400_000;
 export const LOW_POST_CALL = 2;
@@ -94,6 +95,8 @@ export function registerFeedbackRoutes(app: Express) {
       const fb: MemberFeedback = { id: fbId(), clientId, kind: "post_call", consultationId: c.id, score, ...(comment ? { comment } : {}), at };
       await put(COLLECTIONS.feedback, fb.id, { ...fb, providerId: c.providerId });
       await auditLog({ actor: { uid: clientId, email, role: "client" }, action: "feedback.post_call", target: `consultations/${c.id}`, meta: { score } });
+      // ROUTING: the review feeds the lawyer's hidden rating (staff and the router only).
+      await recordReview(c, score, comment || undefined);
       if (score <= LOW_POST_CALL) {
         await lifecycleTask("feedback.low_score", {
           clientId,

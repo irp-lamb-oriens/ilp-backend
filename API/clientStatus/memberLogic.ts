@@ -39,7 +39,8 @@ export interface Capacity {
   graceEndsAt?: string;
 }
 
-const isUpcoming = (c: Pick<Consultation, "status">) => c.status === "booked" || c.status === "in_progress";
+// ROUTING: a sales call (kind "sales") never uses membership minutes or calls.
+const isUpcoming = (c: Pick<Consultation, "status"> & { kind?: string }) => (c.status === "booked" || c.status === "in_progress") && c.kind !== "sales";
 
 export function bookingCapacity(
   m:
@@ -47,7 +48,7 @@ export function bookingCapacity(
       pastDueSince?: string;
     })
     | null,
-  consultations: Array<Pick<Consultation, "status" | "durationMin">>,
+  consultations: Array<Pick<Consultation, "status" | "durationMin"> & { kind?: string }>,
   callLengthMin: number = PLAN_STANDARD.callLengthMin,
   now: Date = new Date(),
 ): Capacity {
