@@ -177,7 +177,7 @@ export function nameFromEmail(email: string): string {
 const fill = (text: string, vars: Record<string, string>) => text.replace(/\{\{(\w+)\}\}/g, (_m, k: string) => vars[k] ?? "");
 
 /** Pure: the email a playbook sends to one member. */
-export function renderPlaybookEmail(p: Playbook, vars: { firstName?: string; csmEmail: string; periodEnd?: string; siteUrl: string }): MemberEmail {
+export function renderPlaybookEmail(p: Playbook, vars: { firstName?: string; csmEmail: string; periodEnd?: string; siteUrl: string; unsubscribeUrl?: string }): MemberEmail {
   const v: Record<string, string> = {
     firstName: vars.firstName || "there",
     csmName: nameFromEmail(vars.csmEmail),
@@ -190,5 +190,7 @@ export function renderPlaybookEmail(p: Playbook, vars: { firstName?: string; csm
     firstName: vars.firstName,
     paragraphs: [...p.email.paragraphs.map((x) => fill(x, v)), `${v.csmName}, your contact at ILP`],
     ...(p.email.cta ? { cta: { label: p.email.cta.label, url: `${vars.siteUrl}${p.email.cta.path}` } } : {}),
+    // COMMS-P5: service and marketing playbook emails carry the reminder unsubscribe link.
+    ...(p.emailClass !== "transactional" && vars.unsubscribeUrl ? { unsubscribeUrl: vars.unsubscribeUrl } : {}),
   });
 }

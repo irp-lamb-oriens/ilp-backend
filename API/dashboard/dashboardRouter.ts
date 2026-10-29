@@ -1309,9 +1309,11 @@ export default (app: Express) => {
       }
 
       // COMMS-P1: marketing sends carry the signed unsubscribe link.
-      if (emailClass === "marketing") {
-        bodyHtml = withLegalFooter(bodyHtml, { unsubscribeUrl: await unsubscribeUrl(id), unsubscribeLabel: "Stop these emails" });
-      }
+      // COMMS-P5: service sends too (the reminder unsubscribe is what stops them).
+      bodyHtml = withLegalFooter(bodyHtml, {
+        unsubscribeUrl: await unsubscribeUrl(id),
+        unsubscribeLabel: emailClass === "marketing" ? "Stop these emails" : "Stop reminder emails",
+      });
 
       const cc = resolveEmailCc(emailType);
       const bcc = resolveEmailBcc(emailType);

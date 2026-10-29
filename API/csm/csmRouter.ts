@@ -53,7 +53,7 @@ import {
   type Opportunity,
 } from "../../schemas/contracts.ts";
 import { latestMembershipPerClient } from "../dashboard/staffHome/compute.ts";
-import { emailPrefsOf, isSuppressed, mayEmail, sendOnce, siteUrl, memberContact } from "../retention/mailer.ts";
+import { emailPrefsOf, isSuppressed, mayEmail, sendOnce, siteUrl, memberContact, unsubscribeUrl } from "../retention/mailer.ts";
 import { onRecordUpdated } from "../members/events.ts";
 import { type BookData, CSM_SCOPE_DENIED, type CsmScope, loadBook, loadConsultations, memberAccess, scopeOf, tasksOwnedBy } from "./book.ts";
 import {
@@ -361,7 +361,8 @@ export default function csmRouter(app: Express): void {
     const ms = await findRecords<Membership>(COLLECTIONS.memberships, { clientId }).catch(() => []);
     const m = latestMembershipPerClient(ms)[0];
     const periodEnd = m?.periodEnd ? new Date(m.periodEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "America/Costa_Rica" }) : undefined;
-    const mail = renderPlaybookEmail(pb, { firstName: to.firstName, csmEmail: gate.scope.viewer, periodEnd, siteUrl: siteUrl() });
+    const unsub = pb.emailClass === "transactional" ? undefined : await unsubscribeUrl(clientId); // COMMS-P5
+    const mail = renderPlaybookEmail(pb, { firstName: to.firstName, csmEmail: gate.scope.viewer, periodEnd, siteUrl: siteUrl(), unsubscribeUrl: unsub });
     // Once per member, playbook and Costa Rica day: a double click never sends twice.
     const day = new Date(Date.now() - 6 * 3_600_000).toISOString().slice(0, 10);
     const sent = await sendOnce(`csm_playbook_${id}_${clientId}_${day}`, to, mail, { kind: pb.emailClass });

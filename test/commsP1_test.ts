@@ -240,7 +240,8 @@ Deno.test("staff trigger-email: unsubscribe and marketing consent are honoured; 
     const mails = world.emails();
     assertEquals(mails.filter((m) => m.to === "t1@mailbox-rt.io").length, 0);
     const service = mails.find((m) => m.to === "t2@mailbox-rt.io")!;
-    assert(service.html.includes(FOOT) && !service.html.includes("/api/retention/unsubscribe"));
+    // COMMS-P5: service sends carry the reminder unsubscribe link too.
+    assert(service.html.includes(FOOT) && service.html.includes("/api/retention/unsubscribe") && service.html.includes("Stop reminder emails"));
     const outreach = mails.find((m) => m.to === "t3@mailbox-rt.io")!;
     assert(outreach.html.includes(FOOT) && outreach.html.includes("/api/retention/unsubscribe?c=t3"));
   } finally {
