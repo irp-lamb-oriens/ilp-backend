@@ -29,6 +29,7 @@
  *   GET    /api/dashboard/clients/:id/quotes/:quoteId/contract-pdf
  */
 
+import { notifyQuoteDecision } from "../lawyerComms/notify.ts"; // COMMS-P2
 import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
 import type { Express, Request, Response } from "express";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
@@ -679,6 +680,9 @@ export default function quotesRouter(app: Express) {
           await patch(CLIENTS_COLLECTION, id, { pendingActions: actions });
         }
 
+        // COMMS-P2: the lawyer(s) on the quote hear it was approved.
+        await notifyQuoteDecision(id, quote, "approved");
+
         log(`[quotesRouter] Quote ${quoteId} approved by ${actor}`);
         res.json({ success: true, quoteId, status: "approved" });
       } catch (err: any) {
@@ -750,6 +754,9 @@ export default function quotesRouter(app: Express) {
           );
           await patch(CLIENTS_COLLECTION, id, { pendingActions: actions });
         }
+
+        // COMMS-P2: the lawyer(s) on the quote get the note and are asked to resubmit.
+        await notifyQuoteDecision(id, quote, "changes", comment.trim());
 
         log(`[quotesRouter] Quote ${quoteId} changes requested by ${actor}`);
         res.json({ success: true, quoteId, status: "changes_requested", commentId });

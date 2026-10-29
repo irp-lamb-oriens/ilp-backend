@@ -32,6 +32,7 @@ import {
 import { draftSuggestion } from "../API/provider/lawyerHomeRoutes.ts";
 import { sendPreCallEmail } from "../API/routing/precall.ts"; // ROUTING
 import { salesEmails } from "../API/routing/service.ts"; // ROUTING
+import { sendSummaryReady, summaryFollowups } from "../API/lawyerComms/notify.ts"; // COMMS-P2
 
 const HOUR = 3_600_000;
 
@@ -90,7 +91,9 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
       const r = await pullMeetTranscript(c);
       if (r.status === "fetched" && r.text) {
         transcripts++;
-        if (!c.summary) await draftSuggestion(c.id, r.text);
+        const drafted = c.summary ? true : !!(await draftSuggestion(c.id, r.text));
+        // COMMS-P2: tell the lawyer the summary is ready to confirm (once per call).
+        await sendSummaryReady(c, drafted, now);
       }
     } catch (err) {
       log(`[callReminders] transcript ${c.id}: ${err instanceof Error ? err.message : err}`, "error");
@@ -116,6 +119,9 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
     });
     if (ids.length) unresolved++;
   }
+
+  // COMMS-P2: summary still not confirmed: lawyer reminder at 24 h, CSM task at 48 h.
+  await summaryFollowups(now).catch((err) => log(`[callReminders] summary follow-ups: ${err instanceof Error ? err.message : err}`, "error"));
 
   if (sent || transcripts) log(`[callReminders] ${sent} reminder emails, ${transcripts} transcripts`);
   return { sent, transcripts, unresolved };

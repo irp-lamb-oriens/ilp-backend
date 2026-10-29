@@ -170,12 +170,17 @@ export function normalizeProfile(
         const before = prev.find((x) => x.country === c);
         const number = str(l.number, 24);
         if (verified && !number) e[`licence_${c}`] = `Enter the ${COUNTRIES[c].lawyerBody.numberLabel.toLowerCase()} before marking it verified.`;
+        // COMMS-P2: optional expiry date (YYYY-MM-DD or ISO); the lawyer and staff are emailed 60 and 30 days before.
+        const rawExpiry = typeof l.expiresAt === "string" ? l.expiresAt.trim() : "";
+        const expiryMs = rawExpiry ? Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(rawExpiry) ? `${rawExpiry}T12:00:00.000Z` : rawExpiry) : NaN;
+        if (rawExpiry && Number.isNaN(expiryMs)) e[`licenceExpiry_${c}`] = "Enter the expiry date as a date, for example 2027-03-31.";
         list.push({
           country: c,
           body: COUNTRIES[c].lawyerBody.name,
           number,
           verified,
           ...(verified ? (before?.verified && before.number === number ? { verifiedAt: before.verifiedAt, verifiedBy: before.verifiedBy } : { verifiedAt: now.toISOString(), verifiedBy: actorEmail }) : {}),
+          ...(rawExpiry && !Number.isNaN(expiryMs) ? { expiresAt: new Date(expiryMs).toISOString() } : {}),
         });
       }
       out.licences = list;

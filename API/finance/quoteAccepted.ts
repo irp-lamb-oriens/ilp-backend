@@ -23,6 +23,7 @@ import auditLog from "../../helper/auditLog.ts";
 import { quoteKey } from "../../schemas/quoteStatus.ts";
 import { syncOpportunitiesForQuote } from "../opportunities/opportunitiesRouter.ts";
 import { trackServerStep } from "../journeys/track.ts"; // JOURNEYS
+import { notifyQuoteAccepted } from "../lawyerComms/notify.ts"; // COMMS-P2
 
 type Doc = Record<string, unknown>;
 export const SETTLEMENTS = "quoteSettlements";
@@ -113,4 +114,12 @@ export async function onQuoteAccepted(clientId: string, quote: Doc, actor: { ema
     meta: { quoteId, total: quote.total ?? null, currency: quote.currency ?? "USD" },
   }).catch(() => undefined);
   await syncOpportunitiesForQuote(clientId, quoteId);
+  // COMMS-P2: each lawyer on the quote hears that the member accepted, with their fee.
+  try {
+    const client = (await get("clients", clientId).catch(() => null)) as Doc | null;
+    const fallback = typeof client?.assignedProviderId === "string" ? client.assignedProviderId : null;
+    await notifyQuoteAccepted(clientId, quote, lawyerFeesOf(quote, fallback));
+  } catch (err) {
+    log(`[finance] quote accepted lawyer email ${quoteId}: ${err instanceof Error ? err.message : err}`, "error");
+  }
 }

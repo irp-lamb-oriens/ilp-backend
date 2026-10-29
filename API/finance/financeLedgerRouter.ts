@@ -28,6 +28,8 @@ import type { Application, Request, Response } from "express";
 import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
 import put from "../../db/put.ts";
+import get from "../../db/get.ts";
+import { notifyPayouts } from "../lawyerComms/notify.ts"; // COMMS-P2
 import remove from "../../db/delete.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { FINANCE_ADMIN } from "./financeAuth.ts";
@@ -332,7 +334,10 @@ export default function financeLedgerRouter(app: Application) {
       if (errors.length) return res.status(400).json({ error: errors.join("; ") });
 
       try {
+        const before = (await get(SETTLEMENTS, quoteId).catch(() => null)) as Record<string, unknown> | null;
         await put(SETTLEMENTS, quoteId, doc);
+        // COMMS-P2: a lawyer's fee row newly marked paid: email that lawyer (once per row).
+        await notifyPayouts(before, doc as unknown as Record<string, unknown>);
         // The report joins settlements against the cached quote read, so a
         // stale cache would show the operator their old numbers on reload.
         invalidateFinanceCache();
