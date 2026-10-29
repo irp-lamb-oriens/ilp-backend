@@ -15,6 +15,7 @@ import { journeyAggregate } from "./journeyAggregate.ts"; // JOURNEYS
 import { rerouteOpenGaps } from "../API/routing/service.ts"; // ROUTING
 import { licenceExpirySweep, profileIncompleteSweep, weeklyDigest } from "../API/lawyerComms/notify.ts"; // COMMS-P2
 import { lawyerFeedbackSweep } from "../API/lawyerComms/feedback.ts"; // COMMS-P2
+import { CSM_DIGEST_CRON, csmDailyDigest } from "../API/csm/digest.ts"; // COMMS-P3
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -142,6 +143,14 @@ export const jobs: JobDef[] = [
       await profileIncompleteSweep();
       await licenceExpirySweep();
       await lawyerFeedbackSweep();
+    },
+  },
+  // COMMS-P3: CSM daily digest (overdue, due today, new members, at risk), 08:00 Costa Rica = 14:00 UTC.
+  {
+    name: "csmDailyDigest",
+    cron: CSM_DIGEST_CRON,
+    handler: async () => {
+      await csmDailyDigest();
     },
   },
 ];
