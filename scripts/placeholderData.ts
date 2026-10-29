@@ -2867,6 +2867,14 @@ export function buildPlaceholderData(opts: SeedOptions): SeedData {
       if (waiting) Object.assign(handled, { summaryReadyAt: iso(readyAt), summaryNotices: ["ready", "reminder", "escalated"] });
     }
   }
+  // COMMS-P4: a missed call (no-show) the CSM followed up: the member rebooked.
+  {
+    const missed = consultations.find((c) => c.status === "no_show");
+    if (missed) {
+      mkTask("consultation.no_show", { clientId: String(missed.clientId), matterId: missed.matterId as string | undefined, sourceId: String(missed.id), sourceKind: "consultation", detail: "member did not join" },
+        Date.parse(String(missed.noShowAt ?? missed.scheduledAt)), "done", "Reached the member by phone; they booked a new time.");
+    }
+  }
   // Manual tasks (source "manual"), and every status incl. cancelled and overdue.
   rng.reseed("task-cover");
   {

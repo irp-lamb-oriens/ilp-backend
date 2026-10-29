@@ -466,6 +466,7 @@ export const TASK_RULES: Record<string, { type: CsmTaskType; dueInHours: number;
   "routing.no_match": { type: "follow_up", dueInHours: 8, title: "Missing specialty for an assignment: find or add a lawyer" }, // ROUTING: no lawyer passes the router's checks
   "sales.call_unscheduled": { type: "follow_up", dueInHours: 24, title: "Sales call: set a time with the member" }, // ROUTING: no sales slot was free to book automatically
   "call.summary_unconfirmed": { type: "follow_up", dueInHours: 8, title: "Call summary not confirmed: check with the lawyer" }, // COMMS-P2: summary ready, lawyer reminded after 24 h, still not confirmed 24 h later
+  "consultation.no_show": { type: "follow_up", dueInHours: 24, title: "Missed call: contact the member and help them rebook" }, // COMMS-P4: the member did not join (lawyer marked a no-show)
 };
 
 // ─── Obligation (configurable rules, no hard-coded country logic) ──────────

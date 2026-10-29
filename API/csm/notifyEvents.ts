@@ -14,6 +14,7 @@
  *                                 emails the team: no second item, no second email
  *   membership.cancel_requested   "Cancellation requested"        no (daily digest)
  *   feedback.low_score            "Low rating"                    no (daily digest)
+ *   consultation.no_show          "Missed call" (COMMS-P4)        no (daily digest)
  *   membership.csmEmail set       "New member in your book"       no (daily digest)
  *   membership activated, no CSM  "New member without a CSM"      no (every CSM's bell)
  */
@@ -40,6 +41,7 @@ export const TASK_NOTIFICATIONS: Record<string, Rule> = {
   "privacy.request_received": { kind: "privacy.request", title: "Privacy request", severity: "urgent", email: true, alsoStaff: true },
   "membership.cancel_requested": { kind: "member.cancel_requested", title: "Cancellation requested", severity: "action", email: false },
   "feedback.low_score": { kind: "member.low_score", title: "Low rating", severity: "action", email: false },
+  "consultation.no_show": { kind: "call.no_show", title: "Missed call", severity: "action", email: false }, // COMMS-P4
 };
 
 async function memberName(clientId: string): Promise<string> {
