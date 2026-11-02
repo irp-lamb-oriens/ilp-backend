@@ -422,3 +422,156 @@ export function accountCounts(data: SeedData, ids: AccountIds): Array<[string, n
   }
   return out;
 }
+
+// ─── Per-email account seed (seedAccounts.ts --email=…) ─────────────────────
+// One address can hold every role (member, lawyer, staff/CSM/admin). Its story
+// is a separate world: every ph_ id gets the address's namespace (ph_<ns>_…)
+// and the batch is ph-accounts-<ns>-<seed>, so it never overwrites the shared
+// ph_ ids of ph-accounts-<seed> or ph-pilot-<seed> already in Firestore.
+
+/** Id namespace for an address: its local part, letters and digits only, at most 12. */
+export function accountNamespace(email: string): string {
+  const local = email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
+  return (local || "acct").slice(0, 12);
+}
+
+/** Batch of an account seed: ph-accounts-<seed> (shared ids) or ph-accounts-<ns>-<seed>. */
+export const namespacedBatch = (ns: string, seed: number) => (ns ? `ph-accounts-${ns}-${seed}` : `ph-accounts-${seed}`);
+
+/** The id namespace of a batch: "" for shared ph_ ids (ph-accounts-7, ph-pilot-7 …). */
+export function batchNamespace(batch: unknown): string {
+  const m = /^ph-accounts-([a-z0-9]+)-\d+$/.exec(String(batch ?? ""));
+  return m ? m[1] : "";
+}
+
+/** Two loaded batches whose ph_ ids can collide (same namespace, different batch; "derived" never). */
+export function batchesOverlap(ours: string, other: unknown): boolean {
+  const o = String(other ?? "");
+  if (!o || o === ours || o === "derived") return false;
+  return batchNamespace(o) === batchNamespace(ours);
+}
+
+const plainProto = (v: unknown) => isPlainObject(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+
+/** Every ph_ id (in values, map keys, paths and URLs) becomes ph_<ns>_…; idempotent; no-op for "". */
+export function namespaceIds<T>(v: T, ns: string): T {
+  if (!ns) return v;
+  const re = new RegExp(`(^|[^A-Za-z0-9])${PLACEHOLDER_PREFIX}(?!${ns}_)`, "g");
+  const fix = (s: string) => s.replace(re, `$1${PLACEHOLDER_PREFIX}${ns}_`);
+  const walk = (x: unknown): unknown =>
+    typeof x === "string" ? fix(x) : Array.isArray(x) ? x.map(walk) : plainProto(x) ? Object.fromEntries(Object.entries(x as Doc).map(([k, y]) => [fix(k), walk(y)])) : x;
+  return walk(v) as T;
+}
+
+/** Collections that only exist for a paying member (dropped for a free account). */
+export const MEMBER_ONLY_COLLECTIONS = [
+  "memberships", "matters", "consultations", "handoffs", "opportunities", "quoteSettlements", "invoices",
+  "member_feedback", "member_documents", "csm_tasks", "csm_contacts", "privacy_requests", "journeys",
+] as const;
+/** Member-only fields of the generated member doc (money, messages, lawyer, CSM, stage). */
+export const MEMBER_ONLY_FIELDS = [
+  "charges", "quotes", "stageRatings", "pendingActions", "statusChatThread", "statusComments", "assignedProviderId",
+  "membershipStatus", "memberSince", "csmEmail", "stage", "journey",
+] as const;
+
+/**
+ * A free account (deadline tracker, no membership): the member keeps the lead,
+ * profile, obligations, consents and funnel history; membership, matters,
+ * calls, money and messages about them are dropped. Other members are unchanged.
+ */
+export function asFreeAccount(data: SeedData, memberId: string): SeedData {
+  const collections: Record<string, Doc[]> = {};
+  for (const [c, list] of Object.entries(data.collections)) {
+    const memberOnly = (MEMBER_ONLY_COLLECTIONS as readonly string[]).includes(c);
+    collections[c] = list
+      .filter((d) => !(memberOnly && d.clientId === memberId))
+      .map((d) => {
+        if (c !== "clients" || d.id !== memberId) return d;
+        const out: Doc = { ...d, accountType: "free" };
+        for (const k of MEMBER_ONLY_FIELDS) delete out[k];
+        return out;
+      });
+  }
+  return {
+    ...data,
+    collections,
+    subcollections: data.subcollections.filter((s) => s.path.split("/")[1] !== memberId),
+    files: data.files.filter((f) => f.clientId !== memberId),
+  };
+}
+
+export interface AccountTarget {
+  /** The real address for every chosen role. */
+  email: string;
+  ns: string;
+  batch: string;
+  lawyer: boolean;
+  /** "member" (membership), "free" (deadline tracker) or null (no client record). */
+  member: "member" | "free" | null;
+  /** Highest staff role asked for (decides the env list), or null. */
+  staff: "admin" | "csm" | "staff" | null;
+  sales: boolean;
+  /** Addresses the story uses: the real one, or an @example.com stand-in for a role not chosen. */
+  lawyerEmail: string;
+  staffEmail: string;
+  memberEmail: string;
+}
+
+export const ACCOUNT_ROLES = ["member", "free", "lawyer", "staff", "csm", "admin", "sales"] as const;
+export type AccountRole = typeof ACCOUNT_ROLES[number];
+
+export function accountTarget(email: string, roles: readonly AccountRole[], seed: number): AccountTarget {
+  const ns = accountNamespace(email);
+  const has = (r: AccountRole) => roles.includes(r);
+  const staff = has("admin") ? "admin" : has("csm") ? "csm" : has("staff") ? "staff" : null;
+  const member = has("member") ? "member" : has("free") ? "free" : null;
+  return {
+    email,
+    ns,
+    batch: namespacedBatch(ns, seed),
+    lawyer: has("lawyer"),
+    member,
+    staff,
+    sales: has("sales"),
+    lawyerEmail: has("lawyer") ? email : `acct.lawyer.${ns}@example.com`,
+    staffEmail: staff ? email : `acct.csm.${ns}@example.com`,
+    memberEmail: member ? email : `acct.member.${ns}@example.com`,
+  };
+}
+
+/** Ids for a target when no real doc decides them: providers/prov_<email id>, clients/<email id>, else ph_ stand-ins. */
+export function targetIds(t: AccountTarget, docId: (email: string) => string): AccountIds {
+  return {
+    lawyerId: t.lawyer ? `prov_${docId(t.email)}` : namespaceIds(`${PLACEHOLDER_PREFIX}prov_acct_lawyer`, t.ns),
+    memberId: t.member ? docId(t.email) : namespaceIds(`${PLACEHOLDER_PREFIX}cli_acct_member`, t.ns),
+    lawyerEmail: t.lawyerEmail,
+    staffEmail: t.staffEmail,
+    memberEmail: t.memberEmail,
+  };
+}
+
+/**
+ * The REAL base documents a per-email account needs before the merge, for the
+ * ones that do not exist yet: the lawyer's providers and lawyer_availability
+ * docs and the member's clients doc. They are real accounts (no placeholder
+ * markers), so the cleanup restores them to this base and never deletes them.
+ * The lawyer is approved but routingStatus is "onboarding" (set by staff only), so routing and work offers never
+ * send a real member or real work to a test account.
+ */
+export function baseAccountDocs(t: AccountTarget, ids: AccountIds, real: RealDocs, now: string): Write[] {
+  const out: Write[] = [];
+  const first = t.email.split("@")[0].split(/[._+-]/)[0];
+  const name = first ? first.charAt(0).toUpperCase() + first.slice(1) : t.email;
+  const by = { createdAt: now, createdBy: "scripts/seedAccounts.ts" };
+  if (t.lawyer && !real.lawyer) {
+    out.push({ collection: "providers", id: ids.lawyerId, doc: { id: ids.lawyerId, email: t.email, name, status: "active", active: true, routingStatus: "onboarding", ...by } });
+  }
+  if (t.lawyer && !real.availability) {
+    out.push({ collection: "lawyer_availability", id: ids.lawyerId, doc: { id: ids.lawyerId, providerId: ids.lawyerId, ...by } });
+  }
+  if (t.member && !real.member) {
+    out.push({ collection: "clients", id: ids.memberId, doc: { id: ids.memberId, email: t.email, dripEmail: t.email, name, accountType: t.member, source: "account_seed", ...by } });
+  }
+  for (const w of out) for (const g of GEN_META) if (g in w.doc) throw new AccountGuardError(`Base ${w.collection}/${w.id} must not be marked ${g}.`);
+  return out;
+}

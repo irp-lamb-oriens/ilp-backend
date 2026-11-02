@@ -20,17 +20,31 @@
  * Flags:
  *   --dry-run                 counts per collection and per account, screen report, 2 samples; no writes.
  *                             Reads the three accounts when credentials are available (read-only).
+ *                             Also the default whenever --confirm-project is missing.
  *   --offline                 with --dry-run: no Firestore reads at all (assumed ids)
  *   --seed=N                  default 7
  *   --confirm-project=<id>    required for a real run; must equal the service account's project
  *   --lawyer-email= --staff-email= --member-email=   default: the three accounts above
  *   --concurrency=N           parallel writes, default 8
  *   --allow-other-batches     write even if another placeholder batch (e.g. ph-pilot-7) is loaded (ids overlap!)
+ *   --email=<address>         (repeatable) one real address holding every chosen role; each address gets
+ *                             its own story: ids ph_<ns>_… and batch ph-accounts-<ns>-<seed> (ns = the
+ *                             address's local part), so it never overwrites ph-accounts-<seed> or ph-pilot-<seed>.
+ *                             Missing real docs (providers/prov_<email id>, lawyer_availability, clients/<email id>)
+ *                             are created as REAL base docs (no placeholder markers; lawyer routingStatus "onboarding": no routing or work offers),
+ *                             then merged like the three accounts above.
+ *   --with-journeys           with --email: also the journeys/experiments/outreach analytics (≈ 16,000 docs)
+ *   --roles=member,free,lawyer,staff,csm,admin,sales|all   with --email; default (and "all") =
+ *                             member,lawyer,staff,csm,admin; sales only when named. member wins over free
+ *                             (one client record per address). staff/csm/admin/sales have no document:
+ *                             the run prints the env lines they need.
  * Env: SERVICE_ACCOUNT_KEY (JSON or a path; .env works).
  *
  * Run (from server/):
  *   deno run --allow-net --allow-env --allow-read scripts/seedAccounts.ts --dry-run
  *   deno run --allow-net --allow-env --allow-read scripts/seedAccounts.ts --confirm-project=<id>
+ *   deno run --allow-net --allow-env --allow-read scripts/seedAccounts.ts --email=merlin@aiexecutions.com [--confirm-project=<id>]
+ * Cleanup of a per-email batch: removePlaceholders.ts --accounts --batch=ph-accounts-<ns>-<seed>
  */
 
 import { loadSync } from "dotenv/mod.ts";
@@ -44,23 +58,34 @@ import replace from "../db/replace.ts";
 import remove from "../db/delete.ts";
 import { clean } from "../db/records.ts";
 import { getProjectId } from "../db/projectId.ts";
-import { commitFieldWrite } from "../helper/firestore/firestoreService.ts";
+import { commitFieldWrite, createDocumentIfAbsent } from "../helper/firestore/firestoreService.ts";
 import { isPlaceholderDoc } from "../helper/placeholder.ts";
 import { emailToDocId } from "../helper/auth/otp.ts";
 import { type Area, AREAS, buildPlaceholderData, type Doc, type SeedData } from "./placeholderData.ts";
 import { addJourneyData } from "./journeyPlaceholderData.ts"; // JOURNEYS
 import { pool, printTable, selectForDeletion } from "./placeholderOps.ts";
+import { planCsmSeed } from "./seedCsmBooks.ts";
 import {
+  ACCOUNT_ROLES,
   accountCounts,
   type AccountIds,
+  type AccountRole,
+  type AccountTarget,
+  accountTarget,
   applyWrite,
+  asFreeAccount,
+  baseAccountDocs,
+  batchesOverlap,
   checkAccountPlan,
   type FieldWrite,
   isEmptyWrite,
   planAccountSeed,
   planRestore,
+  namespaceIds,
   type RealDocs,
   screenReport,
+  targetIds,
+  type Write,
 } from "./accountSeedOps.ts";
 
 export const DEFAULT_ACCOUNTS = {
@@ -82,6 +107,11 @@ export interface AccountCli {
   memberEmail: string;
   concurrency: number;
   allowOtherBatches: boolean;
+  /** --email (repeatable): per-email account seeds; empty = the three accounts above. */
+  emails: string[];
+  roles: AccountRole[];
+  /** --with-journeys: per-email seeds also get their own journeys/experiments/outreach (≈ 16,000 docs). */
+  withJourneys: boolean;
 }
 
 export const normEmail = (v: string) => v.trim().toLowerCase();
@@ -94,21 +124,41 @@ export function parseAccountArgs(args: string[]): AccountCli | { error: string }
   };
   const seed = Number(flag("seed") ?? "7");
   if (!Number.isInteger(seed) || seed < 0) return { error: "--seed must be a whole number" };
+  const confirmProject = flag("confirm-project");
+  const emails = [...new Set(args.filter((a) => a.startsWith("--email=")).map((a) => normEmail(a.slice("--email=".length))))];
+  for (const e of emails) if (!EMAIL_RE.test(e)) return { error: `--email=${e} is not an email address` };
+  const rolesRaw = flag("roles");
+  // "all" (and the default) = every portal: member, lawyer, staff, csm, admin. "sales" is
+  // not a portal (SALES_EMAILS only routes real sales calls), so it is opt-in by name.
+  const PORTAL_ROLES: AccountRole[] = ["member", "lawyer", "staff", "csm", "admin"];
+  const roles = (rolesRaw === undefined ? [...PORTAL_ROLES] : rolesRaw.split(/[,\s]+/).map((r) => r.trim().toLowerCase()).filter(Boolean)
+    .flatMap((r) => (r === "all" ? PORTAL_ROLES : [r]))) as AccountRole[];
+  const unknown = roles.filter((r) => !(ACCOUNT_ROLES as readonly string[]).includes(r));
+  if (unknown.length) return { error: `--roles: unknown role ${unknown.join(", ")} (use ${ACCOUNT_ROLES.join(",")})` };
+  if (!roles.length) return { error: "--roles is empty" };
+  if (rolesRaw !== undefined && !emails.length) return { error: "--roles needs --email" };
+  if (emails.length && ["lawyer-email", "staff-email", "member-email"].some((n) => flag(n) !== undefined)) {
+    return { error: "use --email or --lawyer-email/--staff-email/--member-email, not both" };
+  }
   const out: AccountCli = {
-    dryRun: flag("dry-run") === "true" || args.includes("-n"),
+    // Dry run unless a project is confirmed.
+    dryRun: flag("dry-run") === "true" || args.includes("-n") || !confirmProject,
     offline: flag("offline") === "true",
     seed,
-    confirmProject: flag("confirm-project"),
+    confirmProject,
     lawyerEmail: normEmail(flag("lawyer-email") ?? DEFAULT_ACCOUNTS.lawyer),
     staffEmail: normEmail(flag("staff-email") ?? DEFAULT_ACCOUNTS.staff),
     memberEmail: normEmail(flag("member-email") ?? DEFAULT_ACCOUNTS.member),
     concurrency: Math.max(1, Math.min(32, Number(flag("concurrency") ?? "8") || 8)),
     allowOtherBatches: flag("allow-other-batches") === "true",
+    emails,
+    roles: [...new Set(roles)],
+    withJourneys: flag("with-journeys") === "true",
   };
   for (const [k, v] of [["--lawyer-email", out.lawyerEmail], ["--staff-email", out.staffEmail], ["--member-email", out.memberEmail]] as const) {
     if (!EMAIL_RE.test(v)) return { error: `${k} is not an email address` };
   }
-  if (new Set([out.lawyerEmail, out.staffEmail, out.memberEmail]).size < 3) return { error: "the lawyer, staff and member emails must be three different accounts" };
+  if (!emails.length && new Set([out.lawyerEmail, out.staffEmail, out.memberEmail]).size < 3) return { error: "the lawyer, staff and member emails must be three different accounts" };
   return out;
 }
 
@@ -131,29 +181,42 @@ export function nameOf(doc: Doc | null, email: string): { first: string; last: s
 }
 
 /** Build the seed data for the resolved accounts. */
-export function buildAccountData(o: AccountCli, ids: AccountIds, real: { lawyer: Doc | null; member: Doc | null }, now?: Date): SeedData {
-  const lawyerName = nameOf(real.lawyer, o.lawyerEmail);
+export function buildAccountData(o: AccountCli, ids: AccountIds, real: { lawyer: Doc | null; member: Doc | null }, now?: Date, t?: AccountTarget): SeedData {
+  const who = t ?? { lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail, batch: accountBatch(o.seed) };
+  const lawyerName = nameOf(real.lawyer, who.lawyerEmail);
   const areas = areasOf(real.lawyer);
-  const data = buildPlaceholderData({
+  let data = buildPlaceholderData({
     size: "pilot",
     seed: o.seed,
     now,
-    batch: accountBatch(o.seed),
-    memberEmail: o.memberEmail,
-    lawyerEmail: o.lawyerEmail,
-    csmEmail: o.staffEmail,
+    batch: who.batch,
+    memberEmail: who.memberEmail,
+    lawyerEmail: who.lawyerEmail,
+    csmEmail: who.staffEmail,
     focus: {
       lawyerId: ids.lawyerId,
       lawyerName: [lawyerName.first, lawyerName.last].filter(Boolean).join(" "),
       lawyerAreas: areas.length ? areas : undefined,
       memberId: ids.memberId,
-      memberName: real.member ? nameOf(real.member, o.memberEmail) : undefined,
+      memberName: real.member ? nameOf(real.member, who.memberEmail) : undefined,
       csmShare: 0.35,
     },
   });
   // JOURNEYS: journeys, experiments and outreach around the same people.
-  addJourneyData(data, { seed: o.seed });
-  return data;
+  // (Per-email seeds skip them unless --with-journeys: the analytics are already
+  // loaded by ph-accounts-<seed>, and they are ≈ 16,000 docs.)
+  if (!t || o.withJourneys) addJourneyData(data, { seed: o.seed });
+  if (!t) return data;
+  // Per-email seed: the CSM book (logged contacts, bell items) for the staff account,
+  // a free account when asked, then every ph_ id in this address's namespace.
+  if (t.staff) {
+    const book = planCsmSeed(data.collections.memberships ?? [], [], [], new Date(data.now), [t.staffEmail]);
+    const stamp = (d: object) => ({ ...d, placeholder: true, placeholderBatch: data.batch }) as Doc;
+    data.collections.csm_contacts = [...(data.collections.csm_contacts ?? []), ...book.contacts.map(stamp)];
+    data.collections.notifications = [...(data.collections.notifications ?? []), ...book.notifications.map(stamp)];
+  }
+  if (t.member === "free") data = asFreeAccount(data, ids.memberId);
+  return namespaceIds(data, t.ns);
 }
 
 function preview(v: unknown, depth = 0): unknown {
@@ -165,28 +228,50 @@ function preview(v: unknown, depth = 0): unknown {
 
 const ACCOUNT_DOCS = ["clients", "providers", "lawyer_availability"] as const;
 
+/** Who to seed: the three default accounts (target null) or one per --email. */
+export function targetsOf(o: AccountCli): Array<AccountTarget | null> {
+  return o.emails.length ? o.emails.map((e) => accountTarget(e, o.roles, o.seed)) : [null];
+}
+
+/** Env lines a per-email target needs on the server (role lists are env only; no Firestore record). */
+export function envLinesFor(t: AccountTarget): string[] {
+  const out: string[] = [];
+  if (t.staff) {
+    out.push(`DASHBOARD_EXTRA_ALLOWED_EMAILS += ${t.email}   (staff login outside ${"@"}internationallegalpartner.com)`);
+    if (t.staff === "admin") out.push(`ADMIN_EMAILS += ${t.email}   (admin: /dashboard, /csm with its own book, finance, settings, privacy)`);
+    // Admins are listed as CSMs too, so the CSM list, pickers and auto-assign include them.
+    if (t.staff === "admin" || t.staff === "csm") out.push(`CSM_EMAILS += ${t.email}`);
+  }
+  if (t.sales) out.push(`SALES_EMAILS += ${t.email}   (optional: receives REAL sales-call bookings and emails; leave out for a test address)`);
+  return out;
+}
+
 /** Read the accounts (read-only). Earlier account-seed changes are taken out in memory. */
-async function lookup(o: AccountCli): Promise<{ ids: AccountIds; real: RealDocs; raw: Record<string, Doc | null>; notes: string[] }> {
+async function lookup(o: AccountCli, t: AccountTarget | null): Promise<{ ids: AccountIds; real: RealDocs; raw: Record<string, Doc | null>; notes: string[] }> {
   const notes: string[] = [];
-  const providers = (await getAll("providers")) as unknown as Doc[];
-  const realLawyers = providers.filter((p) => typeof p.email === "string" && normEmail(p.email) === o.lawyerEmail && !isPlaceholderDoc(p));
-  const ourLawyer = providers.find((p) => typeof p.email === "string" && normEmail(p.email) === o.lawyerEmail && isPlaceholderDoc(p));
-  if (realLawyers.length > 1) notes.push(`lawyer: ${realLawyers.length} real providers use ${o.lawyerEmail}; using ${realLawyers[0].id}.`);
-  const lawyerId = String(realLawyers[0]?.id ?? ourLawyer?.id ?? "ph_prov_acct_lawyer");
-  let memberId = emailToDocId(o.memberEmail);
-  let member = (await get("clients", memberId).catch(() => null)) as Doc | null;
-  if (!member) {
-    const byEmail = ((await query("clients", [{ field: "email", op: "EQUAL", value: o.memberEmail }]).catch(() => [])) as unknown as Doc[])
+  const who = t ?? { lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail };
+  const fallback = t ? targetIds(t, emailToDocId) : null;
+  const wantLawyer = !t || t.lawyer;
+  const wantMember = !t || !!t.member;
+  const providers = wantLawyer ? (await getAll("providers")) as unknown as Doc[] : [];
+  const realLawyers = providers.filter((p) => typeof p.email === "string" && normEmail(p.email) === who.lawyerEmail && !isPlaceholderDoc(p));
+  const ourLawyer = providers.find((p) => typeof p.email === "string" && normEmail(p.email) === who.lawyerEmail && isPlaceholderDoc(p));
+  if (realLawyers.length > 1) notes.push(`lawyer: ${realLawyers.length} real providers use ${who.lawyerEmail}; using ${realLawyers[0].id}.`);
+  const lawyerId = String(realLawyers[0]?.id ?? (fallback ? fallback.lawyerId : ourLawyer?.id ?? "ph_prov_acct_lawyer"));
+  let memberId = fallback ? fallback.memberId : emailToDocId(who.memberEmail);
+  let member = wantMember ? (await get("clients", memberId).catch(() => null)) as Doc | null : null;
+  if (!member && wantMember) {
+    const byEmail = ((await query("clients", [{ field: "email", op: "EQUAL", value: who.memberEmail }]).catch(() => [])) as unknown as Doc[])
       .filter((c) => !isPlaceholderDoc(c));
     if (byEmail.length) {
       memberId = String(byEmail[0].id);
       member = byEmail[0];
-      notes.push(`member: no clients/${emailToDocId(o.memberEmail)}; using clients/${memberId} (same email).`);
+      notes.push(`member: no clients/${emailToDocId(who.memberEmail)}; using clients/${memberId} (same email).`);
     }
   }
-  const lawyer = realLawyers[0] ?? (ourLawyer ?? null);
-  const availability = (await get("lawyer_availability", lawyerId).catch(() => null)) as Doc | null;
-  const memberships = ((await query("memberships", [{ field: "clientId", op: "EQUAL", value: memberId }]).catch(() => [])) as unknown as Doc[]);
+  const lawyer = realLawyers[0] ?? (t ? null : ourLawyer ?? null);
+  const availability = wantLawyer ? (await get("lawyer_availability", lawyerId).catch(() => null)) as Doc | null : null;
+  const memberships = wantMember ? ((await query("memberships", [{ field: "clientId", op: "EQUAL", value: memberId }]).catch(() => [])) as unknown as Doc[]) : [];
   const realMembership = memberships.some((m) => !isPlaceholderDoc(m) && (m.status === "active" || m.status === "past_due"));
   const raw: Record<string, Doc | null> = {
     [`clients/${memberId}`]: member,
@@ -196,7 +281,7 @@ async function lookup(o: AccountCli): Promise<{ ids: AccountIds; real: RealDocs;
   // In memory: the real docs as they were before any earlier account seed.
   const restored = (c: string, d: Doc | null) => (d && !isPlaceholderDoc(d) ? applyWrite(d, planRestore(c, "", d)) : d);
   return {
-    ids: { lawyerId, memberId, lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail },
+    ids: { lawyerId, memberId, lawyerEmail: who.lawyerEmail, staffEmail: who.staffEmail, memberEmail: who.memberEmail },
     real: {
       lawyer: restored("providers", lawyer),
       member: restored("clients", member),
@@ -214,8 +299,17 @@ export async function main(args: string[] = Deno.args): Promise<number> {
     console.error(parsed.error);
     return 2;
   }
-  const o = parsed;
-  const batch = accountBatch(o.seed);
+  let code = 0;
+  for (const t of targetsOf(parsed)) {
+    code = Math.max(code, await runAccount(parsed, t));
+    if (code === 2) break;
+  }
+  return code;
+}
+
+/** One account seed: the three default accounts (t null) or one --email target. */
+async function runAccount(o: AccountCli, t: AccountTarget | null): Promise<number> {
+  const batch = t ? t.batch : accountBatch(o.seed);
   const haveKey = !!Deno.env.get("SERVICE_ACCOUNT_KEY");
   const offline = o.dryRun && (o.offline || !haveKey);
   if (!o.dryRun && !haveKey) {
@@ -228,34 +322,47 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   let raw: Record<string, Doc | null> = {};
   let notes: string[] = [];
   if (offline) {
-    ids = { lawyerId: OFFLINE_LAWYER_ID, memberId: emailToDocId(o.memberEmail), lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail };
+    ids = t ? targetIds(t, emailToDocId) : { lawyerId: OFFLINE_LAWYER_ID, memberId: emailToDocId(o.memberEmail), lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail };
     real = { lawyer: null, member: null, availability: null, memberHasRealMembership: false };
     notes.push(`offline: assumed providers/${ids.lawyerId} and clients/${ids.memberId}; real fields are only known with Firestore access.`);
   } else {
     try {
-      ({ ids, real, raw, notes } = await lookup(o));
+      ({ ids, real, raw, notes } = await lookup(o, t));
     } catch (err) {
       console.error(`Could not read the accounts from Firestore: ${err instanceof Error ? err.message : err}`);
       return 1;
     }
   }
 
-  const data = buildAccountData(o, ids, real);
+  // Per-email: real base docs for the accounts that do not exist yet (created before the merge).
+  const bases: Write[] = t ? baseAccountDocs(t, ids, real, new Date().toISOString()) : [];
+  for (const b of bases) {
+    if (b.collection === "providers") real.lawyer = b.doc;
+    if (b.collection === "lawyer_availability") real.availability = b.doc;
+    if (b.collection === "clients") real.member = b.doc;
+  }
+
+  const data = buildAccountData(o, ids, real, undefined, t ?? undefined);
   const seededAt = data.now;
   const plan = planAccountSeed(data, ids, real, seededAt);
   checkAccountPlan(plan, ids, real);
 
+  const who = t ?? { lawyerEmail: o.lawyerEmail, staffEmail: o.staffEmail, memberEmail: o.memberEmail };
+  const state = (doc: Doc | null, key: string) =>
+    bases.some((b) => `${b.collection}/${b.id}` === key) ? " (missing: real base doc created)" : doc ? " (real)" : offline ? "" : " (missing: created as placeholder)";
   console.log(`${o.dryRun ? "[dry-run] " : ""}ILP account seed  seed=${o.seed} batch=${batch}  now=${data.now}${offline ? "  (offline)" : ""}`);
-  console.log(`  lawyer  ${o.lawyerEmail} → providers/${ids.lawyerId}${real.lawyer ? " (real)" : offline ? "" : " (missing: created as placeholder)"}`);
-  console.log(`  staff   ${o.staffEmail} (CSM; no staff document, role comes from ADMIN_EMAILS / CSM_EMAILS)`);
-  console.log(`  member  ${o.memberEmail} → clients/${ids.memberId}${real.member ? " (real)" : offline ? "" : " (missing: created as placeholder)"}`);
+  if (t) console.log(`  address ${t.email}  roles: lawyer ${t.lawyer ? "yes" : "no"}, member ${t.member ?? "no"}, staff ${t.staff ?? "no"}, sales ${t.sales ? "yes" : "no"}; ids ph_${t.ns}_…`);
+  console.log(`  lawyer  ${who.lawyerEmail} → providers/${ids.lawyerId}${state(real.lawyer, `providers/${ids.lawyerId}`)}`);
+  console.log(`  staff   ${who.staffEmail} (CSM; no staff document, role comes from ADMIN_EMAILS / CSM_EMAILS)`);
+  console.log(`  member  ${who.memberEmail} → clients/${ids.memberId}${state(real.member, `clients/${ids.memberId}`)}${t?.member === "free" ? " (free account)" : ""}`);
   // Offline the real docs are unknown: the plan below treats them as missing (a real run merges into them).
   for (const n of offline ? notes : [...notes, ...plan.notes]) console.log(`  - ${n}`);
+  if (t) for (const l of envLinesFor(t)) console.log(`  env: ${l}`);
 
   console.log("\nDocuments per collection (member / lawyer / staff = docs that reference that account):");
   const counts = accountCounts(data, ids);
   printTable(counts, ["collection", "docs", "member", "lawyer", "staff"]);
-  console.log(`  total: ${counts.reduce((s, r) => s + r[1], 0)} documents; ${plan.creates.length} placeholder writes + ${plan.merges.length} merges into real docs`);
+  console.log(`  total: ${counts.reduce((s, r) => s + r[1], 0)} documents; ${plan.creates.length} placeholder writes + ${plan.merges.length} merges into real docs${bases.length ? ` + ${bases.length} real base docs (${bases.map((b) => `${b.collection}/${b.id}`).join(", ")})` : ""}`);
   console.log("\nWhat each account will see:");
   printTable(screenReport(data, ids).map((r) => [r.account, r.screen, r.count, r.detail]), ["account", "screen", "count", "detail"]);
   for (const m of plan.merges) {
@@ -263,6 +370,15 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   }
 
   if (o.dryRun) {
+    if (t) {
+      // per-email: the counts and screens above are the preview
+      let project = "<project id>";
+      try {
+        if (!offline) project = getProjectId();
+      } catch { /* no key: keep the placeholder */ }
+      console.log(`\nDry run: nothing written. To write, re-run with --confirm-project=${project}`);
+      return 0;
+    }
     for (const [col, list] of Object.entries(data.collections)) {
       const mine = list.filter((d) => [ids.memberId, ids.lawyerId].some((x) => JSON.stringify(d).includes(`"${x}"`)));
       const pick = (mine.length >= 2 ? mine : list).slice(0, 2);
@@ -280,7 +396,7 @@ export async function main(args: string[] = Deno.args): Promise<number> {
     return 2;
   }
   const others = ((await query("clients", [{ field: "placeholder", op: "EQUAL", value: true }]).catch(() => [])) as unknown as Doc[])
-    .filter((c) => c.placeholderBatch && c.placeholderBatch !== batch && c.placeholderBatch !== "derived");
+    .filter((c) => batchesOverlap(batch, c.placeholderBatch));
   if (others.length && !o.allowOtherBatches) {
     console.error(`\nAnother placeholder batch is loaded (${[...new Set(others.map((c) => c.placeholderBatch))].join(", ")}); its ph_ ids overlap with this seed.`);
     console.error("Remove it first (scripts/removePlaceholders.ts) or pass --allow-other-batches.");
@@ -288,6 +404,11 @@ export async function main(args: string[] = Deno.args): Promise<number> {
   }
 
   const errors: string[] = [];
+  // 0. Per-email: the real base docs (create only; an existing doc is never touched here).
+  for (const b of bases) {
+    const created = await createDocumentIfAbsent(b.collection, b.id, b.doc);
+    console.log(`  ${b.collection}/${b.id}: ${created ? "real base doc created" : "already exists (kept)"}`);
+  }
   // 1. Undo an earlier account seed on the real docs, so the merge starts from the real state.
   for (const [key, doc] of Object.entries(raw)) {
     if (!doc || isPlaceholderDoc(doc)) continue;
@@ -346,7 +467,7 @@ export async function main(args: string[] = Deno.args): Promise<number> {
     for (const e of errors.slice(0, 10)) console.error(`   - ${e}`);
     return 1;
   }
-  console.log(`  Remove with: deno run --allow-net --allow-env --allow-read scripts/removePlaceholders.ts --accounts --confirm-project=${project}`);
+  console.log(`  Remove with: deno run --allow-net --allow-env --allow-read scripts/removePlaceholders.ts --accounts${t ? ` --batch=${batch}` : ""} --confirm-project=${project}`);
   return 0;
 }
 

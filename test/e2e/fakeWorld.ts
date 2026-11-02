@@ -255,7 +255,9 @@ export function installFakeWorld(startIso: string, opts: { suggestion?: { summar
       }
       return json(200, { writeResults: [] });
     }
-    const segs = rest.replace(/^\//, "").split("/");
+    const all = rest.replace(/^\//, "").split("/");
+    // Subcollections (clients/<id>/<sub>[/<doc>]) are stored under their full path.
+    const segs = all.length % 2 ? [all.join("/")] : [all.slice(0, -1).join("/"), all[all.length - 1]];
     if (segs.length === 1) {
       const collection = segs[0];
       if (method === "GET") {
