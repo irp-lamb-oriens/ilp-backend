@@ -47,10 +47,25 @@ export function emailToDocId(email: string): string {
   return email.replace(/[@.]/g, "_");
 }
 
-/** True when `email` belongs to the allowed staff domain. */
+const normStaffEmail = (v: string) => v.trim().replace(/^["']+|["']+$/g, "").trim().toLowerCase();
+
+/**
+ * Staff addresses outside the staff domain that may still sign in to
+ * /dashboard and /csm: DASHBOARD_EXTRA_ALLOWED_EMAILS, a comma (or semicolon /
+ * whitespace) separated list; empty by default, so nothing changes unless it is
+ * set. Their sub-role still comes from ADMIN_EMAILS / CSM_EMAILS. The same
+ * rule gates the audited staff bypass in session.ts (staffDomainOk).
+ */
+export function extraStaffEmails(): string[] {
+  return (Deno.env.get("DASHBOARD_EXTRA_ALLOWED_EMAILS") ?? "").split(/[,;\s]+/).map(normStaffEmail).filter((e) => e.includes("@"));
+}
+
+/** True when `email` belongs to the allowed staff domain (or is listed in DASHBOARD_EXTRA_ALLOWED_EMAILS). */
 export function isAllowedDomain(email: string): boolean {
-  const domain = email.split("@")[1]?.toLowerCase();
-  return domain === allowedDomain();
+  const normalized = normStaffEmail(String(email ?? ""));
+  const domain = normalized.split("@")[1];
+  if (domain === allowedDomain()) return true;
+  return !!normalized && extraStaffEmails().includes(normalized);
 }
 
 // ─── Hardened OTP storage & verification ───────────────────────────────────

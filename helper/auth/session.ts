@@ -21,6 +21,7 @@
 import type { Request, Response, NextFunction } from "express";
 import getAll from "../../db/getAll.ts";
 import { auditStaffBypass } from "./audit.ts";
+import { isAllowedDomain } from "./otp.ts";
 import log from "../log.ts";
 import {
   bearerToken,
@@ -119,10 +120,13 @@ async function firstSession(
   return null;
 }
 
-/** True when a staff session belongs to the org domain (bypass allowed). */
+/**
+ * True when a staff session may use the audited bypass: the org domain or an
+ * address in DASHBOARD_EXTRA_ALLOWED_EMAILS (same rule as the staff login, see
+ * isAllowedDomain in otp.ts).
+ */
 function staffDomainOk(email: string): boolean {
-  const domain = email.toLowerCase().split("@")[1];
-  return domain === (Deno.env.get("DASHBOARD_ALLOWED_DOMAIN") ?? "internationallegalpartner.com");
+  return isAllowedDomain(String(email ?? ""));
 }
 
 /** Resolve a provider doc for a staff member (dashboard bypass). */
