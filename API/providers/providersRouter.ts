@@ -7,6 +7,8 @@ import query from "../../db/query.ts";
 import log from "../../helper/log.ts";
 import type { SessionUser } from "../../helper/auth/types.ts";
 import applyRouter from "./applyRouter.ts";
+import getOne from "../../db/get.ts";
+import { pickProviderProfile } from "./selfProfile.ts";
 
 /**
  * Vetted legal partner profiles. Provider-side supply:
@@ -53,12 +55,18 @@ export default (app: Express) => {
         return res.status(400).json({ error: "name and country are required" });
       }
 
+      // Only profile fields a lawyer may set about themselves (QA round 1):
+      // the body used to be spread whole into the record, so a caller could
+      // write status, score, insurance, slaStatus, notes or commercial fields.
+      // A new record starts "pending"; an existing one keeps its status, so
+      // a vetted lawyer editing a profile is not taken out of routing.
       const id = `provider_${user.uid}`;
+      const existing = (await getOne("providers", id)) as { status?: string } | null;
       await patch("providers", id, {
-        ...body,
+        ...pickProviderProfile(body),
         uid: user.uid,
         email: user.email,
-        status: "pending",
+        status: existing?.status ?? "pending",
         updatedAt: new Date().toISOString(),
       });
       res.status(200).json({ id });

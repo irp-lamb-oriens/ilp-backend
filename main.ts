@@ -6,6 +6,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import http from "node:http";
 import log from "./helper/log.ts";
+import { GLOBAL_IP_LIMIT, IP_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
 
 import profilesRouter from "./API/profiles/profilesRouter.ts";
 import rulesRouter from "./API/rules/rulesRouter.ts";
@@ -122,9 +123,11 @@ function createServer() {
       next();
     });
 
+    // Per-IP for anonymous traffic and abuse-prone public routes; per session
+    // for signed-in portal requests (helper/rateLimitKeys.ts, QA round 3).
     const globalLimiter = rateLimit({
       windowMs: 1 * MINUTE,
-      max: 100,
+      max: GLOBAL_IP_LIMIT,
       standardHeaders: true,
       legacyHeaders: false,
       message: { error: "Too many requests. Retry in a minute." },
@@ -133,15 +136,28 @@ function createServer() {
 
     const apiLimiter = rateLimit({
       windowMs: 1 * MINUTE,
-      max: 50,
+      max: IP_LIMIT,
       standardHeaders: true,
       legacyHeaders: false,
       message: { error: "Too many API requests. Retry in a minute." },
       validate: { trustProxy: false },
+      skip: (req: Request) => usesSessionBucket(req),
+    });
+
+    const sessionLimiter = rateLimit({
+      windowMs: 1 * MINUTE,
+      max: SESSION_LIMIT,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many API requests. Retry in a minute." },
+      validate: { trustProxy: false },
+      skip: (req: Request) => !usesSessionBucket(req),
+      keyGenerator: (req: Request) => sessionBucketKey(req),
     });
 
     app.use(globalLimiter);
     app.use("/api/", apiLimiter);
+    app.use("/api/", sessionLimiter);
     // Small default body limit; import/upload-style routes keep the large one.
     const bigJson = express.json({ limit: "10mb" });
     const smallJson = express.json({ limit: "1mb" });

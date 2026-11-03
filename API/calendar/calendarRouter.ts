@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
+import validateUser from "../../helper/auth/validateUser.ts";
 import log from "../../helper/log.ts";
 import { getGoogleAccessToken } from "../../helper/getGoogleAuthClient.ts";
 
@@ -19,8 +20,12 @@ export default (app: Express) => {
     log("CALENDAR_ID is not configured — /api/events will fail.", "calendar");
   }
 
+  // Staff only (QA round 1, 2026-11-03): this route was public and returns
+  // every event on the ILP calendar from today on, which names members and
+  // lawyers. No front-end page calls it.
   app.get(
     "/api/events",
+    validateUser("staff"),
     asyncHandler(async (_req: Request, res: Response) => {
       log("START: /api/events");
 

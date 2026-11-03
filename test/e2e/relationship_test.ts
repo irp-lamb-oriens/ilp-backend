@@ -753,6 +753,146 @@ Deno.test("REL 14 permissions: roles, scoping and hidden fields", async () => {
   assert(world.emails().every((e) => !/@example\.(com|org|net)|\.test$|\.invalid$/.test(String(e.to))));
 });
 
+/**
+ * QA round 2 (2026-11-03): every GET route in main.ts, called with every
+ * role's session after the whole relationship has run (so the world holds
+ * members, calls, handoffs, quotes, opportunities and payouts). A role must
+ * never get 2xx from another portal's area, and no payload may carry a
+ * field from LAWYER_HIDDEN_FIELDS / CLIENT_HIDDEN_FIELDS for that role.
+ * Writes are checked separately below; the sweep itself only reads.
+ */
+const ALL_ROUTERS = [
+  "../../API/profiles/profilesRouter.ts", "../../API/rules/rulesRouter.ts", "../../API/alerts/alertsRouter.ts",
+  "../../API/countries/countriesRouter.ts", "../../API/updates/updatesRouter.ts", "../../API/templates/templatesRouter.ts",
+  "../../API/consultations/consultationsRouter.ts", "../../API/providers/providersRouter.ts", "../../API/dashboard/providersRouter.ts",
+  "../../API/dashboard/providerRfqDashboardRouter.ts", "../../API/provider/providerAuthRouter.ts", "../../API/provider/providerDashboardRouter.ts",
+  "../../API/provider/providerQuotesRouter.ts", "../../API/dashboard/assignmentRouter.ts", "../../API/dashboard/pricingRequestsRouter.ts",
+  "../../API/vendors/vendorRouter.ts", "../../API/tasks/tasksRouter.ts", "../../API/analytics/analyticsRouter.ts",
+  "../../API/leads/leadsRouter.ts", "../../API/dashboard/dashboardRouter.ts", "../../API/calendar/calendarRouter.ts",
+  "../../API/finance/invoicesRouter.ts", "../../API/finance/financeLedgerRouter.ts", "../../API/finance/financeMetricsRouter.ts",
+  "../../API/finance/salesReportRouter.ts", "../../API/payments/paymentsRouter.ts", "../../API/blog/blogPublicRouter.ts",
+  "../../API/guides/guidesPublicRouter.ts", "../../API/posts/postsRouter.ts", "../../API/chatbot/chatbotRouter.ts",
+  "../../API/dashboard/serviceTypesRouter.ts", "../../API/clientStatus/clientStatusRouter.ts", "../../API/dashboard/quoteTemplatesRouter.ts",
+  "../../API/dashboard/quoteTemplateMapRouter.ts", "../../API/dashboard/quoteLineTemplatesRouter.ts", "../../API/dashboard/quoteLabelsRouter.ts",
+  "../../API/dashboard/quotesRouter.ts", "../../API/dashboard/emailAutomationRouter.ts", "../../API/dashboard/stageGatesRouter.ts",
+  "../../API/dashboard/stageConfigRouter.ts", "../../API/dashboard/overviewFieldsRouter.ts", "../../API/dashboard/crmLilyRouter.ts",
+  "../../API/dashboard/clientsBulkImportRouter.ts", "../../API/portal/portalRouter.ts", "../../API/push/pushRouter.ts",
+  "../../API/members/membersRouter.ts", "../../API/calls/callsRouter.ts", "../../API/privacy/privacyRouter.ts",
+  "../../API/opportunities/opportunitiesRouter.ts", "../../API/journeys/journeysRouter.ts", "../../API/routing/routingRouter.ts",
+  "../../API/lawyerComms/lawyerCommsRouter.ts", "../../API/csm/csmRouter.ts", "../../API/notifications/notificationsRouter.ts",
+];
+
+/** Areas by URL prefix: who may get a 2xx there. */
+const STAFF_AREAS = /^\/api\/(dashboard|csm|staff|admin|finance|notifications|opportunities|vendors|events)(\/|$)/;
+const LAWYER_AREAS = /^\/api\/(provider|lawyer)(\/|$)/;
+const MEMBER_AREAS = /^\/api\/(client-status|member|portal|privacy\/me|retention\/me|push\/(subscribe|unsubscribe))(\/|$)/;
+
+/** Public on purpose: the legal-area list the lawyer application form reads. */
+const PUBLIC_IN_STAFF_AREA = new Set(["/api/dashboard/providers/meta"]);
+let full: FakeApp;
+
+// Routers start housekeeping intervals when imported (as in REL 0), so the op sanitizer stays off here.
+Deno.test({ name: "REL 15 role sweep: every GET route × every role, areas and hidden fields", sanitizeOps: false, sanitizeResources: false }, async () => {
+  const { LAWYER_HIDDEN_FIELDS, CLIENT_HIDDEN_FIELDS } = await import("../../schemas/contracts.ts");
+  full = new FakeApp();
+  const { documentAccessRouter } = await import("../../helper/storage.ts");
+  documentAccessRouter(full);
+  for (const m of ALL_ROUTERS) (await import(m)).default(full);
+
+  const owner = String(world.doc("clients", ctx.M1)?.assignedProviderId ?? ctx.A);
+  const tokens: Record<string, string | null> = {
+    member: member(ctx.M1),
+    lawyer: lawyerSession(owner),
+    csm: ctx.csm,
+    staff: ctx.staff,
+    admin: ctx.admin,
+  };
+  const ids: Record<string, string> = {
+    clientId: ctx.M1, memberId: ctx.M1, id: ctx.M1, consultationId: ctx.c1, providerId: owner, lawyerId: owner,
+    handoffId: ctx.h1, quoteId: ctx.q, opportunityId: ctx.opp, matterId: ctx.mat1,
+  };
+  const fill = (path: string) => path.replace(/:([A-Za-z_]+)\??/g, (_m, k) => encodeURIComponent(ids[k] ?? ctx.M1));
+  const gets = full.layers.filter((l) => l.method === "GET" && l.path && !l.path.includes("*")).map((l) => l.path!);
+  const urls = [...new Set(gets)].map(fill);
+
+  const leaks: string[] = [];
+  const crossings: string[] = [];
+  const crashes: string[] = [];
+  for (const url of urls) {
+    for (const [role, tok] of Object.entries(tokens)) {
+      let r: CallResult;
+      try {
+        r = await full.call("GET", url, { headers: bearer(tok) });
+      } catch (e) {
+        crashes.push(`${role} ${url}: threw ${e instanceof Error ? e.message : e}`);
+        continue;
+      }
+      if (r.status >= 500) crashes.push(`${role} ${url}: ${r.status}`);
+      if (r.status < 200 || r.status >= 300) continue;
+      const path = url.split("?")[0];
+      if (PUBLIC_IN_STAFF_AREA.has(path)) continue;
+      if (role === "member" && (STAFF_AREAS.test(path) || LAWYER_AREAS.test(path))) crossings.push(`member got ${r.status} on ${url}`);
+      if (role === "lawyer" && (STAFF_AREAS.test(path) || MEMBER_AREAS.test(path))) crossings.push(`lawyer got ${r.status} on ${url}`);
+      const keys = keysIn(r.body);
+      const hidden = role === "lawyer" ? LAWYER_HIDDEN_FIELDS : role === "member" ? CLIENT_HIDDEN_FIELDS : [];
+      for (const k of hidden) if (keys.has(k)) leaks.push(`${role} sees "${k}" on ${url}`);
+    }
+  }
+  // Finance is admin-only (launch checklist §7: a csm-role account gets 403 on Finance).
+  for (const url of urls.filter((u) => /\/finance(\/|$)|sales-report|invoices/.test(u))) {
+    const r = await full.call("GET", url, { headers: bearer(ctx.csm) });
+    if (r.status >= 200 && r.status < 300) crossings.push(`csm got ${r.status} on finance route ${url}`);
+  }
+  console.log(`[REL 15] ${urls.length} GET routes × ${Object.keys(tokens).length} roles`);
+  if (crashes.length) console.log("[REL 15] 5xx (not a permission failure, listed for review):\n  " + crashes.join("\n  "));
+  assertEquals(crossings, [], "a role reached another portal's data");
+  assertEquals(leaks, [], "a hidden field reached the wrong role");
+});
+
+Deno.test("REL 16 role writes: consent, opportunities, commercial notes", async () => {
+  const owner = String(world.doc("clients", ctx.M1)?.assignedProviderId ?? ctx.A);
+  const law = lawyerSession(owner);
+  const m1 = member(ctx.M1);
+  const call = (tok: string | null, method: string, url: string, body: unknown = {}) => full.call(method, url, { body, headers: bearer(tok) });
+  const before = JSON.stringify(world.all("consents").filter((c) => c.clientId === ctx.M1));
+  // Staff may read consents but never give or withdraw one for a member (privacy doc §5).
+  for (const tok of [ctx.staff, ctx.csm, ctx.admin, law]) {
+    const r = await call(tok, "POST", "/api/privacy/me/consents", { kind: "marketing", granted: true });
+    assert(r.status === 401 || r.status === 403, `consent write by a non-member: ${r.status}`);
+  }
+  assertEquals(JSON.stringify(world.all("consents").filter((c) => c.clientId === ctx.M1)), before, "no consent row changed");
+  // Lawyers and members never write opportunities or handoff commercial follow-up.
+  for (const tok of [law, m1]) {
+    for (const [method, url, body] of [
+      ["PATCH", `/api/dashboard/opportunities/${ctx.opp}`, { stage: "won" }],
+      ["POST", `/api/dashboard/opportunities/${ctx.opp}/stage`, { stage: "won" }],
+      ["POST", "/api/dashboard/opportunities", { clientId: ctx.M1, title: "x" }],
+      ["POST", `/api/dashboard/staff/handoffs/${ctx.h1}/proposal-task`, { commercialNotes: "x" }],
+    ] as const) {
+      const r = await call(tok, method, url, body);
+      assert(r.status === 401 || r.status === 403, `${method} ${url} by a non-staff session: ${r.status}`);
+    }
+  }
+  // QA rounds 1-2: formerly public routes now need a staff session.
+  for (const tok of [null, law, m1]) {
+    assert([401, 403].includes((await call(tok, "GET", "/api/events")).status), "calendar events are staff-only");
+    assert([401, 403].includes((await call(tok, "POST", "/api/chatbot/inject-history", { sessionId: "fe-x", message: "hi" })).status), "inject-history is staff-only");
+  }
+  // A lawyer handoff body carrying commercial fields does not store them (stripProviderWrites).
+  const c6 = world.doc("consultations", ctx.c6);
+  if (c6 && !c6.handoffId && c6.providerId) {
+    world.put("consultations", ctx.c6, { ...c6, status: "completed", summary: { ...(c6.summary ?? {}), status: "confirmed" } });
+    const r = await call(lawyerSession(String(c6.providerId)), "POST", "/api/lawyer/handoffs", {
+      consultationId: ctx.c6, legalNextSteps: [{ what: "Bring the deed", who: "client" }], commercialNotes: "lawyer wrote this", marginPct: 90,
+    });
+    if (r.status === 201) {
+      const h = world.doc("handoffs", r.body.id) ?? {};
+      assert(h.commercialNotes !== "lawyer wrote this", "a lawyer wrote commercialNotes");
+      assert(h.marginPct === undefined, "a lawyer wrote marginPct");
+    }
+  }
+});
+
 Deno.test("REL 99 teardown", () => {
   world.restore();
 });

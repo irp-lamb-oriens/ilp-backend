@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
+import validateUser from "../../helper/auth/validateUser.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
@@ -34,8 +35,12 @@ interface ChatbotRequestBody {
 export default (app: Express) => {
   log("Chatbot Multi-Agent module initialized.");
 
+  // Staff only (QA round 2, 2026-11-03): unauthenticated, it let anyone add
+  // "user" messages and an authCode to any thread whose id they knew. No
+  // front-end page calls it.
   app.post(
     "/api/chatbot/inject-history",
+    validateUser("staff"),
     asyncHandler(async (req: Request, res: Response) => {
       const { sessionId, message, authCode } = req.body as ChatbotRequestBody;
       if (!sessionId || !message) return res.status(400).send("Missing sessionId or message");
