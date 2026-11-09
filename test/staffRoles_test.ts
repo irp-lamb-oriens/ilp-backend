@@ -120,9 +120,9 @@ Deno.test("OWNER_EMAILS stands in only while ADMIN_EMAILS is empty; both empty â
   assertEquals(warnIfNoAdmins(), true);
   env("boss@internationallegalpartner.com", "", "owner@internationallegalpartner.com");
   assertEquals(staffRoleFor("owner@internationallegalpartner.com"), "staff");
-  assertEquals(adminEmails(), ["boss@internationallegalpartner.com"]);
+  assertEquals(adminEmails(), ["boss@internationallegalpartner.com", "hello@nathaliehowell.com"]);
   env("");
-  assertEquals(adminEmails(), []);
+  assertEquals(adminEmails(), ["hello@nathaliehowell.com"], "only the always-allowed address");
   assertEquals(staffRoleFor("owner@internationallegalpartner.com"), "staff");
   assertEquals(staffRoleFor("anyone@internationallegalpartner.com"), "staff");
   assertEquals(warnIfNoAdmins(), false);

@@ -107,7 +107,7 @@ Deno.test("accounts --email: every ph_ id is namespaced; no id meets the shared 
   const ours = key(all.data);
   const overlap = [...key(legacy)].filter((k) => ours.has(k));
   assertEquals(overlap, []);
-  assertEquals(namespaceIds({ a: "ph_cli_001", b: ["x ph_con_1", "graph_x", "ph_merlin_cli_1"], ph_k: 1 }, "merlin"), { a: "ph_merlin_cli_001", b: ["x ph_merlin_con_1", "graph_x", "ph_merlin_cli_1"], ph_merlin_k: 1 });
+  assertEquals<unknown>(namespaceIds({ a: "ph_cli_001", b: ["x ph_con_1", "graph_x", "ph_merlin_cli_1"], ph_k: 1 }, "merlin"), { a: "ph_merlin_cli_001", b: ["x ph_merlin_con_1", "graph_x", "ph_merlin_cli_1"], ph_merlin_k: 1 });
   assertEquals(namespaceIds("ph_cli_001", ""), "ph_cli_001");
 });
 

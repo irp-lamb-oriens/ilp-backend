@@ -41,6 +41,7 @@ import {
   isAllowedDomain,
 } from "../../helper/auth/otp.ts";
 import { requireClientAuth } from "../../helper/auth/session.ts";
+import { isAlwaysAllowed } from "../../helper/auth/alwaysAllowed.ts";
 import {
   ensureStageConfig,
   getStageLabel,
@@ -315,7 +316,14 @@ export default (app: Express) => {
 
       const normalizedEmail = String(email).toLowerCase().trim();
 
-      const doc = await get(CLIENTS_COLLECTION, projectId);
+      let doc = await get(CLIENTS_COLLECTION, projectId);
+      // Always-allowed addresses get their own member record on the first code request.
+      if (!doc && isAlwaysAllowed(normalizedEmail) && projectId === emailToDocId(normalizedEmail)) {
+        const nowIso = new Date().toISOString();
+        await put(CLIENTS_COLLECTION, projectId, { email: normalizedEmail, stage: "intake", source: "always_allowed", createdAt: nowIso, updatedAt: nowIso });
+        doc = await get(CLIENTS_COLLECTION, projectId);
+        log(`[client-status] Created member record ${projectId} for an always-allowed address`);
+      }
       if (!doc) return res.status(404).json({ error: "Project not found." });
 
       if (!clientMayAccessProject(doc, projectId, normalizedEmail)) {

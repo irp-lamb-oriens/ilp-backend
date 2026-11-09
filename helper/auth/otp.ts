@@ -57,7 +57,8 @@ const normStaffEmail = (v: string) => v.trim().replace(/^["']+|["']+$/g, "").tri
  * rule gates the audited staff bypass in session.ts (staffDomainOk).
  */
 export function extraStaffEmails(): string[] {
-  return (Deno.env.get("DASHBOARD_EXTRA_ALLOWED_EMAILS") ?? "").split(/[,;\s]+/).map(normStaffEmail).filter((e) => e.includes("@"));
+  const fromEnv = (Deno.env.get("DASHBOARD_EXTRA_ALLOWED_EMAILS") ?? "").split(/[,;\s]+/).map(normStaffEmail).filter((e) => e.includes("@"));
+  return [...new Set([...fromEnv, ...ALWAYS_ALLOWED_EMAILS])];
 }
 
 /** True when `email` belongs to the allowed staff domain (or is listed in DASHBOARD_EXTRA_ALLOWED_EMAILS). */
@@ -77,6 +78,7 @@ import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import remove from "../../db/delete.ts";
 import { sendLockoutEmail } from "./lockout.ts"; // COMMS-P4
+import { ALWAYS_ALLOWED_EMAILS } from "./alwaysAllowed.ts";
 
 export const OTP_TTL_MS = 10 * 60 * 1000;
 export const MAX_OTP_ATTEMPTS = 5;

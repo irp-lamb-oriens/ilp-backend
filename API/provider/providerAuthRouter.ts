@@ -35,6 +35,7 @@ import {
   emailToDocId,
 } from "../../helper/auth/otp.ts";
 import { requireProviderAuth } from "../../helper/auth/session.ts";
+import { isAlwaysAllowed } from "../../helper/auth/alwaysAllowed.ts";
 import { providerLoginBlock } from "../providers/applyLogic.ts";
 import { signInCodeEmail } from "../../helper/emailTemplates.ts"; // COMMS-P1
 
@@ -68,7 +69,8 @@ export default function providerAuthRouter(app: Express) {
         return res.status(400).json({ error: "A valid email is required." });
       }
 
-      const provider = await findProviderByEmail(email);
+      // Always-allowed addresses sign in without a providers record (empty board).
+      const provider = await findProviderByEmail(email) ?? (isAlwaysAllowed(email) ? {} : null);
       if (!provider) {
         return res.status(404).json({ error: "No lawyer account found for this email." });
       }
@@ -106,7 +108,7 @@ export default function providerAuthRouter(app: Express) {
       const check = await verifyOtp("provider_otps", emailToDocId(normalizedEmail), code);
       if (!check.ok) return res.status(check.status).json({ error: check.error });
 
-      const provider = await findProviderByEmail(email);
+      const provider = await findProviderByEmail(email) ?? (isAlwaysAllowed(email) ? {} : null);
       if (!provider) {
         return res.status(404).json({ error: "No lawyer account found for this email." });
       }

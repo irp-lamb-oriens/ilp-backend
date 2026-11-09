@@ -30,7 +30,9 @@ export function startCronRunner(): void {
   });
 
   for (const job of jobs) {
-    new Cron(job.cron, () => runCronJob(job, runGuarded));
+    new Cron(job.cron, async () => {
+      await runCronJob(job, runGuarded);
+    });
     log(`[cron] scheduled "${job.name}" (${job.cron})`, "cronRunner");
   }
 }

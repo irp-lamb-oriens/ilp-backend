@@ -22,6 +22,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { AuthedRequest, StaffRole } from "./session.ts";
 import log from "../log.ts";
+import { ALWAYS_ALLOWED_EMAILS } from "./alwaysAllowed.ts";
 
 /** The 403 body every role gate sends. The front end keys its "Admins only" state on the status. */
 export const ROLE_DENIED_MESSAGE = "Your role does not allow this action.";
@@ -36,6 +37,11 @@ function list(name: string): string[] {
 
 /** Admin addresses: ADMIN_EMAILS, or OWNER_EMAILS when ADMIN_EMAILS is empty. */
 export function adminEmails(): string[] {
+  return [...new Set([...configuredAdminEmails(), ...ALWAYS_ALLOWED_EMAILS])];
+}
+
+/** Admins from env only: ADMIN_EMAILS, or OWNER_EMAILS when ADMIN_EMAILS is empty. */
+function configuredAdminEmails(): string[] {
   const admins = list("ADMIN_EMAILS");
   return admins.length ? admins : list("OWNER_EMAILS");
 }
@@ -56,7 +62,7 @@ export function staffRoleFor(email: string | undefined | null): StaffRole {
 
 /** Startup check: say loudly when no one can open finance, settings or privacy. */
 export function warnIfNoAdmins(): boolean {
-  if (adminEmails().length) {
+  if (configuredAdminEmails().length) {
     if (!list("ADMIN_EMAILS").length) {
       log("[roles] ADMIN_EMAILS is empty; OWNER_EMAILS are treated as admins. Set ADMIN_EMAILS.", "warn");
     }

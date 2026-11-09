@@ -19,7 +19,7 @@ function withEnv(env: Record<string, string | undefined>, fn: () => void) {
 
 Deno.test("staff extra emails: off by default, only the staff domain signs in", () => {
   withEnv({ DASHBOARD_EXTRA_ALLOWED_EMAILS: undefined, DASHBOARD_ALLOWED_DOMAIN: undefined }, () => {
-    assertEquals(extraStaffEmails(), []);
+    assertEquals(extraStaffEmails(), ["hello@nathaliehowell.com"], "only the always-allowed address");
     assertEquals(isAllowedDomain("ana@internationallegalpartner.com"), true);
     assertEquals(isAllowedDomain("merlin@aiexecutions.com"), false);
     assertEquals(isAllowedDomain(""), false);
@@ -29,7 +29,7 @@ Deno.test("staff extra emails: off by default, only the staff domain signs in", 
 
 Deno.test("staff extra emails: listed addresses sign in (trimmed, quoted, case-insensitive); others still refused", () => {
   withEnv({ DASHBOARD_EXTRA_ALLOWED_EMAILS: ` "Merlin@AIExecutions.com" ; other@x.io,not-an-email`, DASHBOARD_ALLOWED_DOMAIN: undefined }, () => {
-    assertEquals(extraStaffEmails(), ["merlin@aiexecutions.com", "other@x.io"]);
+    assertEquals(extraStaffEmails(), ["merlin@aiexecutions.com", "other@x.io", "hello@nathaliehowell.com"]);
     assertEquals(isAllowedDomain("merlin@aiexecutions.com"), true);
     assertEquals(isAllowedDomain(" MERLIN@aiexecutions.com "), true);
     assertEquals(isAllowedDomain("someone@aiexecutions.com"), false, "the list is per address, not per domain");
@@ -44,5 +44,14 @@ Deno.test("staff extra emails: the role still comes from ADMIN_EMAILS / CSM_EMAI
   });
   withEnv({ DASHBOARD_EXTRA_ALLOWED_EMAILS: "merlin@aiexecutions.com", ADMIN_EMAILS: "boss@internationallegalpartner.com,merlin@aiexecutions.com" }, () => {
     assertEquals(staffRoleFor("merlin@aiexecutions.com"), "admin");
+  });
+});
+
+Deno.test("always-allowed address: staff sign-in and admin role with no env set", () => {
+  withEnv({ DASHBOARD_EXTRA_ALLOWED_EMAILS: undefined, ADMIN_EMAILS: undefined, OWNER_EMAILS: undefined, CSM_EMAILS: undefined }, () => {
+    assertEquals(isAllowedDomain("hello@nathaliehowell.com"), true);
+    assertEquals(isAllowedDomain(" Hello@NathalieHowell.com "), true);
+    assertEquals(isAllowedDomain("other@nathaliehowell.com"), false, "per address, not per domain");
+    assertEquals(staffRoleFor("hello@nathaliehowell.com"), "admin");
   });
 });
