@@ -38,6 +38,7 @@ import {
   verifyOtp,
   generateSessionToken,
   emailToDocId,
+  isAllowedDomain,
 } from "../../helper/auth/otp.ts";
 import { requireClientAuth } from "../../helper/auth/session.ts";
 import {
@@ -66,7 +67,7 @@ const CLIENTS_COLLECTION = "clients";
 const OTP_COLLECTION = "client_status_otps";
 const SESSION_COLLECTION = "client_status_sessions";
 
-const ALLOWED_DOMAIN = "internationallegalpartner.com";
+// Staff = the staff domain or DASHBOARD_EXTRA_ALLOWED_EMAILS (helper/auth/otp.ts isAllowedDomain).
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -126,7 +127,7 @@ function clientMayAccessProject(
 ): boolean {
   const normalized = String(email ?? "").toLowerCase().trim();
   if (!normalized) return false;
-  if (normalized.split("@")[1] === ALLOWED_DOMAIN) return true;
+  if (isAllowedDomain(normalized)) return true;
   if (resolvePrincipalEmail(doc, projectId) === normalized) return true;
   const consultations = Array.isArray(doc.consultations) ? doc.consultations : [];
   return consultations.some(
@@ -398,7 +399,7 @@ export default (app: Express) => {
 
       safeSummary.stage = resolveClientDisplayStage(safeSummary.stage);
 
-      const isStaffViewer = email.split("@")[1] === ALLOWED_DOMAIN;
+      const isStaffViewer = isAllowedDomain(email);
       const viewerIsPrincipal = !isStaffViewer && email === resolvePrincipalEmail(doc, id);
 
       res.json({

@@ -17,6 +17,7 @@ import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
 import query from "../../db/query.ts";
 import { requireClientAuth } from "../../helper/auth/session.ts";
+import { isAllowedDomain } from "../../helper/auth/otp.ts";
 import { resolveClientEmail } from "../dashboard/clientHelpers.ts";
 import type { FirestoreDocument } from "../../db/getAll.ts";
 
@@ -33,12 +34,10 @@ function viewerEmail(req: Request): string {
   return String((req as AuthedRequest).clientUser ?? "").toLowerCase().trim();
 }
 
-/** The org domain that counts as "staff". */
-const STAFF_DOMAIN = "internationallegalpartner.com";
-
+/** Staff = the staff domain or DASHBOARD_EXTRA_ALLOWED_EMAILS (isAllowedDomain). */
 function isStaff(req: Request): boolean {
   return !!(req as AuthedRequest).isIrpStaff ||
-    viewerEmail(req).split("@")[1] === STAFF_DOMAIN;
+    isAllowedDomain(viewerEmail(req));
 }
 
 /** Does the signed-in viewer have access to a given client doc? */
