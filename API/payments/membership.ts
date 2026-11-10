@@ -12,6 +12,7 @@
  *             PAYMENTS_DEMO_AUTOPAY=true activates it immediately.
  */
 
+import { ilpPaymentCollected } from "../referrals/ilpHooks.ts"; // REFERRALS
 import get from "../../db/get.ts";
 import patch from "../../db/patch.ts";
 import put from "../../db/put.ts";
@@ -291,6 +292,8 @@ export async function activateMembership(
   // lawyer, the board and the first booking agree. Never throws.
   await ensureAssigned(m.clientId);
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
+  // REFERRALS: activation + first month collected → the referring partner's commission (never throws).
+  await ilpPaymentCollected({ membershipId, clientId: m.clientId, kind: "initial", paidAt: now });
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   // Join confirmation email with the renewal terms (never throws; once per membership).
   await runHook("onActivated", { ...m, ...update } as MembershipDoc);

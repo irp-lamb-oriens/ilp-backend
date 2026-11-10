@@ -62,6 +62,7 @@ import routingRouter from "./API/routing/routingRouter.ts"; // ROUTING
 import lawyerCommsRouter from "./API/lawyerComms/lawyerCommsRouter.ts"; // COMMS-P2
 import csmRouter from "./API/csm/csmRouter.ts"; // COMMS-P3
 import notificationsRouter from "./API/notifications/notificationsRouter.ts"; // COMMS-P3
+import referralsRouter from "./API/referrals/referralsRouter.ts"; // REFERRALS: partner links and commissions
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -235,6 +236,7 @@ function createServer() {
     lawyerCommsRouter(app); // COMMS-P2: lawyer feedback page and thresholds, work offers
     csmRouter(app); // COMMS-P3: the CSM portal (/csm): book, health, playbooks, KPIs
     notificationsRouter(app); // COMMS-P3: the bell for staff, CSMs and lawyers
+    referralsRouter(app); // REFERRALS: partner links, attribution, commissions, payouts, partner portal
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);

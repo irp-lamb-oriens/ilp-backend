@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { attributeIlp } from "../referrals/ilpHooks.ts"; // REFERRALS
 import asyncHandler from "../../helper/asyncHandler.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
 import log from "../../helper/log.ts";
@@ -144,6 +145,7 @@ export default function paymentsRouter(app: Express) {
           ...(toCountryCode(body.country) ? { country: toCountryCode(body.country)! } : {}),
         });
         await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
+        await attributeIlp({ clientId: session.clientId, email: session.email, body }); // REFERRALS
         // JOURNEYS: link the browser to the account; a new account is a funnel step (paid comes with activation).
         await identify(visitorFrom(req), { clientId: session.clientId });
         if (session.newClient) await trackServerStep("account_created", { clientId: session.clientId });

@@ -16,6 +16,7 @@ import { rerouteOpenGaps } from "../API/routing/service.ts"; // ROUTING
 import { licenceExpirySweep, profileIncompleteSweep, weeklyDigest } from "../API/lawyerComms/notify.ts"; // COMMS-P2
 import { lawyerFeedbackSweep } from "../API/lawyerComms/feedback.ts"; // COMMS-P2
 import { CSM_DIGEST_CRON, csmDailyDigest } from "../API/csm/digest.ts"; // COMMS-P3
+import { referralApprovals, referralMonthlyStatements } from "../API/referrals/jobs.ts"; // REFERRALS
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -153,6 +154,22 @@ export const jobs: JobDef[] = [
     cron: CSM_DIGEST_CRON,
     handler: async () => {
       await csmDailyDigest();
+    },
+  },
+  // REFERRALS: pending commissions past their hold → approved (00:40 Costa Rica).
+  {
+    name: "referralApprovals",
+    cron: "40 6 * * *",
+    handler: async () => {
+      await referralApprovals();
+    },
+  },
+  // REFERRALS: day 1, 09:05 Costa Rica: each partner's statement for last month.
+  {
+    name: "referralMonthlyStatements",
+    cron: "5 15 1 * *",
+    handler: async () => {
+      await referralMonthlyStatements();
     },
   },
 ];

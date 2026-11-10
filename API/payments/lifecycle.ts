@@ -20,6 +20,7 @@
  * The pure functions at the top are exported for tests (test/lifecycle_test.ts).
  */
 
+import { ilpPaymentCollected } from "../referrals/ilpHooks.ts"; // REFERRALS
 import get from "../../db/get.ts";
 import patch from "../../db/patch.ts";
 import query from "../../db/query.ts";
@@ -301,6 +302,8 @@ export async function renewMembership(
   // JOURNEYS: first renewal starts month 2, the second month 3.
   const renewal = renewalNumber(m.activatedAt, String(fields.periodStart ?? ""));
   if (renewal === 1 || renewal === 2) await trackServerStep(renewal === 1 ? "renewed_m2" : "renewed_m3", { clientId: m.clientId });
+  // REFERRALS: a renewal collected → the referring partner's commission (never throws).
+  await ilpPaymentCollected({ membershipId: m.id, clientId: m.clientId, kind: "renewal", periodStart: String(fields.periodStart ?? ""), paidAt: now.toISOString() });
   await runHook("onRenewed", after, ref);
   return after;
 }
