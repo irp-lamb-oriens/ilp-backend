@@ -6,7 +6,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import http from "node:http";
 import log from "./helper/log.ts";
-import { GLOBAL_IP_LIMIT, hasOwnLimiter, IP_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
+import { GLOBAL_IP_LIMIT, hasOwnLimiter, IP_LIMIT, isPublicRead, PUBLIC_READ_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
 
 import profilesRouter from "./API/profiles/profilesRouter.ts";
 import rulesRouter from "./API/rules/rulesRouter.ts";
@@ -142,7 +142,7 @@ function createServer() {
       legacyHeaders: false,
       message: { error: "Too many API requests. Retry in a minute." },
       validate: { trustProxy: false },
-      skip: (req: Request) => usesSessionBucket(req) || hasOwnLimiter(req),
+      skip: (req: Request) => usesSessionBucket(req) || hasOwnLimiter(req) || isPublicRead(req),
     });
 
     const sessionLimiter = rateLimit({
@@ -156,8 +156,20 @@ function createServer() {
       keyGenerator: (req: Request) => sessionBucketKey(req),
     });
 
+    // Public lists the marketing pages read (updates, templates, providers): own per-IP bucket.
+    const publicReadLimiter = rateLimit({
+      windowMs: 1 * MINUTE,
+      max: PUBLIC_READ_LIMIT,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many API requests. Retry in a minute." },
+      validate: { trustProxy: false },
+      skip: (req: Request) => usesSessionBucket(req) || !isPublicRead(req),
+    });
+
     app.use(globalLimiter);
     app.use("/api/", apiLimiter);
+    app.use("/api/", publicReadLimiter);
     app.use("/api/", sessionLimiter);
     // Small default body limit; import/upload-style routes keep the large one.
     const bigJson = express.json({ limit: "10mb" });

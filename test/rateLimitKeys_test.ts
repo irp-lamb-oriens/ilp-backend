@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
-import { hasOwnLimiter, sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
+import { hasOwnLimiter, isPublicRead, sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
 
 /** QA round 3: signed-in portal traffic gets a per-session bucket; public abuse-prone routes never do. Run: deno test test/rateLimitKeys_test.ts */
 
@@ -38,4 +38,14 @@ Deno.test("beacons skip the shared per-IP bucket; sign-in does not", () => {
     assert(!hasOwnLimiter(post(url)), url);
   }
   assert(!hasOwnLimiter(req("/api/analytics/funnel")), "staff GET keeps the shared bucket");
+});
+
+Deno.test("public read-only lists get their own bucket; sign-in and writes do not", () => {
+  const get = (url: string) => ({ originalUrl: url, headers: {}, method: "GET" }) as never;
+  const post = (url: string) => ({ originalUrl: url, headers: {}, method: "POST" }) as never;
+  for (const url of ["/api/updates?country=CR", "/api/updates", "/api/templates?country=PA", "/api/providers/"]) assert(isPublicRead(get(url)), url);
+  for (const url of ["/api/providers/apply", "/api/providers/me", "/api/updates/abc", "/api/dashboard/auth/request-otp", "/api/leads"]) {
+    assert(!isPublicRead(get(url)), url);
+  }
+  assert(!isPublicRead(post("/api/updates")), "writes stay on the shared bucket");
 });

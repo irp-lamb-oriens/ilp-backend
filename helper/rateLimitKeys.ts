@@ -32,6 +32,21 @@ export function hasOwnLimiter(req: Request): boolean {
   return String(req.method ?? "").toUpperCase() === "POST" && BEACONS.test(pathOf(req));
 }
 
+/**
+ * Public read-only lists the marketing pages fetch from the browser
+ * (frontend/src/lib/public.ts: updates, templates, vetted providers). They
+ * get their own wider per-IP bucket so browsing the site never uses up the
+ * 50/min that sign-in codes share, and visitors behind one shared IP (office,
+ * carrier NAT) don't get 429s (QA regression 2026-11-11, /api/updates).
+ */
+export const PUBLIC_READ_LIMIT = 300;
+const PUBLIC_READS = /^\/api\/(updates|templates|providers)\/?$/;
+
+/** True for GETs of the public read-only lists, limited by their own per-IP bucket. */
+export function isPublicRead(req: Request): boolean {
+  return String(req.method ?? "").toUpperCase() === "GET" && PUBLIC_READS.test(pathOf(req));
+}
+
 const header = (req: Request, name: string): string => {
   const v = req.headers?.[name];
   return typeof v === "string" ? v : Array.isArray(v) ? String(v[0] ?? "") : "";
