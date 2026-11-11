@@ -18,6 +18,20 @@ export const GLOBAL_IP_LIMIT = 1000;
 /** Public routes that must stay on the per-IP bucket (codes, LLM, forms, beacons). */
 const STRICT = /^\/api\/(?:[a-z-]+\/)?auth\/(request-otp|verify-otp)(\/|$)|^\/api\/(chatbot|leads|journey|csp-report|analytics\/funnel|providers\/apply|privacy\/consents\/join|payments\/join)(\/|$)/;
 
+/**
+ * Fire-and-forget beacons that carry their own limiter (cspReport.ts 20/min,
+ * journeysRouter.ts 120/min, analyticsRouter.ts 60/10min). They skip the
+ * shared per-IP API bucket: otherwise a browsing visitor's beacons used up
+ * the 50/min that sign-in shares, and the next code check got a 429 that the
+ * login screen showed as "Too many attempts" (2026-11-10).
+ */
+const BEACONS = /^\/api\/(csp-report|journey\/events|analytics\/funnel)\/?$/;
+
+/** True for beacon routes that are limited by their own router instead of the shared per-IP bucket. */
+export function hasOwnLimiter(req: Request): boolean {
+  return String(req.method ?? "").toUpperCase() === "POST" && BEACONS.test(pathOf(req));
+}
+
 const header = (req: Request, name: string): string => {
   const v = req.headers?.[name];
   return typeof v === "string" ? v : Array.isArray(v) ? String(v[0] ?? "") : "";

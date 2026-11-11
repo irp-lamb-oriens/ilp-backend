@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
-import { sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
+import { hasOwnLimiter, sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
 
 /** QA round 3: signed-in portal traffic gets a per-session bucket; public abuse-prone routes never do. Run: deno test test/rateLimitKeys_test.ts */
 
@@ -29,4 +29,13 @@ Deno.test("rate-limit keys: the key is a hash, one per token", () => {
   assertNotEquals(k1, k2);
   assert(!k1.includes(tok));
   assertEquals(sessionTokenOf(req("/api/x")), "");
+});
+
+Deno.test("beacons skip the shared per-IP bucket; sign-in does not", () => {
+  const post = (url: string) => ({ originalUrl: url, headers: {}, method: "POST" }) as never;
+  for (const url of ["/api/csp-report", "/api/journey/events", "/api/analytics/funnel"]) assert(hasOwnLimiter(post(url)), url);
+  for (const url of ["/api/dashboard/auth/verify-otp", "/api/provider/auth/request-otp", "/api/chatbot", "/api/journey/assign", "/api/journey/c/x"]) {
+    assert(!hasOwnLimiter(post(url)), url);
+  }
+  assert(!hasOwnLimiter(req("/api/analytics/funnel")), "staff GET keeps the shared bucket");
 });

@@ -6,7 +6,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import http from "node:http";
 import log from "./helper/log.ts";
-import { GLOBAL_IP_LIMIT, IP_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
+import { GLOBAL_IP_LIMIT, hasOwnLimiter, IP_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
 
 import profilesRouter from "./API/profiles/profilesRouter.ts";
 import rulesRouter from "./API/rules/rulesRouter.ts";
@@ -142,7 +142,7 @@ function createServer() {
       legacyHeaders: false,
       message: { error: "Too many API requests. Retry in a minute." },
       validate: { trustProxy: false },
-      skip: (req: Request) => usesSessionBucket(req),
+      skip: (req: Request) => usesSessionBucket(req) || hasOwnLimiter(req),
     });
 
     const sessionLimiter = rateLimit({
