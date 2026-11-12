@@ -12,6 +12,7 @@
  *             PAYMENTS_DEMO_AUTOPAY=true activates it immediately.
  */
 
+import { finalizeAgreement } from "../agreements/agreements.ts"; // AGREEMENT
 import { ilpPaymentCollected } from "../referrals/ilpHooks.ts"; // REFERRALS
 import get from "../../db/get.ts";
 import patch from "../../db/patch.ts";
@@ -294,6 +295,8 @@ export async function activateMembership(
   await auditLog({ actor, action: "membership.activated", target: `memberships/${membershipId}`, meta: { paymentRef } });
   // REFERRALS: activation + first month collected → the referring partner's commission (never throws).
   await ilpPaymentCollected({ membershipId, clientId: m.clientId, kind: "initial", paidAt: now });
+  // AGREEMENT: file the signed Membership Agreement PDF under the member's documents and email them (never throws).
+  await finalizeAgreement(membershipId, String(update.activatedAt ?? now));
   log(`[payments] membership ${membershipId} active (${paymentRef})`, "payments");
   // Join confirmation email with the renewal terms (never throws; once per membership).
   await runHook("onActivated", { ...m, ...update } as MembershipDoc);
@@ -425,6 +428,22 @@ export async function stripeApi(path: string, method: "GET" | "POST" | "DELETE",
   return data;
 }
 
+/**
+ * Stripe Tax at checkout, when STRIPE_TAX=true (turn Stripe Tax on and add
+ * your tax registrations in the Stripe dashboard first, or checkout fails):
+ * Stripe works out sales tax / VAT from the billing address and adds it on
+ * top of the price. Pure; exported for tests.
+ */
+export function stripeTaxFields(enabled: boolean, lineItems: number): URLSearchParams {
+  const f = new URLSearchParams();
+  if (!enabled) return f;
+  f.set("automatic_tax[enabled]", "true");
+  f.set("billing_address_collection", "required");
+  f.set("tax_id_collection[enabled]", "true");
+  for (let i = 0; i < lineItems; i++) f.set(`line_items[${i}][price_data][tax_behavior]`, "exclusive");
+  return f;
+}
+
 /** Checkout Session: monthly subscription + one-time activation on the first invoice. */
 export async function createStripeCheckout(s: JoinSession, token: string): Promise<string> {
   const f = new URLSearchParams();
@@ -442,6 +461,7 @@ export async function createStripeCheckout(s: JoinSession, token: string): Promi
   f.set("line_items[1][price_data][currency]", "usd");
   f.set("line_items[1][price_data][unit_amount]", String(PLAN_STANDARD.activationCents));
   f.set("line_items[1][price_data][product_data][name]", "ILP activation (one time)");
+  for (const [k, v] of stripeTaxFields(Deno.env.get("STRIPE_TAX") === "true", 2)) f.set(k, v);
   f.set("metadata[membershipId]", s.membershipId);
   f.set("subscription_data[metadata][membershipId]", s.membershipId);
   const session = await stripeApi("/checkout/sessions", "POST", f);

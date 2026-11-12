@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { parseSignature, signAgreement } from "../agreements/agreements.ts"; // AGREEMENT
 import { attributeIlp } from "../referrals/ilpHooks.ts"; // REFERRALS
 import asyncHandler from "../../helper/asyncHandler.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
@@ -133,6 +134,9 @@ export default function paymentsRouter(app: Express) {
       // the join itself; no consent, no join. Marketing is optional.
       const consents = parseJoinConsents(body);
       if ("error" in consents) return res.status(400).json({ error: consents.error });
+      // AGREEMENT: the typed signature on the Membership Agreement (required when AGREEMENT_REQUIRED=true).
+      const signed = parseSignature(body);
+      if ("error" in signed) return res.status(400).json({ error: signed.error, errors: { signature: signed.error } });
 
       try {
         const { session, token, membership } = await startJoin({
@@ -146,6 +150,18 @@ export default function paymentsRouter(app: Express) {
         });
         await recordJoinConsents({ clientId: session.clientId, email: session.email }, consents);
         await attributeIlp({ clientId: session.clientId, email: session.email, body }); // REFERRALS
+        if (signed.signature) {
+          await signAgreement({
+            clientId: session.clientId,
+            membershipId: membership.id,
+            email: session.email,
+            fullName,
+            country: membership.country,
+            signature: signed.signature,
+            ip: typeof req.ip === "string" ? req.ip : undefined,
+            userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+          });
+        }
         // JOURNEYS: link the browser to the account; a new account is a funnel step (paid comes with activation).
         await identify(visitorFrom(req), { clientId: session.clientId });
         if (session.newClient) await trackServerStep("account_created", { clientId: session.clientId });
