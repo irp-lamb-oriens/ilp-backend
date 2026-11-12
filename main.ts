@@ -6,7 +6,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import http from "node:http";
 import log from "./helper/log.ts";
-import { GLOBAL_IP_LIMIT, hasOwnLimiter, IP_LIMIT, isPublicRead, PUBLIC_READ_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
+import { AUTH_LIMIT, clientIpKey, GLOBAL_IP_LIMIT, hasOwnLimiter, isAuthCode, IP_LIMIT, isPublicRead, PUBLIC_READ_LIMIT, SESSION_LIMIT, sessionBucketKey, usesSessionBucket } from "./helper/rateLimitKeys.ts";
 
 import profilesRouter from "./API/profiles/profilesRouter.ts";
 import rulesRouter from "./API/rules/rulesRouter.ts";
@@ -63,6 +63,7 @@ import lawyerCommsRouter from "./API/lawyerComms/lawyerCommsRouter.ts"; // COMMS
 import csmRouter from "./API/csm/csmRouter.ts"; // COMMS-P3
 import notificationsRouter from "./API/notifications/notificationsRouter.ts"; // COMMS-P3
 import referralsRouter from "./API/referrals/referralsRouter.ts"; // REFERRALS: partner links and commissions
+import agreementsRouter from "./API/agreements/agreements.ts"; // AGREEMENT: signed membership agreement
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -133,6 +134,7 @@ function createServer() {
       legacyHeaders: false,
       message: { error: "Too many requests. Retry in a minute." },
       validate: { trustProxy: false },
+      keyGenerator: clientIpKey,
     });
 
     const apiLimiter = rateLimit({
@@ -142,7 +144,20 @@ function createServer() {
       legacyHeaders: false,
       message: { error: "Too many API requests. Retry in a minute." },
       validate: { trustProxy: false },
-      skip: (req: Request) => usesSessionBucket(req) || hasOwnLimiter(req) || isPublicRead(req),
+      keyGenerator: clientIpKey,
+      skip: (req: Request) => usesSessionBucket(req) || hasOwnLimiter(req) || isPublicRead(req) || isAuthCode(req),
+    });
+
+    // Sign-in codes: their own per-IP bucket, so browsing never blocks signing in.
+    const authLimiter = rateLimit({
+      windowMs: 1 * MINUTE,
+      max: AUTH_LIMIT,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: "Too many sign-in requests. Retry in a minute." },
+      validate: { trustProxy: false },
+      keyGenerator: clientIpKey,
+      skip: (req: Request) => !isAuthCode(req),
     });
 
     const sessionLimiter = rateLimit({
@@ -164,11 +179,13 @@ function createServer() {
       legacyHeaders: false,
       message: { error: "Too many API requests. Retry in a minute." },
       validate: { trustProxy: false },
+      keyGenerator: clientIpKey,
       skip: (req: Request) => usesSessionBucket(req) || !isPublicRead(req),
     });
 
     app.use(globalLimiter);
     app.use("/api/", apiLimiter);
+    app.use("/api/", authLimiter);
     app.use("/api/", publicReadLimiter);
     app.use("/api/", sessionLimiter);
     // Small default body limit; import/upload-style routes keep the large one.
@@ -249,6 +266,7 @@ function createServer() {
     csmRouter(app); // COMMS-P3: the CSM portal (/csm): book, health, playbooks, KPIs
     notificationsRouter(app); // COMMS-P3: the bell for staff, CSMs and lawyers
     referralsRouter(app); // REFERRALS: partner links, attribution, commissions, payouts, partner portal
+    agreementsRouter(app); // AGREEMENT: GET /api/agreements/membership (the text the join form shows)
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);

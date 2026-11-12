@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { cached, PUBLIC_LIST_TTL_MS } from "../../helper/cache.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import getAll from "../../db/getAll.ts";
 import post from "../../db/post.ts";
@@ -20,7 +21,7 @@ export default (app: Express) => {
     "/api/templates",
     asyncHandler(async (req: Request, res: Response) => {
       const country = (req.query.country as string | undefined)?.toUpperCase();
-      const all = await getAll("templates");
+      const all = await cached("public:templates", PUBLIC_LIST_TTL_MS, () => getAll("templates"));
       const published = all.filter(
         (t) => t.status === "published" && (!country || t.country === country),
       );

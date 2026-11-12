@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { cached, PUBLIC_LIST_TTL_MS } from "../../helper/cache.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
 import getAll from "../../db/getAll.ts";
@@ -19,7 +20,7 @@ export default (app: Express) => {
     "/api/updates",
     asyncHandler(async (req: Request, res: Response) => {
       const country = (req.query.country as string | undefined)?.toUpperCase();
-      const all = await getAll("updates");
+      const all = await cached("public:updates", PUBLIC_LIST_TTL_MS, () => getAll("updates"));
       const published = all.filter(
         (u) => u.status === "published" && (!country || u.country === country),
       );

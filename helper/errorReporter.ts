@@ -174,9 +174,30 @@ function routeOf(req: Request): string {
   return `${req.method} ${pattern ? `${(req as Request & { baseUrl?: string }).baseUrl ?? ""}${pattern}` : req.path}`;
 }
 
+/** True for errors thrown by the database layer (helper/firestore/firestoreService.ts FirestoreError). */
+export function isUpstreamError(err: unknown): boolean {
+  const e = err as { name?: string; operation?: unknown; target?: unknown } | null;
+  return !!e && (e.name === "FirestoreError" || (typeof e.operation === "string" && typeof e.target === "string"));
+}
+
 /** Express error middleware. Mount last. */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
   const e = err as { status?: number; statusCode?: number; expose?: boolean; message?: string; type?: string };
+  // A database error carries Google's status (429 when the quota is used up,
+  // 503 when Firestore is down). It is never the visitor's fault: answer 503
+  // "try again", not Google's code (2026-11-11: a quota 429 reached the login
+  // screen as "Too many requests from your connection").
+  if (isUpstreamError(err)) {
+    const upstream = Number(e?.status ?? 0);
+    log(`[upstream] ${routeOf(req)} failed: database answered ${upstream}`, "error");
+    if (upstream !== 429) reportError(err, { route: routeOf(req), actor: actorOf(req), kind: "route", status: 503 }).catch(() => {});
+    res.setHeader("Retry-After", "60");
+    res.status(503).json({
+      error: "ILP cannot reach its database right now. Please try again in a few minutes.",
+      code: upstream === 429 ? "database_quota" : "database_unavailable",
+    });
+    return;
+  }
   const status = Number(e?.status ?? e?.statusCode ?? 500);
   if (status >= 400 && status < 500) {
     // Client errors raised by middleware (body too large, bad JSON): answer, don't report.

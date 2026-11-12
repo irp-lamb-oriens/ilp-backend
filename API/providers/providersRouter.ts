@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { cached, PUBLIC_LIST_TTL_MS } from "../../helper/cache.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import validateUser from "../../helper/auth/validateUser.ts";
 import getAll from "../../db/getAll.ts";
@@ -25,9 +26,8 @@ export default (app: Express) => {
     "/api/providers",
     asyncHandler(async (req: Request, res: Response) => {
       const country = (req.query.country as string | undefined)?.toUpperCase();
-      const providers = country
-        ? await query("providers", [{ field: "country", op: "EQUAL", value: country }])
-        : await getAll("providers");
+      const providers = await cached(`public:providers:${country ?? "all"}`, PUBLIC_LIST_TTL_MS, () =>
+        country ? query("providers", [{ field: "country", op: "EQUAL", value: country }]) : getAll("providers"));
 
       const vetted = providers
         .filter((p) => p.status === "vetted")

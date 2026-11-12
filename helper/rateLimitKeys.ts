@@ -14,6 +14,8 @@ import type { Request } from "express";
 export const IP_LIMIT = 50;
 export const SESSION_LIMIT = 300;
 export const GLOBAL_IP_LIMIT = 1000;
+/** Sign-in code requests and checks per IP per minute (each code also has its own 5-try cap and 30 s resend wait). */
+export const AUTH_LIMIT = 30;
 
 /** Public routes that must stay on the per-IP bucket (codes, LLM, forms, beacons). */
 const STRICT = /^\/api\/(?:[a-z-]+\/)?auth\/(request-otp|verify-otp)(\/|$)|^\/api\/(chatbot|leads|journey|csp-report|analytics\/funnel|providers\/apply|privacy\/consents\/join|payments\/join)(\/|$)/;
@@ -80,4 +82,28 @@ export function usesSessionBucket(req: Request): boolean {
 
 export function sessionBucketKey(req: Request): string {
   return `s:${hash(sessionTokenOf(req))}`;
+}
+
+const AUTH = /^\/api\/(?:[a-z-]+\/)?auth\/(request-otp|verify-otp)\/?$/;
+
+/**
+ * Sign-in code routes get their own per-IP bucket (AUTH_LIMIT), so nothing
+ * else a browser does (pages, forms, the chat) can lock a person out of
+ * signing in, and sign-in guessing cannot hide in the wider API bucket.
+ */
+export function isAuthCode(req: Request): boolean {
+  return String(req.method ?? "").toUpperCase() === "POST" && AUTH.test(pathOf(req));
+}
+
+/**
+ * The visitor's address for per-IP limits. The API sits behind Cloudflare
+ * (Render): `cf-connecting-ip` is set by Cloudflare and cannot be forged by
+ * the visitor, while the first X-Forwarded-For entry (what `req.ip` gives
+ * with trust proxy on) can: sending a made-up X-Forwarded-For used to open a
+ * fresh bucket on every request. Falls back to req.ip off Cloudflare (local dev).
+ */
+export function clientIpKey(req: Request): string {
+  const cf = header(req, "cf-connecting-ip").trim();
+  if (/^[0-9a-fA-F:.]{3,45}$/.test(cf)) return cf;
+  return String((req as Request & { ip?: string }).ip ?? "unknown");
 }

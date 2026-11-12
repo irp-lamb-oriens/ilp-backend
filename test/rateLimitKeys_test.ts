@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertNotEquals } from "https://deno.land/std@0.192.0/testing/asserts.ts";
-import { hasOwnLimiter, isPublicRead, sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
+import { clientIpKey, hasOwnLimiter, isAuthCode, isPublicRead, sessionBucketKey, sessionTokenOf, usesSessionBucket } from "../helper/rateLimitKeys.ts";
 
 /** QA round 3: signed-in portal traffic gets a per-session bucket; public abuse-prone routes never do. Run: deno test test/rateLimitKeys_test.ts */
 
@@ -48,4 +48,15 @@ Deno.test("public read-only lists get their own bucket; sign-in and writes do no
     assert(!isPublicRead(get(url)), url);
   }
   assert(!isPublicRead(post("/api/updates")), "writes stay on the shared bucket");
+});
+
+Deno.test("sign-in codes have their own bucket; the IP key cannot be forged with X-Forwarded-For", () => {
+  const post = (url: string) => ({ originalUrl: url, headers: {}, method: "POST" }) as never;
+  for (const url of ["/api/dashboard/auth/verify-otp", "/api/provider/auth/request-otp", "/api/client-status/auth/verify-otp", "/api/partner/auth/request-otp"]) assert(isAuthCode(post(url)), url);
+  for (const url of ["/api/dashboard/auth/check", "/api/leads", "/api/chatbot"]) assert(!isAuthCode(post(url)), url);
+  const r = (headers: Record<string, string>, ip: string) => ({ headers, ip }) as never;
+  assertEquals(clientIpKey(r({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4" }, "1.2.3.4")), "203.0.113.7");
+  assertEquals(clientIpKey(r({ "cf-connecting-ip": "2001:db8::1" }, "9.9.9.9")), "2001:db8::1");
+  assertEquals(clientIpKey(r({}, "127.0.0.1")), "127.0.0.1");
+  assertEquals(clientIpKey(r({ "cf-connecting-ip": "not an ip; drop table" }, "127.0.0.1")), "127.0.0.1");
 });
