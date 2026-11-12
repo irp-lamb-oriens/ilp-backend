@@ -27,7 +27,7 @@ const STRICT = /^\/api\/(?:[a-z-]+\/)?auth\/(request-otp|verify-otp)(\/|$)|^\/ap
  * the 50/min that sign-in shares, and the next code check got a 429 that the
  * login screen showed as "Too many attempts" (2026-11-10).
  */
-const BEACONS = /^\/api\/(csp-report|journey\/events|analytics\/funnel)\/?$/;
+const BEACONS = /^\/api\/(csp-report|journey\/events|journey\/behavior|analytics\/funnel)\/?$/;
 
 /** True for beacon routes that are limited by their own router instead of the shared per-IP bucket. */
 export function hasOwnLimiter(req: Request): boolean {

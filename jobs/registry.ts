@@ -17,6 +17,7 @@ import { licenceExpirySweep, profileIncompleteSweep, weeklyDigest } from "../API
 import { lawyerFeedbackSweep } from "../API/lawyerComms/feedback.ts"; // COMMS-P2
 import { CSM_DIGEST_CRON, csmDailyDigest } from "../API/csm/digest.ts"; // COMMS-P3
 import { referralApprovals, referralMonthlyStatements } from "../API/referrals/jobs.ts"; // REFERRALS
+import { behaviorStore } from "../API/behavior/store.ts"; // BEHAVIOR
 
 /**
  * Centralized job registry. Every scheduled job is declared here with its
@@ -170,6 +171,14 @@ export const jobs: JobDef[] = [
     cron: "5 15 1 * *",
     handler: async () => {
       await referralMonthlyStatements();
+    },
+  },
+  // BEHAVIOR: fold buffered heat-map measurements into the stored totals (also runs on ingest and before staff reads).
+  {
+    name: "behaviorFlush",
+    cron: "*/5 * * * *",
+    handler: async () => {
+      await behaviorStore.flush();
     },
   },
 ];

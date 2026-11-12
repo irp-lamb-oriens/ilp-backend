@@ -64,6 +64,7 @@ import csmRouter from "./API/csm/csmRouter.ts"; // COMMS-P3
 import notificationsRouter from "./API/notifications/notificationsRouter.ts"; // COMMS-P3
 import referralsRouter from "./API/referrals/referralsRouter.ts"; // REFERRALS: partner links and commissions
 import agreementsRouter from "./API/agreements/agreements.ts"; // AGREEMENT: signed membership agreement
+import behaviorRouter from "./API/behavior/behaviorRouter.ts"; // BEHAVIOR: heat maps and on-page behavior
 import { loginHooks } from "./helper/auth/loginHooks.ts";
 import { registerSessionHooks, sessionRoutes } from "./helper/auth/sessionHooks.ts";
 import { downloadTicketRoutes } from "./helper/auth/downloadTicket.ts";
@@ -267,6 +268,7 @@ function createServer() {
     notificationsRouter(app); // COMMS-P3: the bell for staff, CSMs and lawyers
     referralsRouter(app); // REFERRALS: partner links, attribution, commissions, payouts, partner portal
     agreementsRouter(app); // AGREEMENT: GET /api/agreements/membership (the text the join form shows)
+    behaviorRouter(app); // BEHAVIOR: POST /api/journey/behavior, staff heat maps under /api/dashboard/journeys/behavior
 
     // GET /health (public) and GET /health/deep (x-health-token: $HEALTH_TOKEN).
     registerHealthRoutes(app);
