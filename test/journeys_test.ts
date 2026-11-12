@@ -402,6 +402,9 @@ Deno.test("routes: server steps are idempotent; stuck people get a CSM task", as
   const list2 = await call("GET", "/api/dashboard/journeys/stuck/people?step=account_created&days=7&limit=10", undefined, H(s));
   assertEquals(list2.body.items.find((p: Doc) => p.clientId === "bob_example_com").openTaskId, t.body.task.id);
   assertEquals((await call("GET", "/api/dashboard/journeys/stuck/people?step=nope", undefined, H(s))).status, 400);
+  // What the Stuck screen sends first: "Any step" (no step) and its own sort key.
+  const any = await call("GET", "/api/dashboard/journeys/stuck/people?days=7&sort=days&dir=desc&limit=25", undefined, H(s));
+  assertEquals([any.status, any.body.items.some((p: Doc) => p.clientId === "bob_example_com")], [200, true]);
 });
 
 Deno.test("routes: TASK_RULES events record their funnel step", async () => {

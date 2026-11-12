@@ -352,23 +352,30 @@ export default function journeysRouter(app: Express) {
     "/api/dashboard/journeys/stuck/people",
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
-      const step = qs(req, "step") as FunnelStepId;
-      if (memberRank(step) < 0 || step === FUNNEL_STEPS[FUNNEL_STEPS.length - 1].id) {
+      const step = qs(req, "step") as FunnelStepId | "";
+      const last = FUNNEL_STEPS[FUNNEL_STEPS.length - 1].id;
+      if (step && (memberRank(step) < 0 || step === last)) {
         return res.status(400).json({ error: "Pick a member-funnel step that has a next step.", field: "step" });
       }
+      // No step = "Any step" on the screen: every member-funnel step that has a next one.
+      const steps = step ? [step] : FUNNEL_STEPS.map((x) => x.id as FunnelStepId).filter((id) => id !== last);
       const days = Math.min(365, Math.max(0, Number.parseInt(qs(req, "days") || "7", 10) || 0));
       const now = new Date();
-      const [clients, leads] = await Promise.all([
-        query(COLLECTIONS.clients, [{ field: `${JOURNEY_TRACK_FIELD}.furthestStep`, op: "EQUAL", value: step }]).catch(() => []),
-        query(COLLECTIONS.leads, [{ field: `${JOURNEY_TRACK_FIELD}.furthestStep`, op: "EQUAL", value: step }]).catch(() => []),
-      ]);
       const exclude = qs(req, "excludePlaceholder") === "1";
-      const rows = [
-        ...(clients as Doc[]).map((d) => stuckPersonOf("client", d, step, days, now)),
-        ...(leads as Doc[]).map((d) => stuckPersonOf("lead", d, step, days, now)),
-      ].filter((p): p is StuckPerson => !!p && !(exclude && p.placeholder));
+      const perStep = await Promise.all(steps.map(async (st) => {
+        const [clients, leads] = await Promise.all([
+          query(COLLECTIONS.clients, [{ field: `${JOURNEY_TRACK_FIELD}.furthestStep`, op: "EQUAL", value: st }]).catch(() => []),
+          query(COLLECTIONS.leads, [{ field: `${JOURNEY_TRACK_FIELD}.furthestStep`, op: "EQUAL", value: st }]).catch(() => []),
+        ]);
+        return [
+          ...(clients as Doc[]).map((d) => stuckPersonOf("client", d, st, days, now)),
+          ...(leads as Doc[]).map((d) => stuckPersonOf("lead", d, st, days, now)),
+        ];
+      }));
+      const rows = perStep.flat().filter((p): p is StuckPerson => !!p && !(exclude && p.placeholder));
       const spec: ListSpec<StuckPerson> = {
-        sorts: { daysStuck: (r) => r.daysStuck, since: (r) => r.since, name: (r) => (r.name ?? "").toLowerCase() },
+        // "days" is the column key the screen sends; "daysStuck" is the field name.
+        sorts: { daysStuck: (r) => r.daysStuck, days: (r) => r.daysStuck, since: (r) => r.since, name: (r) => (r.name ?? "").toLowerCase() },
         defaultSort: "daysStuck",
         defaultDir: "desc",
         filters: {
@@ -391,7 +398,7 @@ export default function journeysRouter(app: Express) {
             yield items;
             return { nextCursor: page.nextCursor, hasMore: page.hasMore, total: page.total };
           },
-          meta: { step, label: journeyStepLabel(step), days },
+          meta: { step: step || null, label: step ? journeyStepLabel(step) : "Any step", days },
         };
       });
     }),
