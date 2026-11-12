@@ -29,6 +29,7 @@ import patch from "../../../db/patch.ts";
 import query from "../../../db/query.ts";
 import auditLog from "../../../helper/auditLog.ts";
 import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
+import { includingPlaceholders, placeholderExcluded } from "../../../helper/placeholderScope.ts";
 import { type AuthedRequest, requireDashboardAuth } from "../../../helper/auth/session.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../../db/records.ts";
 import {
@@ -81,6 +82,17 @@ const QUEUE_SPEC: ListSpec<TaskRec> = {
   read: (t, f) =>
     f.key === "overdue" ? t.dueAt < new Date().toISOString() : f.key === "placeholder" ? isPlaceholderDoc(t) : fieldValue(t, f),
 };
+
+/** Placeholder (seed) records loaded, counted whatever the request's own scope is. */
+async function placeholderCounts(): Promise<{ members: number; lawyers: number }> {
+  const [memberships, providers] = await includingPlaceholders(() =>
+    Promise.all([findRecords<Membership>(COLLECTIONS.memberships), getAll("providers")])
+  );
+  return {
+    members: new Set(memberships.filter((m) => isPlaceholderDoc(m)).map((m) => m.clientId)).size,
+    lawyers: providers.filter((p) => isPlaceholderDoc(p)).length,
+  };
+}
 
 export const MEMBERS_SPEC: ListSpec<MemberRow> = {
   sorts: {
@@ -195,8 +207,9 @@ export default function staffHomeRouter(app: Express): void {
         findRecords<Obligation>(COLLECTIONS.obligations, { status: "asked" }),
       ]);
       // Placeholder (seed) data counts by default; ?excludePlaceholder=1 leaves it out.
-      const placeholderMembers = all[0].filter((m) => isPlaceholderDoc(m)).length;
-      const exclude = qs(req, "excludePlaceholder") === "1";
+      // The count is taken outside the request's scope, so the notice stays visible while the data is hidden.
+      const placeholderMembers = (await placeholderCounts()).members;
+      const exclude = placeholderExcluded();
       const keep = <T>(list: T[]) => (exclude ? list.filter((d) => !isPlaceholderDoc(d)) : list);
       const [memberships, openTasks, handoffs, matters, upcoming, asked] = [
         keep(all[0]), keep(all[1]), keep(all[2]), keep(all[3]), keep(all[4]), keep(all[5]),
@@ -221,6 +234,15 @@ export default function staffHomeRouter(app: Express): void {
         attention,
         placeholder: { members: placeholderMembers, excluded: exclude },
       });
+    }),
+  );
+
+  // ── Placeholder data: is any loaded? (the staff and CSM shells show the "Exclude placeholder data" switch when it is)
+  app.get(
+    "/api/dashboard/staff/placeholder",
+    requireDashboardAuth,
+    asyncHandler(async (_req: Request, res: Response) => {
+      res.json({ ...(await placeholderCounts()), excluded: placeholderExcluded() });
     }),
   );
 
@@ -464,6 +486,8 @@ export default function staffHomeRouter(app: Express): void {
             id,
             name: String(p.name ?? "") || String(p.email ?? id),
             email: String(p.email ?? ""),
+            // Placeholder (seed) lawyer: the list marks the row, as the members list does.
+            placeholder: isPlaceholderDoc({ ...p, id }),
             legalAreas: Array.isArray(p.legalAreas) ? p.legalAreas : [],
             openMatters: mine.length,
             agingMatters: mine.filter((m) => now - Date.parse(m.stageEnteredAt) >= 14 * DAY_MS).length,

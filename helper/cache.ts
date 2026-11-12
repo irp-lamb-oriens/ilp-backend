@@ -6,6 +6,8 @@
  * A failed load serves the last good value (stale) when there is one.
  * A newly published item shows within the TTL; `invalidate(prefix)` clears it sooner.
  */
+import { placeholderExcluded } from "./placeholderScope.ts";
+
 interface Entry {
   at: number;
   value: unknown;
@@ -17,7 +19,9 @@ export const PUBLIC_LIST_TTL_MS = 60_000;
 
 const store = new Map<string, Entry>();
 
-export async function cached<T>(key: string, ttlMs: number, load: () => Promise<T>, now = Date.now()): Promise<T> {
+export async function cached<T>(baseKey: string, ttlMs: number, load: () => Promise<T>, now = Date.now()): Promise<T> {
+  // A request that leaves placeholder data out keeps its own answer (same prefix, so invalidate() clears both).
+  const key = placeholderExcluded() ? `${baseKey}\u0000real` : baseKey;
   const hit = store.get(key);
   if (hit && hit.value !== undefined && now - hit.at < ttlMs) return hit.value as T;
   if (hit?.pending) return await hit.pending as T; // one load at a time per key

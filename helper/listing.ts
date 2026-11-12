@@ -39,6 +39,7 @@
 import type { Request, Response } from "express";
 import { documentName, runStructuredQuery, type FirestoreDocument } from "./firestore/firestoreService.ts";
 import { toFirestoreValue } from "./firestore/toFirestoreValue.ts";
+import { isPlaceholderRecord, placeholderExcluded } from "./placeholderScope.ts";
 import {
   facetCounts,
   fieldValue,
@@ -411,8 +412,11 @@ export function firestorePages<T extends { id: string }>(
   const run = opts.run ?? runStructuredQuery;
   const [first, ...rest] = p.qTokens;
   const query: NativeQuery = { ...nq, token: first ?? nq.token };
-  const inMemory = rest.length > 0 || !!opts.keep;
+  // "Exclude placeholder data": cursor pages are filtered here, row by row, so the page still fills up.
+  const realOnly = placeholderExcluded();
+  const inMemory = rest.length > 0 || !!opts.keep || realOnly;
   const keep = (row: T) =>
+    (!realOnly || !isPlaceholderRecord(row)) &&
     (!rest.length || tokensMatch((row as { searchTokens?: string[] }).searchTokens, rest)) && (!opts.keep || opts.keep(row));
   return async function* (signal) {
     let after = p.cursor;

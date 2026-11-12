@@ -75,6 +75,9 @@ function readPath(doc: Doc, path: string): unknown {
 }
 
 function decodeValue(v: unknown): unknown {
+  // A `__name__` cursor arrives as a document reference: keep its path so the id can be compared.
+  const ref = (v as { referenceValue?: unknown } | null)?.referenceValue;
+  if (typeof ref === "string") return ref;
   return fromFirestoreFields({ x: v }).x;
 }
 

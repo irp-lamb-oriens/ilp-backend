@@ -6,6 +6,7 @@
  * ordering are declared in firestore.indexes.json.
  */
 
+import { includingPlaceholders } from "../../helper/placeholderScope.ts";
 import get from "../../db/get.ts";
 import put from "../../db/put.ts";
 import query from "../../db/query.ts";
@@ -115,7 +116,8 @@ export async function listExperiments(): Promise<Experiment[]> {
 /** Running experiments, cached for 60 s (public assign route). */
 export async function runningExperiments(now = Date.now()): Promise<Experiment[]> {
   if (runningCache && now - runningCache.at < 60_000) return runningCache.list;
-  const list = asList<Experiment>(await query(COLLECTIONS.experiments, [{ field: "status", op: "EQUAL", value: "running" }]));
+  // Shared by every visitor: always the full list, whatever the request that fills it asked for.
+  const list = asList<Experiment>(await includingPlaceholders(() => query(COLLECTIONS.experiments, [{ field: "status", op: "EQUAL", value: "running" }])));
   runningCache = { at: now, list };
   return list;
 }

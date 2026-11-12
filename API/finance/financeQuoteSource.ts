@@ -14,6 +14,7 @@
 
 import { isQuoteAccepted } from "../../schemas/quoteStatus.ts";
 import getAll from "../../db/getAll.ts";
+import { placeholderExcluded } from "../../helper/placeholderScope.ts";
 import { buildClientSummary } from "../dashboard/clientHelpers.ts";
 
 /** The quote status that means the client said yes. */
@@ -42,8 +43,14 @@ interface CacheEntry<T> {
   value: Promise<T>;
 }
 
-let quotesCache: CacheEntry<Array<Record<string, unknown>>> | null = null;
-let factsCache: CacheEntry<Map<string, ClientFacts>> | null = null;
+/**
+ * One slot per view of the data: everything, and real records only
+ * ("Exclude placeholder data", helper/placeholderScope.ts), so one view is
+ * never served to a request that asked for the other.
+ */
+const quotesSlots: Array<CacheEntry<Array<Record<string, unknown>>> | null> = [null, null];
+const factsSlots: Array<CacheEntry<Map<string, ClientFacts>> | null> = [null, null];
+const slot = () => (placeholderExcluded() ? 1 : 0);
 
 function fresh<T>(entry: CacheEntry<T> | null): Promise<T> | null {
   if (!entry) return null;
@@ -55,8 +62,8 @@ function fresh<T>(entry: CacheEntry<T> | null): Promise<T> | null {
  * must reflect it immediately rather than within the TTL.
  */
 export function invalidateFinanceCache(): void {
-  quotesCache = null;
-  factsCache = null;
+  quotesSlots.fill(null);
+  factsSlots.fill(null);
 }
 
 /**
@@ -65,14 +72,15 @@ export function invalidateFinanceCache(): void {
  * joined against client facts.
  */
 export function fetchAllQuotes(): Promise<Array<Record<string, unknown>>> {
-  const cached = fresh(quotesCache);
+  const i = slot();
+  const cached = fresh(quotesSlots[i]);
   if (cached) return cached;
 
   const value = readAllQuotes();
-  quotesCache = { at: Date.now(), value };
+  quotesSlots[i] = { at: Date.now(), value };
   // A failed read must not be served for the rest of the TTL.
   value.catch(() => {
-    quotesCache = null;
+    if (quotesSlots[i]?.value === value) quotesSlots[i] = null;
   });
   return value;
 }
@@ -106,13 +114,14 @@ async function readAllQuotes(): Promise<Array<Record<string, unknown>>> {
  * matter actually being quoted.
  */
 export function fetchClientFacts(): Promise<Map<string, ClientFacts>> {
-  const cached = fresh(factsCache);
+  const i = slot();
+  const cached = fresh(factsSlots[i]);
   if (cached) return cached;
 
   const value = readClientFacts();
-  factsCache = { at: Date.now(), value };
+  factsSlots[i] = { at: Date.now(), value };
   value.catch(() => {
-    factsCache = null;
+    if (factsSlots[i]?.value === value) factsSlots[i] = null;
   });
   return value;
 }

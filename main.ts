@@ -4,6 +4,7 @@ loadSync({ export: true, allowEmptyValues: true, examplePath: null });
 import { armReadCache } from "./helper/firestore/readCache.ts";
 import { armSessionCache } from "./helper/auth/sessionCache.ts";
 import { idempotency } from "./helper/idempotency.ts";
+import { EXCLUDE_HEADER, placeholderScope } from "./helper/placeholderScope.ts";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -80,7 +81,8 @@ import { startCronRunner } from "./jobs/cronRunner.ts";
 
 const MINUTE = 60 * 1000;
 
-function createServer() {
+/** Exported for scripts/devWorld.ts (the API on an in-memory database for local QA). */
+export function createServer() {
   try {
     if (!Deno.env.get("SERVICE_ACCOUNT_KEY")) {
       log("FATAL: SERVICE_ACCOUNT_KEY environment variable is not set.");
@@ -121,7 +123,7 @@ function createServer() {
       // AUTH: sessions travel as `Authorization: Bearer` (legacy role headers
       // still accepted). credentials stays true only for AUTH_COOKIES=true.
       credentials: true,
-      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "x-ilp-visitor", "Idempotency-Key"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "x-ilp-visitor", "Idempotency-Key", EXCLUDE_HEADER],
       // Lets the front end read the file name of a blob download.
       // X-ILP-Sync / Idempotency-Replayed: write receipts (helper/idempotency.ts).
       exposedHeaders: ["Content-Disposition", "X-ILP-Sync", "Idempotency-Replayed"],
@@ -208,6 +210,9 @@ function createServer() {
       const big = /\/(import|bulk-import|voice-transcribe|upload|chat|chatbot|attachment|documents?)(\/|$|-)/.test(req.path);
       (big ? bigJson : smallJson)(req, res, next);
     });
+
+    // "Exclude placeholder data": a GET with ?excludePlaceholder=1 reads real records only (helper/placeholderScope.ts).
+    app.use("/api/", placeholderScope());
 
     // Audit + session hooks around the three OTP verify routes (before routers).
     registerSessionHooks();

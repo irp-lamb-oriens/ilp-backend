@@ -24,6 +24,7 @@ import {
 } from "./firestoreUrlGetters.ts";
 import { toFirestoreDocument, toFirestoreValue } from "./toFirestoreValue.ts";
 import { fromFirestoreFields } from "./fromFirestoreValue.ts";
+import { applyPlaceholderScope, placeholderExcluded } from "../placeholderScope.ts";
 
 /** A document as returned to callers: Firestore id plus decoded fields. */
 export interface FirestoreDocument {
@@ -407,8 +408,12 @@ export function runStructuredQuery(
   signal?: AbortSignal,
 ): Promise<FirestoreDocument[]> {
   // An abortable read (streamed lists) goes straight to the database.
-  if (signal) return runStructuredQueryNow(collection, structured, signal);
-  return cachedRead(collection, `q:${JSON.stringify(structured)}`, () => runStructuredQueryNow(collection, structured));
+  // A query with a limit is a cursor page: its caller counts rows to find the
+  // end of the list, so it filters placeholder rows itself (helper/listing.ts).
+  const scoped = (docs: Promise<FirestoreDocument[]>) =>
+    placeholderExcluded() && structured.limit === undefined ? docs.then(applyPlaceholderScope) : docs;
+  if (signal) return scoped(runStructuredQueryNow(collection, structured, signal));
+  return scoped(cachedRead(collection, `q:${JSON.stringify(structured)}`, () => runStructuredQueryNow(collection, structured)));
 }
 
 async function runStructuredQueryNow(
@@ -446,7 +451,9 @@ async function runStructuredQueryNow(
 export function listDocuments(
   collection: string,
 ): Promise<FirestoreDocument[]> {
-  return cachedRead(collection, "list", () => listDocumentsNow(collection));
+  const docs = cachedRead(collection, "list", () => listDocumentsNow(collection));
+  // "Exclude placeholder data" (helper/placeholderScope.ts): the cache keeps the full answer.
+  return placeholderExcluded() ? docs.then(applyPlaceholderScope) : docs;
 }
 
 async function listDocumentsNow(
