@@ -14,6 +14,7 @@
  * the ILP value converters and URL getters are reused as-is.
  */
 
+import { cachedRead, invalidateCollection } from "./readCache.ts";
 import fetchWithAuth from "../fetchWithAuth.ts";
 import log from "../log.ts";
 import {
@@ -54,6 +55,9 @@ export interface OrderBy {
  * Normalized Firestore failure. Every operation throws this same shape so
  * callers and the error detector can classify a fault uniformly.
  */
+/** Operations that only read; every other operation is a write and clears the read cache of its collection. */
+const READ_OPS = new Set(["GET", "list", "query"]);
+
 export class FirestoreError extends Error {
   constructor(
     readonly operation: string,
@@ -94,6 +98,8 @@ async function firestoreRequest(
   }
 
   log(`[FIRESTORE] ${operation} ${target} (${Date.now() - started}ms)`);
+  // Any successful write clears the cached reads of its collection (readCache.ts).
+  if (!READ_OPS.has(operation)) invalidateCollection(target.split(/[/ ]/)[0]);
   return res;
 }
 
@@ -344,7 +350,7 @@ export async function deleteDocument(
  * fields plus optional ordering. Firestore REST requires a composite index for
  * equality+orderBy combos on different fields.
  */
-export async function queryCollection(
+export function queryCollection(
   collection: string,
   filters: QueryFilter[] = [],
   orderBy?: OrderBy,
@@ -395,7 +401,17 @@ export function documentName(collection: string, id: string): string {
  * decode the rows. `signal` aborts the HTTP request (lists stop reading when
  * the client disconnects). Used by helper/listing.ts for cursor pages.
  */
-export async function runStructuredQuery(
+export function runStructuredQuery(
+  collection: string,
+  structured: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<FirestoreDocument[]> {
+  // An abortable read (streamed lists) goes straight to the database.
+  if (signal) return runStructuredQueryNow(collection, structured, signal);
+  return cachedRead(collection, `q:${JSON.stringify(structured)}`, () => runStructuredQueryNow(collection, structured));
+}
+
+async function runStructuredQueryNow(
   collection: string,
   structured: Record<string, unknown>,
   signal?: AbortSignal,
@@ -427,7 +443,13 @@ export async function runStructuredQuery(
  * List every document in a collection, paginating past the 1000-doc page cap.
  * Returns an array of `{ id, ...fields }`.
  */
-export async function listDocuments(
+export function listDocuments(
+  collection: string,
+): Promise<FirestoreDocument[]> {
+  return cachedRead(collection, "list", () => listDocumentsNow(collection));
+}
+
+async function listDocumentsNow(
   collection: string,
 ): Promise<FirestoreDocument[]> {
   const out: FirestoreDocument[] = [];

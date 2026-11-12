@@ -1,6 +1,7 @@
 import { loadSync } from "dotenv/mod.ts";
 
 loadSync({ export: true, allowEmptyValues: true, examplePath: null });
+import { armReadCache } from "./helper/firestore/readCache.ts";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -85,6 +86,7 @@ function createServer() {
     }
 
     installProcessErrorHandlers();
+    armReadCache(); // one database read per question until a write changes the answer (readCache.ts)
     const app = express();
     const isProduction = !!Deno.env.get("RENDER_EXTERNAL_URL");
     const port = parseInt(Deno.env.get("PORT") || "8000");

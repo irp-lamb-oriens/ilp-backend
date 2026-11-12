@@ -24,6 +24,7 @@
  * Request bodies, cookies and headers are never recorded.
  */
 
+import { readCacheStats } from "./firestore/readCache.ts";
 import type { Express, NextFunction, Request, Response } from "express";
 import post from "../db/post.ts";
 import get from "../db/get.ts";
@@ -292,6 +293,7 @@ export function registerHealthRoutes(app: Express): void {
     if (!sameToken(given, expected)) return res.status(401).json({ error: "Unauthorized." });
     const body = await deepHealth();
     res.setHeader("Cache-Control", "no-store");
-    res.status(body.ok ? 200 : 503).json(body);
+    // How many database reads the read cache is saving (helper/firestore/readCache.ts).
+    res.status(body.ok ? 200 : 503).json({ ...body, readCache: readCacheStats() });
   });
 }
