@@ -25,6 +25,8 @@
  */
 
 import { readCacheStats } from "./firestore/readCache.ts";
+import { sessionCacheStats } from "./auth/sessionCache.ts";
+import { receiptStats } from "./idempotency.ts";
 import type { Express, NextFunction, Request, Response } from "express";
 import post from "../db/post.ts";
 import get from "../db/get.ts";
@@ -294,6 +296,6 @@ export function registerHealthRoutes(app: Express): void {
     const body = await deepHealth();
     res.setHeader("Cache-Control", "no-store");
     // How many database reads the read cache is saving (helper/firestore/readCache.ts).
-    res.status(body.ok ? 200 : 503).json({ ...body, readCache: readCacheStats() });
+    res.status(body.ok ? 200 : 503).json({ ...body, readCache: readCacheStats(), sessionCache: sessionCacheStats(), receipts: receiptStats() });
   });
 }

@@ -2,6 +2,8 @@ import { loadSync } from "dotenv/mod.ts";
 
 loadSync({ export: true, allowEmptyValues: true, examplePath: null });
 import { armReadCache } from "./helper/firestore/readCache.ts";
+import { armSessionCache } from "./helper/auth/sessionCache.ts";
+import { idempotency } from "./helper/idempotency.ts";
 import express, { type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -87,6 +89,7 @@ function createServer() {
 
     installProcessErrorHandlers();
     armReadCache(); // one database read per question until a write changes the answer (readCache.ts)
+    armSessionCache(); // one session read a minute per signed-in person, not one per request (sessionCache.ts)
     const app = express();
     const isProduction = !!Deno.env.get("RENDER_EXTERNAL_URL");
     const port = parseInt(Deno.env.get("PORT") || "8000");
@@ -118,10 +121,13 @@ function createServer() {
       // AUTH: sessions travel as `Authorization: Bearer` (legacy role headers
       // still accepted). credentials stays true only for AUTH_COOKIES=true.
       credentials: true,
-      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "x-ilp-visitor"],
+      allowedHeaders: ["Content-Type", "Authorization", "x-dashboard-token", "x-provider-token", "x-client-token", "x-client-id", "x-ilp-visitor", "Idempotency-Key"],
       // Lets the front end read the file name of a blob download.
-      exposedHeaders: ["Content-Disposition"],
+      // X-ILP-Sync / Idempotency-Replayed: write receipts (helper/idempotency.ts).
+      exposedHeaders: ["Content-Disposition", "X-ILP-Sync", "Idempotency-Replayed"],
     }));
+    // A change sent twice with the same Idempotency-Key runs once.
+    app.use(idempotency());
 
     app.use((req: Request, _res: Response, next: NextFunction) => {
       log(`${req.method} ${req.originalUrl}`, "request");
