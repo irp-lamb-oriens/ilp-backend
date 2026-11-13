@@ -29,6 +29,8 @@ import {
   type Obligation,
 } from "../../schemas/contracts.ts";
 import { latestMembershipPerClient } from "../dashboard/staffHome/compute.ts";
+import { memo } from "../../helper/memo.ts";
+import { placeholderExcluded } from "../../helper/placeholderScope.ts";
 
 type Doc = Record<string, unknown>;
 
@@ -158,8 +160,21 @@ async function contactsFor(csm: string, clientIds: Set<string>, includeUnassigne
   return out;
 }
 
-/** Load a CSM's book and what the portal pages need about it. */
-export async function loadBook(scope: CsmScope, now = Date.now()): Promise<BookData> {
+/** What the book is built from: a write to any of these drops the kept book (helper/memo.ts). */
+const BOOK_DEPS = [COLLECTIONS.memberships, COLLECTIONS.csmTasks, COLLECTIONS.obligations, COLLECTIONS.feedback, COLLECTIONS.csmContacts, COLLECTIONS.clients];
+
+/**
+ * Load a CSM's book and what the portal pages need about it. Every /csm page
+ * needs the same book, so it is built once and kept until one of BOOK_DEPS
+ * changes (or MEMO_TTL_MIN passes), instead of being rebuilt on each page.
+ */
+export function loadBook(scope: CsmScope, now = Date.now()): Promise<BookData> {
+  // "Exclude placeholder data" filters inside the reads, so it is part of the key.
+  const ph = placeholderExcluded() ? "real" : "all";
+  return memo(`csm-book:${scope.csm}:${scope.includeUnassigned ? "with-unassigned" : "own"}:${ph}`, BOOK_DEPS, () => buildBook(scope, now));
+}
+
+async function buildBook(scope: CsmScope, now: number): Promise<BookData> {
   const [mine, all] = await Promise.all([
     findRecords<Membership>(COLLECTIONS.memberships, { csmEmail: scope.csm }),
     scope.includeUnassigned ? findRecords<Membership>(COLLECTIONS.memberships) : Promise.resolve([] as Membership[]),
@@ -198,10 +213,11 @@ export async function loadBook(scope: CsmScope, now = Date.now()): Promise<BookD
 }
 
 /** Consultations of the book's members (booked, completed, no-show), for Calls and KPIs. */
-export async function loadConsultations(clientIds: Set<string>): Promise<Consultation[]> {
-  return await findForClients<Consultation>(COLLECTIONS.consultations, clientIds, {
+export function loadConsultations(clientIds: Set<string>): Promise<Consultation[]> {
+  const key = `csm-calls:${placeholderExcluded() ? "real" : "all"}:${[...clientIds].sort().join(",")}`;
+  return memo(key, [COLLECTIONS.consultations], () => findForClients<Consultation>(COLLECTIONS.consultations, clientIds, {
     where: { status: ["booked", "in_progress", "completed", "no_show"] },
-  }).catch(() => [] as Consultation[]);
+  }).catch(() => [] as Consultation[]));
 }
 
 /**
@@ -209,7 +225,11 @@ export async function loadConsultations(clientIds: Set<string>): Promise<Consult
  * the last `days` (default 120; the KPIs look back 90 days at most). Never the
  * CSM's whole history. Needs the (ownerEmail, createdAt) index.
  */
-export async function tasksOwnedBy(csm: string, now = Date.now(), days = 120): Promise<CsmTask[]> {
+export function tasksOwnedBy(csm: string, now = Date.now(), days = 120): Promise<CsmTask[]> {
+  return memo(`csm-owned:${csm}:${days}:${placeholderExcluded() ? "real" : "all"}`, [COLLECTIONS.csmTasks], () => ownedTasks(csm, now, days));
+}
+
+async function ownedTasks(csm: string, now: number, days: number): Promise<CsmTask[]> {
   const since = new Date(now - days * 86_400_000).toISOString();
   const [recent, open] = await Promise.all([
     query(COLLECTIONS.csmTasks, [

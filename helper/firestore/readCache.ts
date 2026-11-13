@@ -97,8 +97,21 @@ export async function cachedRead<T>(collection: string, question: string, load: 
   return structuredClone(await p) as T[];
 }
 
+const writeListeners = new Set<(collection: string) => void>();
+
+/** Be told about every write the service makes (helper/memo.ts drops what depended on it). */
+export function onCollectionWrite(fn: (collection: string) => void): () => void {
+  writeListeners.add(fn);
+  return () => writeListeners.delete(fn);
+}
+
 /** A write happened in `collection`: forget every answer about it. */
 export function invalidateCollection(collection: string): void {
+  for (const fn of writeListeners) {
+    try {
+      fn(collection);
+    } catch { /* a listener never breaks a write */ }
+  }
   versions.set(collection, (versions.get(collection) ?? 0) + 1);
   const prefix = `${collection}\u0000`;
   let dropped = false;

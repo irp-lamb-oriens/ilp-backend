@@ -105,6 +105,40 @@ Deno.test("CSM book: reads the book's documents, not the company's", async () =>
   assertEquals(r.by.get("obligations"), 6); // never the other 97 members' 291
 });
 
+Deno.test("summary deps: a write to what the figures read makes them stale at once", async () => {
+  const { summary, _resetSummaries } = await import("../helper/summaries.ts");
+  const { invalidateCollection } = await import("../helper/firestore/readCache.ts");
+  _resetSummaries();
+  let computed = 0;
+  const compute = () => Promise.resolve({ n: ++computed });
+  const deps = ["csm_tasks"];
+  assertEquals((await summary("k:deps", compute, { deps })).data.n, 1);
+  invalidateCollection("leads");
+  assertEquals((await summary("k:deps", compute, { deps })).data.n, 1);
+  await new Promise((r) => setTimeout(r, 2)); // the write lands after the snapshot's time
+  invalidateCollection("csm_tasks"); // a task closed: Today's KPIs are worked out again
+  assertEquals((await summary("k:deps", compute, { deps })).data.n, 2);
+});
+
+Deno.test("memo: one build for every page, dropped by a write to what it read", async () => {
+  const { memo, _clearMemo } = await import("../helper/memo.ts");
+  const { invalidateCollection } = await import("../helper/firestore/readCache.ts");
+  _clearMemo();
+  let built = 0;
+  const build = () => Promise.resolve({ n: ++built, m: new Map([["a", 1]]) });
+  const on = { enabled: true };
+  const [a, b] = await Promise.all([memo("book:x", ["csm_tasks"], build, on), memo("book:x", ["csm_tasks"], build, on)]);
+  assertEquals([a.n, b.n, built], [1, 1, 1]);
+  a.m.set("a", 99); // callers get copies
+  assertEquals((await memo("book:x", ["csm_tasks"], build, on)).m.get("a"), 1);
+  invalidateCollection("leads"); // unrelated write: kept
+  assertEquals((await memo("book:x", ["csm_tasks"], build, on)).n, 1);
+  invalidateCollection("csm_tasks"); // the CSM closed a task: rebuilt
+  assertEquals((await memo("book:x", ["csm_tasks"], build, on)).n, 2);
+  assertEquals((await memo("book:x", ["csm_tasks"], build, { ...on, now: Date.now() + 6 * 60_000 })).n, 3); // past the TTL
+  assertEquals((await memo("book:x", ["csm_tasks"], build)).n, 4); // off (tests, scripts): always builds
+});
+
 Deno.test("readCost z: teardown", () => {
   world.restore();
 });

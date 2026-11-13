@@ -13,7 +13,9 @@
  *     busy instance does not even pay that.
  *
  * Nobody looking = no reads at all (there is no job). `?refresh=1` from staff
- * recomputes now. Responses carry `asOf` so the page can say how fresh the
+ * recomputes now. With `deps`, a write this server makes to one of those
+ * collections makes the snapshot stale at once (closing a task updates
+ * Today's KPIs on the next load); other instances catch up within the TTL. Responses carry `asOf` so the page can say how fresh the
  * numbers are. Keys must include everything the answer depends on (viewer,
  * filters, "exclude placeholder data").
  */
@@ -21,6 +23,7 @@
 import get from "../db/get.ts";
 import put from "../db/put.ts";
 import log from "./log.ts";
+import { onCollectionWrite } from "./firestore/readCache.ts";
 import { placeholderExcluded } from "./placeholderScope.ts";
 
 export const SUMMARIES_COLLECTION = "dashboard_summaries";
@@ -38,6 +41,11 @@ interface Snap<T> {
 }
 
 const memory = new Map<string, Snap<unknown>>();
+/** Last write this process made to each collection (ms), for `deps`. */
+const lastWrite = new Map<string, number>();
+onCollectionWrite((collection) => lastWrite.set(collection, Date.now()));
+const changedSince = (deps: readonly string[] | undefined, asOf: string) =>
+  !!deps?.some((c) => (lastWrite.get(c) ?? 0) >= Date.parse(asOf));
 const running = new Map<string, Promise<Snap<unknown>>>();
 
 /** A Firestore-safe document id for a key (no slashes, bounded length). */
@@ -59,20 +67,20 @@ const fresh = (asOf: string, now: number, ttl: number) => now - Date.parse(asOf)
 export async function summary<T>(
   key: string,
   compute: () => Promise<T>,
-  opts: { refresh?: boolean; ttlMs?: number; now?: number } = {},
+  opts: { refresh?: boolean; ttlMs?: number; now?: number; deps?: readonly string[] } = {},
 ): Promise<Snap<T>> {
   const ttl = opts.ttlMs ?? summaryTtlMs();
   const now = opts.now ?? Date.now();
   if (!opts.refresh && ttl > 0) {
     const m = memory.get(key);
-    if (m && fresh(m.asOf, now, ttl)) return m as Snap<T>;
+    if (m && fresh(m.asOf, now, ttl) && !changedSince(opts.deps, m.asOf)) return m as Snap<T>;
     const inflight = running.get(key);
     if (inflight) return (await inflight) as Snap<T>;
   }
   const job = (async (): Promise<Snap<unknown>> => {
     if (!opts.refresh && ttl > 0) {
       const doc = (await get(SUMMARIES_COLLECTION, summaryDocId(key)).catch(() => null)) as Record<string, unknown> | null;
-      if (doc && typeof doc.json === "string" && typeof doc.asOf === "string" && fresh(doc.asOf, now, ttl)) {
+      if (doc && typeof doc.json === "string" && typeof doc.asOf === "string" && fresh(doc.asOf, now, ttl) && !changedSince(opts.deps, doc.asOf)) {
         try {
           const snap = { data: JSON.parse(doc.json), asOf: doc.asOf };
           memory.set(key, snap);
@@ -115,7 +123,7 @@ export function _resetSummaries(): void {
  * and the viewer when `perViewer`. Only 2xx answers are kept; errors pass
  * through untouched. Not for streamed (NDJSON) list answers.
  */
-export function snapshotRoute(name: string, opts: { perViewer?: boolean } = {}) {
+export function snapshotRoute(name: string, opts: { perViewer?: boolean; deps?: readonly string[] } = {}) {
   // deno-lint-ignore no-explicit-any
   return (req: any, res: any, next: (err?: unknown) => void) => {
     if (req.method !== "GET") return next();
@@ -143,7 +151,7 @@ export function snapshotRoute(name: string, opts: { perViewer?: boolean } = {}) 
         // The handler failed through the error handler (it never called res.json).
         res.on("close", () => reject(new Error(`${name}: closed before an answer`)));
         next();
-      }), { refresh: req.query?.refresh === "1" })
+      }), { refresh: req.query?.refresh === "1", deps: opts.deps })
       .then((snap) => {
         if (res.headersSent) return;
         const body = snap.data && typeof snap.data === "object" && !Array.isArray(snap.data) ? { ...(snap.data as object), asOf: snap.asOf } : snap.data;

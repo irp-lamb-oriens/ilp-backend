@@ -241,7 +241,10 @@ export default function staffHomeRouter(app: Express): void {
       // Company-wide figures: computed at most once per SUMMARY_TTL_MIN per viewer and
       // "exclude placeholder" choice, then read back (helper/summaries.ts). ?refresh=1 recomputes.
       const exclude = placeholderExcluded();
-      const snap = await summary(`staff-summary:${me}:${exclude ? "real" : "all"}`, () => staffSummary(me, exclude), { refresh: qs(req, "refresh") === "1" });
+      const snap = await summary(`staff-summary:${me}:${exclude ? "real" : "all"}`, () => staffSummary(me, exclude), {
+        refresh: qs(req, "refresh") === "1",
+        deps: [COLLECTIONS.memberships, COLLECTIONS.csmTasks, COLLECTIONS.handoffs, COLLECTIONS.matters, COLLECTIONS.obligations, COLLECTIONS.consultations],
+      });
       res.json({ ...snap.data, role: (req as AuthedRequest).dashboardRole ?? "staff", asOf: snap.asOf });
     }),
   );
@@ -472,7 +475,10 @@ export default function staffHomeRouter(app: Express): void {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       // Company-wide capacity: computed at most once per SUMMARY_TTL_MIN (helper/summaries.ts).
-      const snap = await summary(`staff-lawyers:${placeholderExcluded() ? "real" : "all"}`, lawyerCapacity, { refresh: qs(req, "refresh") === "1" });
+      const snap = await summary(`staff-lawyers:${placeholderExcluded() ? "real" : "all"}`, lawyerCapacity, {
+        refresh: qs(req, "refresh") === "1",
+        deps: ["providers", COLLECTIONS.matters, COLLECTIONS.consultations, COLLECTIONS.availability, COLLECTIONS.lawyerRatings, COLLECTIONS.specialties],
+      });
       const { items, unassignedMatters } = snap.data;
       if (isListRequest(req)) {
         return respondList(req, res, LAWYERS_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, LAWYERS_SPEC)), meta: { unassignedMatters, asOf: snap.asOf } }));
