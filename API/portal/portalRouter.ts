@@ -15,6 +15,8 @@ import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
+import get from "../../db/get.ts";
+import { emailToDocId } from "../../helper/auth/otp.ts";
 import query from "../../db/query.ts";
 import { requireClientAuth } from "../../helper/auth/session.ts";
 import { isAllowedDomain } from "../../helper/auth/otp.ts";
@@ -77,6 +79,25 @@ function matterSummary(docId: string, doc: Record<string, unknown>): Record<stri
   };
 }
 
+/**
+ * The client docs this viewer may open. A member reads only their own: the doc
+ * whose id is their email (projectId) plus any doc carrying their email, never
+ * the whole `clients` collection. Staff (bypass) still list everything.
+ */
+async function viewerClientDocs(email: string, staff: boolean): Promise<FirestoreDocument[]> {
+  if (staff) return await getAll(CLIENTS_COLLECTION).catch(() => []);
+  if (!email) return [];
+  const [own, byEmail, byDrip] = await Promise.all([
+    get(CLIENTS_COLLECTION, emailToDocId(email)).catch(() => null),
+    query(CLIENTS_COLLECTION, [{ field: "email", op: "EQUAL", value: email }]).catch(() => []),
+    query(CLIENTS_COLLECTION, [{ field: "dripEmail", op: "EQUAL", value: email }]).catch(() => []),
+  ]);
+  const out = new Map<string, FirestoreDocument>();
+  if (own) out.set(emailToDocId(email), { ...(own as Record<string, unknown>), id: emailToDocId(email) } as FirestoreDocument);
+  for (const d of [...byEmail, ...byDrip]) if (d?.id) out.set(String(d.id), d);
+  return [...out.values()];
+}
+
 export default function portalRouter(app: Express): void {
   // ── Matters ────────────────────────────────────────────────────────────────
   app.get(
@@ -86,7 +107,7 @@ export default function portalRouter(app: Express): void {
       const email = viewerEmail(req);
       const staff = isStaff(req);
 
-      const docs: FirestoreDocument[] = await getAll(CLIENTS_COLLECTION).catch(() => []);
+      const docs = await viewerClientDocs(email, staff);
       const matters = docs
         .filter((d) => d?.id && mayAccess(d as Record<string, unknown>, String(d.id), email, staff))
         .filter((d) => !(d as Record<string, unknown>).archived)
@@ -129,7 +150,7 @@ export default function portalRouter(app: Express): void {
       const email = viewerEmail(req);
       const staff = isStaff(req);
 
-      const docs: FirestoreDocument[] = await getAll(CLIENTS_COLLECTION).catch(() => []);
+      const docs = await viewerClientDocs(email, staff);
       const consultations: Record<string, unknown>[] = [];
 
       for (const d of docs) {

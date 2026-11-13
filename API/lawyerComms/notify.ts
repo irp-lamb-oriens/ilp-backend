@@ -190,13 +190,13 @@ export function summaryFollowupDue(c: Pick<CallDoc, "summaryReadyAt" | "summaryN
 }
 
 /** 24 h after "summary ready": remind the lawyer; 48 h: a CSM task (call.summary_unconfirmed). */
-export async function summaryFollowups(now = new Date()): Promise<{ reminders: number; escalated: number }> {
+export async function summaryFollowups(now = new Date(), given?: CallDoc[]): Promise<{ reminders: number; escalated: number }> {
   let reminders = 0;
   let escalated = 0;
-  const calls: CallDoc[] = [];
-  for (const status of ["completed", "in_progress", "booked"]) {
-    calls.push(...(await findRecords<CallDoc>(COLLECTIONS.consultations, { status }).catch(() => [] as CallDoc[])));
-  }
+  // callReminders passes the calls of its window (8 days); alone, read the same window.
+  const calls: CallDoc[] = given ?? ((await query(COLLECTIONS.consultations, [
+    { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: new Date(now.getTime() - 8 * 24 * HOUR).toISOString() },
+  ]).catch(() => [])) as unknown as CallDoc[]).filter((c) => ["completed", "in_progress", "booked"].includes(String(c.status)));
   for (const c of calls) {
     const due = summaryFollowupDue(c, now);
     if (!due) continue;

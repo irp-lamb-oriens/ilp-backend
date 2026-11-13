@@ -35,6 +35,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { countDocuments } from "../../helper/firestore/firestoreService.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import query from "../../db/query.ts";
@@ -205,9 +206,14 @@ export default function membersRouter(app: Express) {
       const owner = req.query.owner === "all" ? undefined : String(req.query.owner || me);
       const now = nowIso();
       const in14 = new Date(Date.now() + 14 * 86400000).toISOString();
-      const [tasks, obligations] = await Promise.all([
+      const [tasks, obligationsWithin14d] = await Promise.all([
         findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open", ownerEmail: owner }, { sortBy: "dueAt" }),
-        findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }, { sortBy: "dueAt" }),
+        // A number only: COUNT on the (status, dueAt) index, not every upcoming obligation.
+        countDocuments(COLLECTIONS.obligations, [
+          { field: "status", op: "EQUAL", value: "upcoming" },
+          { field: "dueAt", op: "GREATER_THAN_OR_EQUAL", value: now },
+          { field: "dueAt", op: "LESS_THAN_OR_EQUAL", value: in14 },
+        ]).catch(() => 0),
       ]);
       res.json({
         owner: owner ?? "all",
@@ -216,7 +222,7 @@ export default function membersRouter(app: Express) {
           open: tasks.length,
           overdue: tasks.filter((t) => t.dueAt < now).length,
           dueToday: tasks.filter((t) => t.dueAt.slice(0, 10) === now.slice(0, 10)).length,
-          obligationsWithin14d: obligations.filter((o) => o.dueAt && o.dueAt >= now && o.dueAt <= in14).length,
+          obligationsWithin14d,
         },
       });
     }),

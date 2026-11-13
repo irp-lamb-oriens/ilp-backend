@@ -32,12 +32,11 @@ import type { Express, Request, Response } from "express";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import log from "../../helper/log.ts";
 import get from "../../db/get.ts";
-import getAll from "../../db/getAll.ts";
 import put from "../../db/put.ts";
 import query from "../../db/query.ts";
 import auditLog from "../../helper/auditLog.ts";
 import { requireDashboardAuth } from "../../helper/auth/session.ts";
-import { createRecord, findRecords, getRecord, updateRecord } from "../../db/records.ts";
+import { createRecord, findForClients, findRecords, getRecord, updateRecord } from "../../db/records.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import { LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
 import { DOCUMENTS_COLLECTION } from "../../helper/storage.ts";
@@ -230,7 +229,7 @@ export default function csmRouter(app: Express): void {
     const scope = scoped(req, res);
     if (!scope) return;
     const { book, rows } = await rowsFor(scope);
-    const opps = (await getAll(COLLECTIONS.opportunities).catch(() => [])) as unknown as Opportunity[];
+    const opps = await findForClients<Opportunity>(COLLECTIONS.opportunities, rows.map((r) => r.clientId)).catch(() => [] as Opportunity[]);
     res.json({ csm: scope.csm, ...quotesView(rows, book.clients, opps) });
   }));
 
@@ -238,7 +237,7 @@ export default function csmRouter(app: Express): void {
     const scope = scoped(req, res);
     if (!scope) return;
     const { book, rows } = await rowsFor(scope);
-    const docs = (await Promise.all(rows.map((r) => query(DOCUMENTS_COLLECTION, [{ field: "clientId", op: "EQUAL", value: r.clientId }]).catch(() => [])))).flat() as Doc[];
+    const docs = await findForClients<Doc>(DOCUMENTS_COLLECTION, rows.map((r) => r.clientId)).catch(() => [] as Doc[]);
     res.json({ csm: scope.csm, items: messagesView(rows, book.clients, docs) });
   }));
 

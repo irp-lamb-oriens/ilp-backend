@@ -20,6 +20,7 @@
  * additive: no existing endpoint or document shape changes.
  */
 
+import { snapshotRoute } from "../../helper/summaries.ts";
 import type { Application, Request, Response } from "express";
 import log from "../../helper/log.ts";
 import getAll from "../../db/getAll.ts";
@@ -75,6 +76,7 @@ export default function salesReportRouter(app: Application) {
   app.get(
     "/api/dashboard/sales-report",
     ...FINANCE_ADMIN,
+    snapshotRoute("sales-report"), // reads every invoice, client and quote: once per SUMMARY_TTL_MIN
     async (_req: Request, res: Response) => {
       try {
         const [invoiceDocs, clientDocs, quoteDocs, countersDoc] =

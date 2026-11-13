@@ -1,6 +1,8 @@
 import type { Express, Request, Response } from "express";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
 import { fieldValue, LIST_SCHEMAS } from "../../schemas/listSchemas.ts";
+import { runStructuredQuery } from "../../helper/firestore/firestoreService.ts";
+import { snapshotRoute } from "../../helper/summaries.ts";
 import asyncHandler from "../../helper/asyncHandler.ts";
 import { isPlaceholderDoc } from "../../helper/placeholder.ts";
 import log from "../../helper/log.ts";
@@ -915,8 +917,15 @@ export default (app: Express) => {
   app.get(
     "/api/admin/user-activity",
     requireDashboardAuth,
-    asyncHandler(async (_req: Request, res: Response) => {
-      const rows = await getAll("audit_log").catch(() => []);
+    asyncHandler(async (req: Request, res: Response) => {
+      // The latest entries only (?limit=, default 200, max 1000), never the whole audit log.
+      const n = Number(req.query.limit);
+      const limit = Number.isInteger(n) && n > 0 ? Math.min(n, 1000) : 200;
+      const rows = await runStructuredQuery("audit_log", {
+        from: [{ collectionId: "audit_log" }],
+        orderBy: [{ field: { fieldPath: "at" }, direction: "DESCENDING" }],
+        limit,
+      }).catch(() => []);
       res.json({ activity: rows });
     })
   );
@@ -983,6 +992,7 @@ export default (app: Express) => {
   app.get(
     "/api/dashboard/metrics",
     requireDashboardAuth,
+    snapshotRoute("metrics"), // reads every client: once per SUMMARY_TTL_MIN, not per view
     asyncHandler(async (_req: Request, res: Response) => {
       const [clientDocs, email, llm] = await Promise.all([
         fetchAllClientsWithIds(),

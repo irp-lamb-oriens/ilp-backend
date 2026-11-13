@@ -41,6 +41,7 @@ import {
   profileRecord,
   updateRecord,
 } from "../members/service.ts";
+import { findForClients } from "../../db/records.ts";
 import { onRecordUpdated } from "../members/events.ts";
 import { lawyerMaySee } from "../members/lawyerAccess.ts";
 import { isListRequest, type ListSpec, pageProducer, pageRows, respondList } from "../../helper/listing.ts";
@@ -183,11 +184,18 @@ export function buildCard(m: Matter, client: Obj | null, obligations: Obligation
   };
 }
 
+/** Open obligations (only what buildCard counts), grouped per member. */
+function groupByClient(ids: string[], rows: Obligation[]): Map<string, Obligation[]> {
+  const out = new Map<string, Obligation[]>(ids.map((id) => [id, []]));
+  for (const o of rows) out.get(o.clientId)?.push(o);
+  return out;
+}
+
 async function cardFor(m: Matter, providerId: string) {
   const [client, obligations, cons] = await Promise.all([
     get(COLLECTIONS.clients, m.clientId).catch(() => null),
-    findRecords<Obligation>(COLLECTIONS.obligations, { clientId: m.clientId }),
-    findRecords<Consultation>(COLLECTIONS.consultations, { clientId: m.clientId, providerId }),
+    findForClients<Obligation>(COLLECTIONS.obligations, [m.clientId], { where: { status: ["upcoming", "asked"] } }),
+    findRecords<Consultation>(COLLECTIONS.consultations, { clientId: m.clientId, providerId, status: "booked" }),
   ]);
   const nowIso = new Date().toISOString();
   const next = cons.filter((c) => c.status === "booked" && c.scheduledAt >= nowIso)
@@ -278,8 +286,14 @@ export default function lawyerHomeRoutes(app: Express) {
       start.setHours(0, 0, 0, 0);
       const from = str(req.query.from) ?? start.toISOString();
       const to = str(req.query.to) ?? new Date(start.getTime() + DAY).toISOString();
-      const items = (await findRecords<Consultation & Obj>(COLLECTIONS.consultations, { providerId: pid }, { sortBy: "scheduledAt" }))
-        .filter((c) => c.scheduledAt >= from && c.scheduledAt < to && c.status !== "cancelled");
+      // Only the window: (providerId, scheduledAt) range, not every call the lawyer ever had.
+      const items = ((await query(COLLECTIONS.consultations, [
+        { field: "providerId", op: "EQUAL", value: pid },
+        { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: from },
+        { field: "scheduledAt", op: "LESS_THAN", value: to },
+      ])) as unknown as Array<Consultation & Obj>)
+        .filter((c) => c.status !== "cancelled")
+        .sort((a, b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt)));
       const [clients, matters] = await Promise.all([
         clientsById(items.map((c) => c.clientId)),
         Promise.all(items.map((c) => (c.matterId ? getRecord<Matter>(COLLECTIONS.matters, c.matterId) : Promise.resolve(null)))),
@@ -410,7 +424,8 @@ export default function lawyerHomeRoutes(app: Express) {
       const includeClosed = req.query.closed === "1";
       const [matters, cons] = await Promise.all([
         findRecords<Matter>(COLLECTIONS.matters, { assignedProviderId: pid }, { sortBy: "stageEnteredAt" }),
-        findRecords<Consultation>(COLLECTIONS.consultations, { providerId: pid }),
+        // Only booked calls: the board needs each member's next call, nothing older.
+        findRecords<Consultation>(COLLECTIONS.consultations, { providerId: pid, status: "booked" }),
       ]);
       const visible = matters.filter((m) => includeClosed || !m.closedAt);
       if (isListRequest(req)) {
@@ -439,9 +454,9 @@ export default function lawyerHomeRoutes(app: Express) {
             const ids = [...new Set(chunk.map((m) => m.clientId))];
             const [clients, obligationLists] = await Promise.all([
               q ? Promise.resolve(names) : clientsById(ids),
-              Promise.all(ids.map((id) => findRecords<Obligation>(COLLECTIONS.obligations, { clientId: id }))),
+              findForClients<Obligation>(COLLECTIONS.obligations, ids, { where: { status: ["upcoming", "asked"] } }),
             ]);
-            const obligationsBy = new Map(ids.map((id, i) => [id, obligationLists[i]]));
+            const obligationsBy = groupByClient(ids, obligationLists);
             const next = new Map<string, string>();
             for (const c of cons) {
               if (c.status !== "booked" || c.scheduledAt < nowIso) continue;
@@ -457,9 +472,9 @@ export default function lawyerHomeRoutes(app: Express) {
       const clientIds = [...new Set(visible.map((m) => m.clientId))];
       const [clients, obligationLists] = await Promise.all([
         clientsById(clientIds),
-        Promise.all(clientIds.map((id) => findRecords<Obligation>(COLLECTIONS.obligations, { clientId: id }))),
+        findForClients<Obligation>(COLLECTIONS.obligations, clientIds, { where: { status: ["upcoming", "asked"] } }),
       ]);
-      const obligationsBy = new Map(clientIds.map((id, i) => [id, obligationLists[i]]));
+      const obligationsBy = groupByClient(clientIds, obligationLists);
       const nowIso = new Date().toISOString();
       const nextCall = new Map<string, string>();
       for (const c of cons.filter((x) => x.status === "booked" && x.scheduledAt >= nowIso).sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt))) {
@@ -510,12 +525,12 @@ export default function lawyerHomeRoutes(app: Express) {
       ]);
       const clientIds = [...new Set([...assignedClients.map((d) => d.id), ...matters.map((m) => m.clientId)])];
       const lists = await Promise.all([
-        ...clientIds.map((id) => query("quoteSettlements", [{ field: "clientId", op: "EQUAL", value: id }]).catch(() => [])),
+        findForClients<Obj>("quoteSettlements", clientIds).catch(() => [] as Obj[]),
         // Settlements that carry a denormalized providerIds array (see W5 Requests).
         query("quoteSettlements", [{ field: "providerIds", op: "ARRAY_CONTAINS", value: pid }]).catch(() => []),
       ]);
       const settlements = new Map<string, Obj>();
-      for (const s of lists.flat()) settlements.set(s.id, s);
+      for (const s of lists.flat() as Obj[]) settlements.set(String(s.id), s);
       const clients = new Map<string, Obj>(assignedClients.map((d) => [d.id, d as Obj]));
       const missing = [...settlements.values()].map((s) => String(s.clientId ?? "")).filter((id) => id && !clients.has(id));
       for (const [id, doc] of await clientsById(missing)) clients.set(id, doc);

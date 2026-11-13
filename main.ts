@@ -2,6 +2,7 @@ import { loadSync } from "dotenv/mod.ts";
 
 loadSync({ export: true, allowEmptyValues: true, examplePath: null });
 import { armReadCache } from "./helper/firestore/readCache.ts";
+import { readMeterMiddleware, startHourlyReadLog } from "./helper/firestore/readMeter.ts";
 import { armSessionCache } from "./helper/auth/sessionCache.ts";
 import { idempotency } from "./helper/idempotency.ts";
 import { EXCLUDE_HEADER, placeholderScope } from "./helper/placeholderScope.ts";
@@ -92,6 +93,7 @@ export function createServer() {
     installProcessErrorHandlers();
     armReadCache(); // one database read per question until a write changes the answer (readCache.ts)
     armSessionCache(); // one session read a minute per signed-in person, not one per request (sessionCache.ts)
+    startHourlyReadLog(); // "[reads] last hour: N docs (…)" so a runaway reader shows before the quota does
     const app = express();
     const isProduction = !!Deno.env.get("RENDER_EXTERNAL_URL");
     const port = parseInt(Deno.env.get("PORT") || "8000");
@@ -135,6 +137,8 @@ export function createServer() {
       log(`${req.method} ${req.originalUrl}`, "request");
       next();
     });
+    // "[reads] GET /api/x 200 → N docs (…)" for any request that reads READ_LOG_MIN+ documents.
+    app.use(readMeterMiddleware());
 
     // Per-IP for anonymous traffic and abuse-prone public routes; per session
     // for signed-in portal requests (helper/rateLimitKeys.ts, QA round 3).

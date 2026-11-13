@@ -146,10 +146,15 @@ export function lawyerFacts(p: Doc, availability: Doc | null, specialties: reado
 
 /** Calls held in the next 7 days (member calls only), the load the router balances. */
 async function callsNext7Days(providerId: string, now: Date): Promise<number> {
-  const rows = await findRecords<Consultation>(COLLECTIONS.consultations, { providerId }).catch(() => [] as Consultation[]);
+  // (providerId, scheduledAt) range: the coming week only, not the lawyer's whole history.
   const from = now.toISOString();
   const to = new Date(now.getTime() + 7 * DAY).toISOString();
-  return rows.filter((c) => c.kind !== "sales" && c.status !== "cancelled" && c.status !== "no_show" && c.scheduledAt >= from && c.scheduledAt < to).length;
+  const rows = (await query(COLLECTIONS.consultations, [
+    { field: "providerId", op: "EQUAL", value: providerId },
+    { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: from },
+    { field: "scheduledAt", op: "LESS_THAN", value: to },
+  ]).catch(() => [])) as unknown as Consultation[];
+  return rows.filter((c) => c.kind !== "sales" && c.status !== "cancelled" && c.status !== "no_show").length;
 }
 
 /**
@@ -504,8 +509,10 @@ export async function salesAvailability() {
 /** Free sales start times for the next 14 days. */
 export async function salesSlots(now = new Date()): Promise<string[]> {
   const a = await salesAvailability();
-  const held = (await findRecords<Consultation>(COLLECTIONS.consultations, { providerId: SALES_TEAM_ID }).catch(() => [] as Consultation[]))
-    .filter((c) => c.status !== "cancelled");
+  const held = ((await query(COLLECTIONS.consultations, [
+    { field: "providerId", op: "EQUAL", value: SALES_TEAM_ID },
+    { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: new Date(now.getTime() - DAY).toISOString() },
+  ]).catch(() => [])) as unknown as Consultation[]).filter((c) => c.status !== "cancelled");
   return buildSlots({ now, availability: a, booked: held, days: 14, lengthMin: SALES_CALL_LENGTH_MIN });
 }
 

@@ -11,6 +11,7 @@
  * Nothing here writes. The endpoint is safe to call repeatedly.
  */
 
+import { snapshotRoute } from "../../helper/summaries.ts";
 import type { Application, Request, Response } from "express";
 import log from "../../helper/log.ts";
 import { FINANCE_ADMIN } from "./financeAuth.ts";
@@ -25,6 +26,7 @@ export default function financeMetricsRouter(app: Application) {
   app.get(
     "/api/dashboard/finance/metrics",
     ...FINANCE_ADMIN,
+    snapshotRoute("finance-metrics"), // reads every quote and client: once per SUMMARY_TTL_MIN
     async (req: Request, res: Response) => {
       try {
         const baseCurrency =

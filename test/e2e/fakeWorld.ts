@@ -180,6 +180,15 @@ export function installFakeWorld(startIso: string, opts: { suggestion?: { summar
 
   async function firestore(method: string, url: URL, body: Doc | null): Promise<Response> {
     const rest = decodeURIComponent(url.pathname).replace(`/v1/projects/${PROJECT_ID}/databases/(default)/documents`, "");
+    // documents:runAggregationQuery (COUNT only)
+    if (rest === ":runAggregationQuery") {
+      const saq = (body?.structuredAggregationQuery ?? {}) as Doc;
+      const sq = (saq.structuredQuery ?? {}) as Doc;
+      const from = (sq.from as Array<{ collectionId: string }>)[0].collectionId;
+      const n = [...coll(from).values()].filter((d) => matches(d, sq.where as Doc | undefined)).length;
+      const alias = ((saq.aggregations as Array<{ alias?: string }> | undefined)?.[0]?.alias) ?? "field_1";
+      return json(200, [{ result: { aggregateFields: { [alias]: { integerValue: String(n) } } }, readTime: new RealDate(nowMs).toISOString() }]);
+    }
     // documents:runQuery
     if (rest === ":runQuery") {
       const sq = (body?.structuredQuery ?? {}) as Doc;

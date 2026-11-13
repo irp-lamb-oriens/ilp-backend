@@ -4,6 +4,7 @@ import log from "../helper/log.ts";
 import put from "../db/put.ts";
 import { RateLimiter, createRateLimitedRunner } from "../helper/rateLimit.ts";
 import { reportError } from "../helper/errorReporter.ts";
+import { metered } from "../helper/firestore/readMeter.ts";
 
 /**
  * Schedules every job in the registry using croner. Each handler is wrapped
@@ -31,7 +32,7 @@ export function startCronRunner(): void {
 
   for (const job of jobs) {
     new Cron(job.cron, async () => {
-      await runCronJob(job, runGuarded);
+      await metered(`job ${job.name}`, () => runCronJob(job, runGuarded));
     });
     log(`[cron] scheduled "${job.name}" (${job.cron})`, "cronRunner");
   }

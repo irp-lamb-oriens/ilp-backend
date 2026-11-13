@@ -114,10 +114,11 @@ export const jobs: JobDef[] = [
       await privacyRetention();
     },
   },
-  // JOURNEYS: journey_daily for today (and yesterday before 03:00 UTC) + experiment exposures.
+  // JOURNEYS: journey_daily for yesterday + experiment exposures, once a day after late beacons.
+  // (Was hourly for today: re-read every event of the day 24 times; today is built live by the routes.)
   {
     name: "journeyAggregate",
-    cron: "7 * * * *",
+    cron: "7 3 * * *",
     handler: async () => {
       await journeyAggregate();
     },

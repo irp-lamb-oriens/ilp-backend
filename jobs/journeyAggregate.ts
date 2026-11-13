@@ -1,8 +1,8 @@
 /**
- * jobs/journeyAggregate.ts — JOURNEYS daily aggregates (hourly, minute 7 UTC).
+ * jobs/journeyAggregate.ts — JOURNEYS daily aggregates (daily, 03:07 UTC, for yesterday).
  * ──────────────────────────────────────────────────────────────────────────
- * Rebuilds journey_daily for today (UTC) every hour and for yesterday during
- * the first three hours of the day (late beacons), and merges the day's
+ * Builds journey_daily for yesterday (UTC) once, three hours after midnight
+ * (late beacons), and merges the day's
  * experiment exposures into journey_exposures. Re-running a day gives the
  * same documents (ids are deterministic; rows that disappeared are deleted),
  * so the job is safe to repeat. Staff routes read these rows for past days
@@ -57,8 +57,11 @@ export async function aggregateDay(day: string, store: AggregateStore, now: Date
 }
 
 export async function journeyAggregate(now: Date = new Date(), store: AggregateStore = firestoreAggregateStore): Promise<void> {
-  const today = now.toISOString().slice(0, 10);
-  const days = now.getUTCHours() < 3 ? [new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10), today] : [today];
+  // Yesterday only, once a day after late beacons (03:07 UTC). Staff routes build
+  // today live from raw events and ignore a stored row for today
+  // (journeysRouter.ts), so rebuilding today every hour re-read the whole day's
+  // events 24 times for nothing.
+  const days = [new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10)];
   for (const day of days) {
     try {
       const r = await aggregateDay(day, store, now);

@@ -432,8 +432,12 @@ export async function onSubscriptionDeleted(sub: Doc): Promise<string> {
 
 export async function membershipRenewalSweep(now: Date = new Date()): Promise<Record<string, number>> {
   const counts: Record<string, number> = { past_due: 0, cancelled: 0, renewed: 0 };
-  const rows = (await query(COLLECTIONS.memberships, [{ field: "status", op: "EQUAL", value: "active" }])
-    .catch(() => [])) as unknown as MembershipDoc[];
+  // Only active memberships whose period already ended (the only ones manualSweepAction acts on),
+  // not every active membership every hour. Needs the (status, periodEnd) index.
+  const rows = (await query(COLLECTIONS.memberships, [
+    { field: "status", op: "EQUAL", value: "active" },
+    { field: "periodEnd", op: "LESS_THAN_OR_EQUAL", value: now.toISOString() },
+  ]).catch(() => [])) as unknown as MembershipDoc[];
   for (const m of rows) {
     const action = manualSweepAction(m, now);
     if (!action) continue;

@@ -30,6 +30,7 @@ import query from "../../../db/query.ts";
 import auditLog from "../../../helper/auditLog.ts";
 import { isPlaceholderDoc } from "../../../helper/placeholder.ts";
 import { includingPlaceholders, placeholderExcluded } from "../../../helper/placeholderScope.ts";
+import { summary } from "../../../helper/summaries.ts";
 import { type AuthedRequest, requireDashboardAuth } from "../../../helper/auth/session.ts";
 import { createRecord, findRecords, getRecord, updateRecord } from "../../../db/records.ts";
 import {
@@ -85,8 +86,11 @@ const QUEUE_SPEC: ListSpec<TaskRec> = {
 
 /** Placeholder (seed) records loaded, counted whatever the request's own scope is. */
 async function placeholderCounts(): Promise<{ members: number; lawyers: number }> {
+  // Only the flagged documents (placeholder == true), not every membership and lawyer:
+  // this runs on every staff and CSM page (the "Exclude placeholder data" notice).
+  const flagged = (c: string) => query(c, [{ field: "placeholder", op: "EQUAL", value: true }]).catch(() => []);
   const [memberships, providers] = await includingPlaceholders(() =>
-    Promise.all([findRecords<Membership>(COLLECTIONS.memberships), getAll("providers")])
+    Promise.all([flagged(COLLECTIONS.memberships) as unknown as Promise<Membership[]>, flagged("providers")])
   );
   return {
     members: new Set(memberships.filter((m) => isPlaceholderDoc(m)).map((m) => m.clientId)).size,
@@ -189,6 +193,42 @@ async function providerNames(ids: Iterable<string>): Promise<Map<string, string>
 
 const qs = (req: Request, k: string): string => (typeof req.query[k] === "string" ? String(req.query[k]) : "");
 
+/**
+ * Today page figures (KPI strip + Needs attention). Reads whole collections, so
+ * the route serves it through summary() (helper/summaries.ts), not per view.
+ */
+async function staffSummary(me: string, exclude: boolean) {
+  const all = await Promise.all([
+    findRecords<Membership>(COLLECTIONS.memberships),
+    findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open" }),
+    findRecords<Handoff>(COLLECTIONS.handoffs),
+    findRecords<Matter>(COLLECTIONS.matters),
+    findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }),
+    findRecords<Obligation>(COLLECTIONS.obligations, { status: "asked" }),
+  ]);
+  // Placeholder (seed) data counts by default; ?excludePlaceholder=1 leaves it out.
+  // The count is taken outside the request's scope, so the notice stays visible while the data is hidden.
+  const placeholderMembers = (await placeholderCounts()).members;
+  const keep = <T>(list: T[]) => (exclude ? list.filter((d) => !isPlaceholderDoc(d)) : list);
+  const [memberships, openTasks, handoffs, matters, upcoming, asked] = [
+    keep(all[0]), keep(all[1]), keep(all[2]), keep(all[3]), keep(all[4]), keep(all[5]),
+  ] as [Membership[], CsmTask[], Handoff[], Matter[], Obligation[], Obligation[]];
+  const [clients, consultations] = await Promise.all([
+    clientsById(memberships.map((m) => m.clientId)),
+    Promise.all(handoffs.map((h) => getRecord<Consultation>(COLLECTIONS.consultations, h.consultationId))),
+  ]);
+  const kpis = computeKpis({
+    memberships,
+    clients,
+    tasks: openTasks,
+    handoffs,
+    consultations: consultations.filter((c): c is Consultation => !!c),
+    me,
+  });
+  const attention = computeAttention({ memberships, clients, matters, obligations: [...upcoming, ...asked] });
+  return { me, kpis, attention, placeholder: { members: placeholderMembers, excluded: exclude } };
+}
+
 export default function staffHomeRouter(app: Express): void {
   log("Staff home router initialized.");
 
@@ -198,44 +238,14 @@ export default function staffHomeRouter(app: Express): void {
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
       const me = (req as AuthedRequest).dashboardUser ?? "";
-      const all = await Promise.all([
-        findRecords<Membership>(COLLECTIONS.memberships),
-        findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open" }),
-        findRecords<Handoff>(COLLECTIONS.handoffs),
-        findRecords<Matter>(COLLECTIONS.matters),
-        findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }),
-        findRecords<Obligation>(COLLECTIONS.obligations, { status: "asked" }),
-      ]);
-      // Placeholder (seed) data counts by default; ?excludePlaceholder=1 leaves it out.
-      // The count is taken outside the request's scope, so the notice stays visible while the data is hidden.
-      const placeholderMembers = (await placeholderCounts()).members;
+      // Company-wide figures: computed at most once per SUMMARY_TTL_MIN per viewer and
+      // "exclude placeholder" choice, then read back (helper/summaries.ts). ?refresh=1 recomputes.
       const exclude = placeholderExcluded();
-      const keep = <T>(list: T[]) => (exclude ? list.filter((d) => !isPlaceholderDoc(d)) : list);
-      const [memberships, openTasks, handoffs, matters, upcoming, asked] = [
-        keep(all[0]), keep(all[1]), keep(all[2]), keep(all[3]), keep(all[4]), keep(all[5]),
-      ] as [Membership[], CsmTask[], Handoff[], Matter[], Obligation[], Obligation[]];
-      const [clients, consultations] = await Promise.all([
-        clientsById(memberships.map((m) => m.clientId)),
-        Promise.all(handoffs.map((h) => getRecord<Consultation>(COLLECTIONS.consultations, h.consultationId))),
-      ]);
-      const kpis = computeKpis({
-        memberships,
-        clients,
-        tasks: openTasks,
-        handoffs,
-        consultations: consultations.filter((c): c is Consultation => !!c),
-        me,
-      });
-      const attention = computeAttention({ memberships, clients, matters, obligations: [...upcoming, ...asked] });
-      res.json({
-        me,
-        role: (req as AuthedRequest).dashboardRole ?? "staff",
-        kpis,
-        attention,
-        placeholder: { members: placeholderMembers, excluded: exclude },
-      });
+      const snap = await summary(`staff-summary:${me}:${exclude ? "real" : "all"}`, () => staffSummary(me, exclude), { refresh: qs(req, "refresh") === "1" });
+      res.json({ ...snap.data, role: (req as AuthedRequest).dashboardRole ?? "staff", asOf: snap.asOf });
     }),
   );
+
 
   // ── Placeholder data: is any loaded? (the staff and CSM shells show the "Exclude placeholder data" switch when it is)
   app.get(
@@ -461,54 +471,67 @@ export default function staffHomeRouter(app: Express): void {
     "/api/dashboard/staff/lawyers",
     requireDashboardAuth,
     asyncHandler(async (req: Request, res: Response) => {
-      const now = Date.now();
-      const in7 = new Date(now + 7 * DAY_MS).toISOString();
-      const nowIso = new Date(now).toISOString();
-      const [providers, matters, booked, ratings, specialties, availability] = await Promise.all([
-        getAll("providers"),
-        findRecords<Matter>(COLLECTIONS.matters),
-        findRecords<Consultation>(COLLECTIONS.consultations, { status: "booked" }),
-        ratingsByProvider(), // ROUTING
-        loadSpecialties(), // ROUTING
-        getAll(COLLECTIONS.availability).catch(() => []), // ROUTING
-      ]);
-      const availBy = new Map((availability as Doc[]).map((a) => [String(a.providerId ?? a.id), a]));
-      const labelOf = new Map(specialties.map((x) => [x.id, x.label]));
-      const open = matters.filter((m) => !m.closedAt && m.stage !== "closed");
-      const items = (providers as Doc[])
-        .filter((p) => p.active !== false && String(p.id) !== SALES_TEAM_ID)
-        .map((p) => {
-          const id = String(p.id);
-          const mine = open.filter((m) => m.assignedProviderId === id);
-          const f = lawyerFacts(p as Doc, availBy.get(id) ?? null, specialties);
-          const r = ratings.get(id) ?? noReviewsSummary(id);
-          return {
-            id,
-            name: String(p.name ?? "") || String(p.email ?? id),
-            email: String(p.email ?? ""),
-            // Placeholder (seed) lawyer: the list marks the row, as the members list does.
-            placeholder: isPlaceholderDoc({ ...p, id }),
-            legalAreas: Array.isArray(p.legalAreas) ? p.legalAreas : [],
-            openMatters: mine.length,
-            agingMatters: mine.filter((m) => now - Date.parse(m.stageEnteredAt) >= 14 * DAY_MS).length,
-            callsNext7d: booked.filter((c) => c.providerId === id && c.scheduledAt >= nowIso && c.scheduledAt <= in7).length,
-            specialties: f.specialties,
-            specialtyLabels: f.specialties.map((x) => labelOf.get(x) ?? x),
-            countries: f.countries,
-            ratingScore: Number(r.ratingScore),
-            reviewCount: Number(r.reviewCount),
-            ratingStatus: r.ratingStatus,
-            ratingLabel: ratingLabel(r),
-            routingStatus: f.routingStatus,
-            bookable: f.bookable,
-          };
-        })
-        .sort((a, b) => b.openMatters - a.openMatters);
-      const unassignedMatters = open.filter((m) => !m.assignedProviderId).length;
+      // Company-wide capacity: computed at most once per SUMMARY_TTL_MIN (helper/summaries.ts).
+      const snap = await summary(`staff-lawyers:${placeholderExcluded() ? "real" : "all"}`, lawyerCapacity, { refresh: qs(req, "refresh") === "1" });
+      const { items, unassignedMatters } = snap.data;
       if (isListRequest(req)) {
-        return respondList(req, res, LAWYERS_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, LAWYERS_SPEC)), meta: { unassignedMatters } }));
+        return respondList(req, res, LAWYERS_SPEC, (p) => ({ produce: pageProducer(pageRows(items, p, LAWYERS_SPEC)), meta: { unassignedMatters, asOf: snap.asOf } }));
       }
-      res.json({ items, unassignedMatters });
+      res.json({ items, unassignedMatters, asOf: snap.asOf });
     }),
   );
+}
+
+/** Capacity per lawyer for /api/dashboard/staff/lawyers. */
+async function lawyerCapacity() {
+  const now = Date.now();
+  const in7 = new Date(now + 7 * DAY_MS).toISOString();
+  const nowIso = new Date(now).toISOString();
+  const [providers, matters, upcoming, ratings, specialties, availability] = await Promise.all([
+    getAll("providers"),
+    findRecords<Matter>(COLLECTIONS.matters),
+    // The coming week only (single-field range), not every booked call.
+    query(COLLECTIONS.consultations, [
+      { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: nowIso },
+      { field: "scheduledAt", op: "LESS_THAN_OR_EQUAL", value: in7 },
+    ]) as unknown as Promise<Consultation[]>,
+    ratingsByProvider(), // ROUTING
+    loadSpecialties(), // ROUTING
+    getAll(COLLECTIONS.availability).catch(() => []), // ROUTING
+  ]);
+  const booked = upcoming.filter((c) => c.status === "booked");
+  const availBy = new Map((availability as Doc[]).map((a) => [String(a.providerId ?? a.id), a]));
+  const labelOf = new Map(specialties.map((x) => [x.id, x.label]));
+  const open = matters.filter((m) => !m.closedAt && m.stage !== "closed");
+  const items = (providers as Doc[])
+    .filter((p) => p.active !== false && String(p.id) !== SALES_TEAM_ID)
+    .map((p) => {
+      const id = String(p.id);
+      const mine = open.filter((m) => m.assignedProviderId === id);
+      const f = lawyerFacts(p as Doc, availBy.get(id) ?? null, specialties);
+      const r = ratings.get(id) ?? noReviewsSummary(id);
+      return {
+        id,
+        name: String(p.name ?? "") || String(p.email ?? id),
+        email: String(p.email ?? ""),
+        // Placeholder (seed) lawyer: the list marks the row, as the members list does.
+        placeholder: isPlaceholderDoc({ ...p, id }),
+        legalAreas: Array.isArray(p.legalAreas) ? p.legalAreas : [],
+        openMatters: mine.length,
+        agingMatters: mine.filter((m) => now - Date.parse(m.stageEnteredAt) >= 14 * DAY_MS).length,
+        callsNext7d: booked.filter((c) => c.providerId === id && c.scheduledAt >= nowIso && c.scheduledAt <= in7).length,
+        specialties: f.specialties,
+        specialtyLabels: f.specialties.map((x) => labelOf.get(x) ?? x),
+        countries: f.countries,
+        ratingScore: Number(r.ratingScore),
+        reviewCount: Number(r.reviewCount),
+        ratingStatus: r.ratingStatus,
+        ratingLabel: ratingLabel(r),
+        routingStatus: f.routingStatus,
+        bookable: f.bookable,
+      };
+    })
+    .sort((a, b) => b.openMatters - a.openMatters);
+  const unassignedMatters = open.filter((m) => !m.assignedProviderId).length;
+  return { items, unassignedMatters };
 }

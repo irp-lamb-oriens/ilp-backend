@@ -13,14 +13,21 @@
  *    Calendar event but no transcript: try to read the Meet transcript and
  *    draft a suggested summary, so the lawyer finds it ready on the call page.
  *
- * Queries are single-field equalities (status), so no composite index is needed.
+ * Reads: ONE range query on scheduledAt, shared by every step, so a run costs
+ * the calls in that window, never the whole consultation history (that cost
+ * ~60 000 reads a day on seed data alone). The window is 8 days back to 25
+ * hours ahead; once a day (the first run after 04:00 UTC) it reaches back 31
+ * days, so calls missed while the job was down still get their "not wrapped
+ * up" task (callOutcomeMissing looks 30 days back). Single-field range, so no
+ * composite index is needed.
  */
 
 import log from "../helper/log.ts";
 import { enqueueEmail } from "../helper/emailQueue.ts";
 import { callReminderEmail } from "../helper/emailTemplates.ts";
 import { COLLECTIONS } from "../schemas/contracts.ts";
-import { findRecords, updateRecord } from "../API/members/service.ts";
+import { updateRecord } from "../API/members/service.ts";
+import query from "../db/query.ts";
 import { callOutcomeMissing, reminderToSend, transcriptFetchDue } from "../API/calls/callLogic.ts";
 import { emitEvent } from "../API/members/events.ts";
 import {
@@ -37,11 +44,38 @@ import { sendSummaryReady, summaryFollowups } from "../API/lawyerComms/notify.ts
 import { ratingRequests } from "../API/retention/closingLoops.ts"; // COMMS-P4
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+export const LOOKBACK_DAYS = 8;
+export const DEEP_LOOKBACK_DAYS = 31;
 
-export async function callReminders(now = new Date()): Promise<{ sent: number; transcripts: number; unresolved: number }> {
+/** The daily deep pass: the first run after 04:00 UTC (the job runs every 15 minutes). */
+export const isDeepPass = (now: Date) => now.getUTCHours() === 4 && now.getUTCMinutes() < 15;
+
+/**
+ * Every call any step below can act on. Each step fires within 3 days of the
+ * call: callOutcomeMissing at 1 day after the end (2 days after completion),
+ * transcripts up to 1 day, rating requests up to 3 days, summary follow-ups
+ * 48 h after the summary (ready within a day of the call); reminders look
+ * 25 hours ahead. 8 days back leaves room for a server that was down for a
+ * few days; the job runs every 15 minutes.
+ */
+export async function callsInWindow(now: Date, lookbackDays = LOOKBACK_DAYS): Promise<CallRecord[]> {
+  const rows = await query(COLLECTIONS.consultations, [
+    { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: new Date(now.getTime() - lookbackDays * DAY).toISOString() },
+    { field: "scheduledAt", op: "LESS_THAN_OR_EQUAL", value: new Date(now.getTime() + 25 * HOUR).toISOString() },
+  ]);
+  return rows as unknown as CallRecord[];
+}
+
+export async function callReminders(
+  now = new Date(),
+  opts: { deep?: boolean } = {},
+): Promise<{ sent: number; transcripts: number; unresolved: number }> {
   let sent = 0;
   let transcripts = 0;
-  const booked = await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "booked" });
+  const calls = await callsInWindow(now, (opts.deep ?? isDeepPass(now)) ? DEEP_LOOKBACK_DAYS : LOOKBACK_DAYS);
+  const ofStatus = (...st: string[]) => calls.filter((c) => st.includes(String(c.status)));
+  const booked = ofStatus("booked");
   const horizon = new Date(now.getTime() + 25 * HOUR).toISOString();
   const nowIso = now.toISOString();
 
@@ -83,10 +117,8 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
   // Transcript pickup: calls still "booked" or "in_progress" after their end
   // (the lawyer has not confirmed yet) and completed calls without a transcript.
   const recent = [
-    ...booked,
-    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "in_progress" }).catch(() => [])),
-    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "completed" }).catch(() => []))
-      .filter((c) => Date.parse(c.scheduledAt) > now.getTime() - 26 * HOUR),
+    ...ofStatus("booked", "in_progress"),
+    ...ofStatus("completed").filter((c) => Date.parse(c.scheduledAt) > now.getTime() - 26 * HOUR),
   ];
   for (const c of recent.filter((x) => x.kind !== "sales" && transcriptFetchDue(x, now) && x.summary?.status !== "confirmed")) {
     try {
@@ -106,11 +138,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
   // REL: calls nobody wrapped up (no completion / no-show a day after the end,
   // or no handoff two days after completion): one CSM task per call.
   let unresolved = 0;
-  const open = [
-    ...booked,
-    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "in_progress" }).catch(() => [])),
-    ...(await findRecords<CallRecord>(COLLECTIONS.consultations, { status: "completed" }).catch(() => [])),
-  ];
+  const open = ofStatus("booked", "in_progress", "completed");
   for (const c of open.filter((x) => x.kind !== "sales" && callOutcomeMissing(x, now))) {
     const ids = await emitEvent("call.outcome_missing", {
       clientId: c.clientId,
@@ -127,7 +155,7 @@ export async function callReminders(now = new Date()): Promise<{ sent: number; t
   await ratingRequests(completed, now).catch((err) => log(`[callReminders] rating requests: ${err instanceof Error ? err.message : err}`, "error"));
 
   // COMMS-P2: summary still not confirmed: lawyer reminder at 24 h, CSM task at 48 h.
-  await summaryFollowups(now).catch((err) => log(`[callReminders] summary follow-ups: ${err instanceof Error ? err.message : err}`, "error"));
+  await summaryFollowups(now, open).catch((err) => log(`[callReminders] summary follow-ups: ${err instanceof Error ? err.message : err}`, "error"));
 
   if (sent || transcripts) log(`[callReminders] ${sent} reminder emails, ${transcripts} transcripts`);
   return { sent, transcripts, unresolved };

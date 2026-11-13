@@ -25,6 +25,7 @@ import {
 import { toFirestoreDocument, toFirestoreValue } from "./toFirestoreValue.ts";
 import { fromFirestoreFields } from "./fromFirestoreValue.ts";
 import { applyPlaceholderScope, placeholderExcluded } from "../placeholderScope.ts";
+import { meterRead } from "./readMeter.ts";
 
 /** A document as returned to callers: Firestore id plus decoded fields. */
 export interface FirestoreDocument {
@@ -42,7 +43,8 @@ export interface QueryFilter {
     | "LESS_THAN_OR_EQUAL"
     | "GREATER_THAN"
     | "GREATER_THAN_OR_EQUAL"
-    | "ARRAY_CONTAINS";
+    | "ARRAY_CONTAINS"
+    | "IN"; // value: an array of at most 30 values
   value: unknown;
 }
 
@@ -114,6 +116,7 @@ export async function readDocument(
   const url = getFirestoreDocumentUrl(collection, id);
   const res = await firestoreRequest("GET", `${collection}/${id}`, url, undefined, true);
 
+  meterRead(collection, 1); // a missing document is still one read
   if (res.status === 404) return null;
 
   const data = (await res.json()) as { fields?: Record<string, unknown> };
@@ -441,7 +444,48 @@ async function runStructuredQueryNow(
       ...(row.document.fields ? fromFirestoreFields(row.document.fields) : {}),
     });
   }
+  meterRead(collection, docs.length);
   return docs;
+}
+
+/**
+ * COUNT(*) with equality/range filters, answered by Firestore's index
+ * (`runAggregationQuery`): one read per 1000 matching index entries, instead
+ * of one read per document. For dashboard figures that only need a number.
+ *
+ * Under "Exclude placeholder data" the placeholder documents are subtracted
+ * (a second count on `placeholder == true`; `!=` would also drop documents
+ * that lack the field).
+ */
+export async function countDocuments(collection: string, filters: QueryFilter[] = []): Promise<number> {
+  const total = await countNow(collection, filters);
+  if (!placeholderExcluded()) return total;
+  const ph = await countNow(collection, [...filters, { field: "placeholder", op: "EQUAL", value: true }]);
+  return Math.max(0, total - ph);
+}
+
+async function countNow(collection: string, filters: QueryFilter[]): Promise<number> {
+  const structuredQuery: Record<string, unknown> = { from: [{ collectionId: collection }] };
+  if (filters.length) {
+    structuredQuery.where = {
+      compositeFilter: {
+        op: "AND",
+        filters: filters.map((f) => ({ fieldFilter: { field: { fieldPath: f.field }, op: f.op, value: toFirestoreValue(f.value) } })),
+      },
+    };
+  }
+  const [n] = await cachedRead(collection, `count:${JSON.stringify(structuredQuery)}`, async () => {
+    const url = getFirestoreRunQueryUrl().replace(/:runQuery$/, ":runAggregationQuery");
+    const res = await firestoreRequest("query", `${collection} (count)`, url, {
+      method: "POST",
+      body: JSON.stringify({ structuredAggregationQuery: { structuredQuery, aggregations: [{ alias: "n", count: {} }] } }),
+    });
+    const rows = (await res.json()) as Array<{ result?: { aggregateFields?: { n?: { integerValue?: string } } } }>;
+    const value = Number(rows.find((r) => r.result)?.result?.aggregateFields?.n?.integerValue ?? 0);
+    meterRead(collection, Math.ceil(value / 1000)); // billed per 1000 index entries, at least one
+    return [value];
+  });
+  return n;
 }
 
 /**
@@ -482,6 +526,7 @@ async function listDocumentsNow(
       out.push({ id, ...(doc.fields ? fromFirestoreFields(doc.fields) : {}) });
     }
 
+    meterRead(collection, data.documents?.length ?? 0);
     pageToken = typeof data.nextPageToken === "string"
       ? data.nextPageToken
       : undefined;

@@ -14,9 +14,8 @@
 
 import type { Request } from "express";
 import get from "../../db/get.ts";
-import getAll from "../../db/getAll.ts";
 import query from "../../db/query.ts";
-import { findRecords } from "../../db/records.ts";
+import { findForClients, findRecords } from "../../db/records.ts";
 import { type AuthedRequest } from "../../helper/auth/session.ts";
 import { staffRoleFor } from "../../helper/auth/roles.ts";
 import type { StaffRole } from "../../helper/auth/session.ts";
@@ -172,36 +171,54 @@ export async function loadBook(scope: CsmScope, now = Date.now()): Promise<BookD
     : (await Promise.all([...candidateIds].map((id) => findRecords<Membership>(COLLECTIONS.memberships, { clientId: id }).catch(() => [])))).flat();
   const memberships = latestMembershipPerClient(everyForCandidates).filter((m) => inBook(m, scope, now));
   const ids = new Set(memberships.map((m) => m.clientId));
-  const [clients, open, upcoming, asked, feedback, contacts] = await Promise.all([
+  // Only the book's own documents: clientId IN (…), never a whole collection (readMeter.ts).
+  const [clients, memberTasks, ownedOpen, obligations, feedback, contacts] = await Promise.all([
     clientsById(ids),
-    findRecords<CsmTask>(COLLECTIONS.csmTasks, { status: "open" }),
-    findRecords<Obligation>(COLLECTIONS.obligations, { status: "upcoming" }),
-    findRecords<Obligation>(COLLECTIONS.obligations, { status: "asked" }),
-    getAll(COLLECTIONS.feedback).catch(() => []) as Promise<unknown[]>,
+    findForClients<CsmTask>(COLLECTIONS.csmTasks, ids, { where: { status: "open" } }),
+    findRecords<CsmTask>(COLLECTIONS.csmTasks, { ownerEmail: scope.csm, status: "open" }).catch(() => [] as CsmTask[]),
+    findForClients<Obligation>(COLLECTIONS.obligations, ids, { where: { status: ["upcoming", "asked"] } }),
+    findForClients<MemberFeedback>(COLLECTIONS.feedback, ids).catch(() => [] as MemberFeedback[]),
     contactsFor(scope.csm, ids, scope.includeUnassigned),
   ]);
+  const seen = new Set<string>();
+  const openTasks = [...memberTasks, ...ownedOpen].filter((t) => {
+    if (!t?.id || seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
   return {
     scope,
     memberships,
     clients,
-    openTasks: open.filter((t) => ids.has(t.clientId) || norm(t.ownerEmail) === scope.csm),
-    obligations: [...upcoming, ...asked].filter((o) => ids.has(o.clientId)),
-    feedback: (feedback as MemberFeedback[]).filter((f) => f && ids.has(f.clientId)),
+    openTasks,
+    obligations,
+    feedback: feedback.filter((f) => f && ids.has(f.clientId)),
     contacts,
   };
 }
 
 /** Consultations of the book's members (booked, completed, no-show), for Calls and KPIs. */
 export async function loadConsultations(clientIds: Set<string>): Promise<Consultation[]> {
-  const rows = await Promise.all(
-    (["booked", "in_progress", "completed", "no_show"] as const).map((status) =>
-      findRecords<Consultation>(COLLECTIONS.consultations, { status }).catch(() => [] as Consultation[])
-    ),
-  );
-  return rows.flat().filter((c) => clientIds.has(c.clientId));
+  return await findForClients<Consultation>(COLLECTIONS.consultations, clientIds, {
+    where: { status: ["booked", "in_progress", "completed", "no_show"] },
+  }).catch(() => [] as Consultation[]);
 }
 
-/** Every task (open and closed) the CSM owns, for KPIs. */
-export async function tasksOwnedBy(csm: string): Promise<CsmTask[]> {
-  return await findRecords<CsmTask>(COLLECTIONS.csmTasks, { ownerEmail: csm }).catch(() => []);
+/**
+ * Tasks the CSM owns, for KPIs: still open (any age) plus everything created in
+ * the last `days` (default 120; the KPIs look back 90 days at most). Never the
+ * CSM's whole history. Needs the (ownerEmail, createdAt) index.
+ */
+export async function tasksOwnedBy(csm: string, now = Date.now(), days = 120): Promise<CsmTask[]> {
+  const since = new Date(now - days * 86_400_000).toISOString();
+  const [recent, open] = await Promise.all([
+    query(COLLECTIONS.csmTasks, [
+      { field: "ownerEmail", op: "EQUAL", value: csm },
+      { field: "createdAt", op: "GREATER_THAN_OR_EQUAL", value: since },
+    ]).catch(() => []),
+    findRecords<CsmTask>(COLLECTIONS.csmTasks, { ownerEmail: csm, status: "open" }).catch(() => []),
+  ]);
+  const byId = new Map<string, CsmTask>();
+  for (const t of [...(recent as unknown as CsmTask[]), ...open]) if (t?.id) byId.set(t.id, t);
+  return [...byId.values()];
 }

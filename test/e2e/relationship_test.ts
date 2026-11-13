@@ -698,7 +698,8 @@ Deno.test("REL 13 member cancellation ends calls after the period; renewal reset
   assertEquals(today.body.items.length, 0, "gone from the lawyer's day");
   // The call moved to Carlos on 23 Oct was never completed or marked a no-show: the CSM gets a task.
   const { callReminders } = await import("../../jobs/callReminders.ts");
-  const sweep = await callReminders(world.now());
+  // The call is 28 days old: the daily deep pass (31 days back) finds it; the 15-minute runs look 8 days back.
+  const sweep = await callReminders(world.now(), { deep: true });
   assert(sweep.unresolved >= 1, json(sweep));
   assert(tasks(ctx.M1).some((t) => t.title.startsWith("Call not wrapped up") && t.source?.id === ctx.c4), "call.outcome_missing task");
   assert(!tasks(ctx.M1).some((t) => t.title.startsWith("Call not wrapped up") && t.source?.id === ctx.c1), "wrapped-up call: no task");

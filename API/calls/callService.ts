@@ -181,9 +181,13 @@ export async function saveAvailability(
 
 /** This lawyer's consultations that hold time from `fromMs` on. */
 async function heldBy(providerId: string, fromMs: number, excludeId?: string): Promise<CallRecord[]> {
-  const all = await findRecords<CallRecord>(COLLECTIONS.consultations, { providerId });
+  // (providerId, scheduledAt) range: only calls from yesterday on, not the lawyer's whole history.
   const from = new Date(fromMs - DAY).toISOString();
-  return all.filter((c) => c.id !== excludeId && c.status !== "cancelled" && c.scheduledAt >= from);
+  const rows = (await query(COLLECTIONS.consultations, [
+    { field: "providerId", op: "EQUAL", value: providerId },
+    { field: "scheduledAt", op: "GREATER_THAN_OR_EQUAL", value: from },
+  ])) as unknown as CallRecord[];
+  return rows.filter((c) => c.id !== excludeId && c.status !== "cancelled");
 }
 
 /**

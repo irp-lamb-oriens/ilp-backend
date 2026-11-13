@@ -208,6 +208,45 @@ export async function findRecords<T>(
   return sortDocs(docs as unknown as T[], opts);
 }
 
+/** Firestore's cap on the values of one `IN` filter. */
+export const IN_LIMIT = 30;
+
+/**
+ * Documents of these clients only: `clientId IN [...]` plus optional equality
+ * or `IN` filters (`where`), queries in parallel. Reads exactly the matching
+ * documents of these clients (one read per document, plus one per empty
+ * query) instead of a whole collection filtered in memory.
+ *
+ * Firestore allows at most 30 disjunctions per query, and an `IN` on two
+ * fields multiplies: with `status IN [a, b]` each query carries 15 ids.
+ * `field` defaults to `clientId`.
+ */
+export async function findForClients<T>(
+  collection: RecordCollection | string,
+  clientIds: Iterable<string>,
+  opts: ListOptions & { field?: string; where?: Record<string, unknown | unknown[]> } = {},
+): Promise<T[]> {
+  const ids = [...new Set(clientIds)].filter(Boolean);
+  if (!ids.length) return [];
+  const extra: QueryFilter[] = Object.entries(opts.where ?? {})
+    .filter(([, v]) => v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0))
+    .map(([field, v]) => Array.isArray(v) && v.length > 1
+      ? { field, op: "IN" as const, value: v }
+      : { field, op: "EQUAL" as const, value: Array.isArray(v) ? v[0] : v });
+  const fanOut = extra.reduce((n, f) => n * (f.op === "IN" ? (f.value as unknown[]).length : 1), 1);
+  const per = Math.max(1, Math.floor(IN_LIMIT / fanOut));
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += per) chunks.push(ids.slice(i, i + per));
+  const field = opts.field ?? "clientId";
+  const rows = await Promise.all(chunks.map((chunk) =>
+    query(collection, [
+      chunk.length === 1 ? { field, op: "EQUAL", value: chunk[0] } : { field, op: "IN", value: chunk },
+      ...extra,
+    ])
+  ));
+  return sortDocs(rows.flat() as unknown as T[], opts);
+}
+
 export function listByClient<T>(
   collection: RecordCollection,
   clientId: string,
