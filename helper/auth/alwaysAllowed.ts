@@ -13,6 +13,7 @@
  */
 export const ALWAYS_ALLOWED_EMAILS: readonly string[] = [
   "hello@nathaliehowell.com",
+  "admin@internationalrelocationpartner.com",
 ];
 
 export function isAlwaysAllowed(email: string | null | undefined): boolean {

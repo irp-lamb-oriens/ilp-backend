@@ -3,6 +3,7 @@ import { requireDashboardAuth } from "../helper/auth/session.ts";
 import { sessionStore } from "../helper/auth/sessionStore.ts";
 import { adminEmails, requireStaffRole, staffRoleFor, warnIfNoAdmins } from "../helper/auth/roles.ts";
 import { FINANCE_ADMIN } from "../API/finance/financeAuth.ts";
+import { ALWAYS_ALLOWED_EMAILS } from "../helper/auth/alwaysAllowed.ts";
 
 /**
  * ROLES: who may open the Reports page and the money routes.
@@ -120,9 +121,9 @@ Deno.test("OWNER_EMAILS stands in only while ADMIN_EMAILS is empty; both empty â
   assertEquals(warnIfNoAdmins(), true);
   env("boss@internationallegalpartner.com", "", "owner@internationallegalpartner.com");
   assertEquals(staffRoleFor("owner@internationallegalpartner.com"), "staff");
-  assertEquals(adminEmails(), ["boss@internationallegalpartner.com", "hello@nathaliehowell.com"]);
+  assertEquals(adminEmails(), ["boss@internationallegalpartner.com", ...ALWAYS_ALLOWED_EMAILS]);
   env("");
-  assertEquals(adminEmails(), ["hello@nathaliehowell.com"], "only the always-allowed address");
+  assertEquals(adminEmails(), [...ALWAYS_ALLOWED_EMAILS], "only the always-allowed addresses");
   assertEquals(staffRoleFor("owner@internationallegalpartner.com"), "staff");
   assertEquals(staffRoleFor("anyone@internationallegalpartner.com"), "staff");
   assertEquals(warnIfNoAdmins(), false);
